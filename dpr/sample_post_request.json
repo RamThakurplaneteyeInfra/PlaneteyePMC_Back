@@ -1,0 +1,39 @@
+{
+  "project_name": "Highway Construction Project - Phase 1",
+  "job_no": "JOB-2024-001",
+  "report_date": "2024-01-15",
+  "unresolved_issues": "Material delivery delayed by 2 days due to weather conditions. Need to reschedule concrete pouring.",
+  "pending_letters": "Letter to client regarding site access permission. Awaiting response from client.",
+  "quality_status": "All quality checks passed. Material samples tested and approved. Site inspection completed successfully.",
+  "next_day_incident": "Concrete pouring scheduled for foundation. Expected to complete 200 cubic meters.",
+  "bill_status": "Invoice #1234 submitted to client. Payment pending approval.",
+  "gfc_status": "GFC (Good for Construction) drawings approved by client. All revisions incorporated.",
+  "issued_by": "John Doe",
+  "designation": "Site Engineer",
+  "activities": [
+    {
+      "date": "2024-01-15",
+      "activity": "Foundation excavation work",
+      "deliverables": "500 cubic meters of earth excavated. Site leveled and prepared for foundation.",
+      "target_achieved": 85.5,
+      "next_day_plan": "Continue excavation work. Prepare for concrete pouring. Arrange for material delivery.",
+      "remarks": "Weather conditions were favorable. No major issues encountered. Work progressing as per schedule."
+    },
+    {
+      "date": "2024-01-15",
+      "activity": "Steel reinforcement installation",
+      "deliverables": "50 tons of steel reinforcement installed. All connections welded and inspected.",
+      "target_achieved": 92.0,
+      "next_day_plan": "Complete remaining reinforcement work. Prepare for concrete pouring.",
+      "remarks": "Work is on schedule. Quality checks passed. Team performance excellent."
+    },
+    {
+      "date": "2024-01-15",
+      "activity": "Site preparation and access road construction",
+      "deliverables": "Access road completed. Site office setup. Temporary facilities installed.",
+      "target_achieved": 78.3,
+      "next_day_plan": "Finalize site setup. Complete remaining temporary facilities.",
+      "remarks": "Minor delays due to material delivery. Overall progress satisfactory."
+    }
+  ]
+}
