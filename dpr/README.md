@@ -13,6 +13,9 @@ Complete Django REST Framework implementation for Daily Progress Reports with ne
 - ✅ Swagger/OpenAPI documentation
 - ✅ No authentication required (for testing)
 - ✅ Production-ready code with error handling
+- ✅ **Multi-level approval workflow** (Site Engineer → Team Lead → Coordinator → PMC Head)
+- ✅ **Rejection handling** with reason and notification to lower roles
+- ✅ **Status tracking** for approval workflow
 
 ## Installation & Setup
 
@@ -69,6 +72,13 @@ All endpoints are prefixed with `/api/dpr/`
 | PATCH | `/api/dpr/{id}/` | Partial update DPR |
 | DELETE | `/api/dpr/{id}/` | Delete DPR |
 | GET | `/api/dpr/{id}/activities/` | Get activities for a DPR |
+| POST | `/api/dpr/{id}/submit/` | Submit DPR for approval |
+| POST | `/api/dpr/{id}/approve_team_lead/` | Team Lead approves DPR |
+| POST | `/api/dpr/{id}/approve_coordinator/` | Coordinator approves DPR |
+| POST | `/api/dpr/{id}/approve_pmc_head/` | PMC Head approves DPR |
+| POST | `/api/dpr/{id}/reject/` | Reject DPR with reason |
+| GET | `/api/dpr/pending_approval/?role={role}` | Get DPRs pending approval for a role |
+| GET | `/api/dpr/rejected/?role={role}` | Get rejected DPRs for a role |
 
 ### Query Parameters (for GET /api/dpr/)
 
@@ -318,6 +328,18 @@ function App() {
 - Activities are automatically deleted when parent DPR is deleted (CASCADE)
 - Pagination is set to 20 items per page
 - **No authentication required** - endpoints are public for testing
+- **Approval workflow**: DPRs go through a multi-level approval process (Site Engineer → Team Lead → Coordinator → PMC Head)
+- **Rejection handling**: When rejected, DPRs are sent back to all lower roles with the rejection reason
+- **Resubmission**: Site Engineers can modify rejected DPRs and resubmit them for approval
+
+## Approval Workflow
+
+See [`APPROVAL_WORKFLOW.md`](APPROVAL_WORKFLOW.md) for detailed documentation on the approval workflow, including:
+- Approval flow diagram
+- Status values
+- API endpoints for approval/rejection
+- Example workflow
+- Role permissions
 
 ## Swagger Documentation
 

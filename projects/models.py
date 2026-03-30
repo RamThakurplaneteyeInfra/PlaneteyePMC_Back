@@ -1,5 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import User
+from django.core.validators import MinValueValidator
+from decimal import Decimal
 
 class Project(models.Model):
     STATUS_CHOICES = [
@@ -29,6 +31,9 @@ class Project(models.Model):
     pmc_head = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='pmc_projects')
     team_lead = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='lead_projects')
     site_engineers = models.ManyToManyField(User, blank=True, related_name='assigned_projects')
+    # Separate fields for different site engineer types
+    billing_site_engineer = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='billing_engineer_projects')
+    qaqc_site_engineer = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='qaqc_engineer_projects')
     coordinators = models.ManyToManyField(User, blank=True, related_name='coordinator_projects')
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_projects')
 
@@ -37,6 +42,93 @@ class Project(models.Model):
     end_date = models.DateField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    # ==========================================================================
+    # Project Initialization Fields (PMC Head Input)
+    # ==========================================================================
+    
+    # Project Dates
+    project_start = models.DateField(null=True, blank=True, help_text="Project start date")
+    contract_finish = models.DateField(null=True, blank=True, help_text="Contractual finish date")
+    forecast_finish = models.DateField(null=True, blank=True, help_text="Forecasted finish date")
+    
+    # Contract Values
+    original_contract_value = models.DecimalField(
+        max_digits=15, decimal_places=2, default=Decimal('0.00'),
+        validators=[MinValueValidator(0)],
+        help_text="Original contract value"
+    )
+    approved_vo = models.DecimalField(
+        max_digits=15, decimal_places=2, default=Decimal('0.00'),
+        validators=[MinValueValidator(0)],
+        help_text="Approved Variation Order"
+    )
+    pending_vo = models.DecimalField(
+        max_digits=15, decimal_places=2, default=Decimal('0.00'),
+        validators=[MinValueValidator(0)],
+        help_text="Pending Variation Order"
+    )
+    
+    # Budget
+    bac = models.DecimalField(
+        max_digits=15, decimal_places=2, default=Decimal('0.00'),
+        validators=[MinValueValidator(0)],
+        help_text="Budget at Completion"
+    )
+    
+    # Work Configuration
+    working_hours_per_day = models.FloatField(
+        default=8.0,
+        validators=[MinValueValidator(0)],
+        help_text="Working hours per day"
+    )
+    working_days_per_month = models.IntegerField(
+        default=26,
+        validators=[MinValueValidator(1)],
+        help_text="Working days per month"
+    )
+    
+    # Team Assignment
+    assigned_users = models.ManyToManyField(
+        User, blank=True, related_name='init_assigned_projects',
+        help_text="Users assigned to this project"
+    )
+    
+    # ==========================================================================
+    # Auto Calculated Fields (Read-only)
+    # ==========================================================================
+    
+    # Revised Contract Value = Original Contract Value + Approved VO
+    revised_contract_value = models.DecimalField(
+        max_digits=15, decimal_places=2, default=Decimal('0.00'),
+        help_text="Auto-calculated: Original Contract Value + Approved VO"
+    )
+    
+    # Delay Days = Forecast Finish - Contract Finish
+    delay_days = models.IntegerField(
+        default=0,
+        help_text="Auto-calculated: Days between forecast and contract finish"
+    )
+
+    def save(self, *args, **kwargs):
+        """
+        Override save to auto-calculate derived fields:
+        - revised_contract_value = original_contract_value + approved_vo
+        - delay_days = (forecast_finish - contract_finish).days
+        """
+        # Calculate Revised Contract Value
+        self.revised_contract_value = (
+            (self.original_contract_value or Decimal('0.00')) + 
+            (self.approved_vo or Decimal('0.00'))
+        )
+        
+        # Calculate Delay Days
+        if self.forecast_finish and self.contract_finish:
+            self.delay_days = (self.forecast_finish - self.contract_finish).days
+        else:
+            self.delay_days = 0
+        
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.name

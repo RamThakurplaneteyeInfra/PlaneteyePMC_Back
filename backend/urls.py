@@ -64,6 +64,8 @@ urlpatterns = [
     path('api/accounts/', include('accounts.urls')),
     # Projects and Sites API
     path('api/projects-data/', include('projects.urls')),
+    # Project Initialization API (PMC Head)
+    path('api/', include('projects.urls')),
     # Tasks and Reports API
     path('api/operations/', include('operations.urls')),
     # Daily Progress Report API

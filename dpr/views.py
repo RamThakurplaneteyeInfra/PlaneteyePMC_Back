@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from django.db.models import Q
 from django.utils.dateparse import parse_date
+from django.utils import timezone
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 from .models import DailyProgressReport, DPRActivity
@@ -244,4 +245,294 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         dpr = self.get_object()
         activities = dpr.activities.all()
         serializer = DPRActivitySerializer(activities, many=True)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_description="Submit DPR for approval",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'role': openapi.Schema(type=openapi.TYPE_STRING, description='Role of the user submitting (Site Engineer, Billing Site Engineer, QAQC Site Engineer)')
+            }
+        ),
+        responses={200: DailyProgressReportSerializer}
+    )
+    @action(detail=True, methods=['post'])
+    def submit(self, request, pk=None):
+        """
+        Submit DPR for approval workflow.
+        
+        **Endpoint:** POST /api/dpr/{id}/submit/
+        
+        Submits the DPR to the approval workflow.
+        Site Engineer submits -> goes to Team Lead
+        """
+        dpr = self.get_object()
+        role = request.data.get('role', 'Site Engineer')
+        
+        # Only allow submission from draft or rejected status
+        if dpr.status not in [DailyProgressReport.Status.DRAFT, DailyProgressReport.Status.REJECTED]:
+            return Response(
+                {'error': 'DPR can only be submitted from draft or rejected status'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Update DPR status and submitter
+        dpr.status = DailyProgressReport.Status.PENDING_TEAM_LEAD
+        dpr.submitted_by = request.user
+        dpr.current_approver_role = 'Team Leader'
+        dpr.rejection_reason = ''  # Clear rejection reason on resubmission
+        dpr.rejected_by = None
+        dpr.save()
+        
+        serializer = self.get_serializer(dpr)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_description="Team Lead approves DPR",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'role': openapi.Schema(type=openapi.TYPE_STRING, description='Role of the approver (Team Leader)')
+            }
+        ),
+        responses={200: DailyProgressReportSerializer}
+    )
+    @action(detail=True, methods=['post'])
+    def approve_team_lead(self, request, pk=None):
+        """
+        Team Lead approves DPR and sends to Coordinator.
+        
+        **Endpoint:** POST /api/dpr/{id}/approve_team_lead/
+        """
+        dpr = self.get_object()
+        
+        if dpr.status != DailyProgressReport.Status.PENDING_TEAM_LEAD:
+            return Response(
+                {'error': 'DPR is not pending Team Lead approval'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Update DPR status
+        dpr.status = DailyProgressReport.Status.PENDING_COORDINATOR
+        dpr.current_approver_role = 'Coordinator'
+        dpr.save()
+        
+        serializer = self.get_serializer(dpr)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_description="Coordinator approves DPR",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'role': openapi.Schema(type=openapi.TYPE_STRING, description='Role of the approver (Coordinator)')
+            }
+        ),
+        responses={200: DailyProgressReportSerializer}
+    )
+    @action(detail=True, methods=['post'])
+    def approve_coordinator(self, request, pk=None):
+        """
+        Coordinator approves DPR and sends to PMC Head.
+        
+        **Endpoint:** POST /api/dpr/{id}/approve_coordinator/
+        """
+        dpr = self.get_object()
+        
+        if dpr.status != DailyProgressReport.Status.PENDING_COORDINATOR:
+            return Response(
+                {'error': 'DPR is not pending Coordinator approval'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Update DPR status
+        dpr.status = DailyProgressReport.Status.PENDING_PMC_HEAD
+        dpr.current_approver_role = 'PMC Head'
+        dpr.save()
+        
+        serializer = self.get_serializer(dpr)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_description="PMC Head approves DPR",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'role': openapi.Schema(type=openapi.TYPE_STRING, description='Role of the approver (PMC Head)')
+            }
+        ),
+        responses={200: DailyProgressReportSerializer}
+    )
+    @action(detail=True, methods=['post'])
+    def approve_pmc_head(self, request, pk=None):
+        """
+        PMC Head gives final approval to DPR.
+        
+        **Endpoint:** POST /api/dpr/{id}/approve_pmc_head/
+        """
+        dpr = self.get_object()
+        
+        if dpr.status != DailyProgressReport.Status.PENDING_PMC_HEAD:
+            return Response(
+                {'error': 'DPR is not pending PMC Head approval'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Update DPR status to approved
+        dpr.status = DailyProgressReport.Status.APPROVED
+        dpr.approved_by = request.user
+        dpr.approved_at = timezone.now()
+        dpr.current_approver_role = ''
+        dpr.save()
+        
+        serializer = self.get_serializer(dpr)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_description="Reject DPR",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['rejection_reason'],
+            properties={
+                'role': openapi.Schema(type=openapi.TYPE_STRING, description='Role of the rejector'),
+                'rejection_reason': openapi.Schema(type=openapi.TYPE_STRING, description='Reason for rejection')
+            }
+        ),
+        responses={200: DailyProgressReportSerializer}
+    )
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        """
+        Reject DPR and send back to lower roles with rejection reason.
+        
+        **Endpoint:** POST /api/dpr/{id}/reject/
+        
+        When rejected by a role, the DPR is sent back to all lower roles
+        with the rejection reason, and finally to the Site Engineer for modification.
+        """
+        dpr = self.get_object()
+        rejection_reason = request.data.get('rejection_reason', '')
+        
+        if not rejection_reason:
+            return Response(
+                {'error': 'Rejection reason is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Determine which role is rejecting and set appropriate status
+        if dpr.status == DailyProgressReport.Status.PENDING_TEAM_LEAD:
+            # Team Lead rejects -> send back to Site Engineer
+            dpr.status = DailyProgressReport.Status.REJECTED
+            dpr.current_approver_role = ''
+        elif dpr.status == DailyProgressReport.Status.PENDING_COORDINATOR:
+            # Coordinator rejects -> send back to Team Lead and Site Engineer
+            dpr.status = DailyProgressReport.Status.REJECTED
+            dpr.current_approver_role = ''
+        elif dpr.status == DailyProgressReport.Status.PENDING_PMC_HEAD:
+            # PMC Head rejects -> send back to Coordinator, Team Lead, and Site Engineer
+            dpr.status = DailyProgressReport.Status.REJECTED
+            dpr.current_approver_role = ''
+        else:
+            return Response(
+                {'error': 'DPR is not in a rejectable status'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Update rejection details
+        dpr.rejection_reason = rejection_reason
+        dpr.rejected_by = request.user
+        dpr.save()
+        
+        serializer = self.get_serializer(dpr)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_description="Get DPRs pending approval for a specific role",
+        manual_parameters=[
+            openapi.Parameter(
+                'role',
+                openapi.IN_QUERY,
+                description="Role to filter by (Team Leader, Coordinator, PMC Head)",
+                type=openapi.TYPE_STRING,
+                required=True
+            ),
+        ],
+        responses={200: DailyProgressReportSerializer(many=True)}
+    )
+    @action(detail=False, methods=['get'])
+    def pending_approval(self, request):
+        """
+        Get all DPRs pending approval for a specific role.
+        
+        **Endpoint:** GET /api/dpr/pending_approval/?role=Team Leader
+        
+        Returns DPRs that are waiting for approval from the specified role.
+        """
+        role = request.query_params.get('role', None)
+        
+        if not role:
+            return Response(
+                {'error': 'Role parameter is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Map role to status
+        role_status_map = {
+            'Team Leader': DailyProgressReport.Status.PENDING_TEAM_LEAD,
+            'Coordinator': DailyProgressReport.Status.PENDING_COORDINATOR,
+            'PMC Head': DailyProgressReport.Status.PENDING_PMC_HEAD,
+        }
+        
+        if role not in role_status_map:
+            return Response(
+                {'error': f'Invalid role. Must be one of: {", ".join(role_status_map.keys())}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get DPRs pending for the specified role
+        queryset = DailyProgressReport.objects.filter(
+            status=role_status_map[role]
+        ).order_by('-report_date', '-created_at')
+        
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_description="Get rejected DPRs for a specific role",
+        manual_parameters=[
+            openapi.Parameter(
+                'role',
+                openapi.IN_QUERY,
+                description="Role to filter by (Team Leader, Coordinator, PMC Head)",
+                type=openapi.TYPE_STRING,
+                required=True
+            ),
+        ],
+        responses={200: DailyProgressReportSerializer(many=True)}
+    )
+    @action(detail=False, methods=['get'])
+    def rejected(self, request):
+        """
+        Get all rejected DPRs that need to be reviewed by a specific role.
+        
+        **Endpoint:** GET /api/dpr/rejected/?role=Team Leader
+        
+        When a DPR is rejected by a higher role, it's sent back to all lower roles.
+        This endpoint returns DPRs that were rejected and need review by the specified role.
+        """
+        role = request.query_params.get('role', None)
+        
+        if not role:
+            return Response(
+                {'error': 'Role parameter is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get all rejected DPRs
+        queryset = DailyProgressReport.objects.filter(
+            status=DailyProgressReport.Status.REJECTED
+        ).order_by('-report_date', '-created_at')
+        
+        serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)

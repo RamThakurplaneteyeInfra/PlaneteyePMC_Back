@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import DailyProgressReport, DPRActivity
+from django.contrib.auth import get_user_model
 
 
 class DPRActivitySerializer(serializers.ModelSerializer):
@@ -34,6 +35,10 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
     Includes nested activities serializer
     """
     activities = DPRActivitySerializer(many=True, read_only=False, required=False)
+    submitted_by_username = serializers.CharField(source='submitted_by.username', read_only=True, default=None)
+    rejected_by_username = serializers.CharField(source='rejected_by.username', read_only=True, default=None)
+    approved_by_username = serializers.CharField(source='approved_by.username', read_only=True, default=None)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
 
     class Meta:
         model = DailyProgressReport
@@ -54,9 +59,20 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
             'designation',
             'created_at',
             'updated_at',
-            'activities'
+            'activities',
+            'status',
+            'status_display',
+            'submitted_by',
+            'submitted_by_username',
+            'current_approver_role',
+            'rejection_reason',
+            'rejected_by',
+            'rejected_by_username',
+            'approved_by',
+            'approved_by_username',
+            'approved_at'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at', 'status', 'submitted_by', 'current_approver_role', 'rejection_reason', 'rejected_by', 'approved_by', 'approved_at']
     
     def validate(self, attrs):
         """

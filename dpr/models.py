@@ -1,5 +1,6 @@
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
+from django.conf import settings
 
 
 class DailyProgressReport(models.Model):
@@ -7,6 +8,16 @@ class DailyProgressReport(models.Model):
     Main Daily Progress Report model
     Stores the primary report information
     """
+    
+    # Approval workflow status choices
+    class Status(models.TextChoices):
+        DRAFT = 'draft', 'Draft'
+        PENDING_TEAM_LEAD = 'pending_team_lead', 'Pending Team Lead Approval'
+        PENDING_COORDINATOR = 'pending_coordinator', 'Pending Coordinator Approval'
+        PENDING_PMC_HEAD = 'pending_pmc_head', 'Pending PMC Head Approval'
+        APPROVED = 'approved', 'Approved'
+        REJECTED = 'rejected', 'Rejected'
+    
     project_name = models.CharField(max_length=255, help_text="Name of the project")
     job_no = models.CharField(max_length=100, help_text="Job number or reference code")
     report_date = models.DateField(help_text="Date of the report")
@@ -18,6 +29,52 @@ class DailyProgressReport(models.Model):
     gfc_status = models.TextField(blank=True, help_text="GFC (Good for Construction) status")
     issued_by = models.CharField(max_length=255, help_text="Person who issued the report")
     designation = models.CharField(max_length=255, help_text="Designation of the issuer")
+    
+    # Approval workflow fields
+    status = models.CharField(
+        max_length=25,
+        choices=Status.choices,
+        default=Status.DRAFT,
+        help_text="Current approval status of the DPR"
+    )
+    submitted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='submitted_dprs',
+        help_text="User who submitted the DPR"
+    )
+    current_approver_role = models.CharField(
+        max_length=50,
+        blank=True,
+        help_text="Role that should currently approve this DPR"
+    )
+    rejection_reason = models.TextField(
+        blank=True,
+        help_text="Reason for rejection if status is rejected"
+    )
+    rejected_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='rejected_dprs',
+        help_text="User who rejected the DPR"
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='approved_dprs',
+        help_text="User who finally approved the DPR"
+    )
+    approved_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when DPR was finally approved"
+    )
     created_at = models.DateTimeField(auto_now_add=True, help_text="Timestamp when report was created")
     updated_at = models.DateTimeField(auto_now=True, help_text="Timestamp when report was last updated")
 

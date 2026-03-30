@@ -8,7 +8,7 @@ from .serializers import TaskSerializer, DailyProgressReportSerializer
 class TaskViewSet(viewsets.ModelViewSet):
     queryset = Task.objects.all()
     serializer_class = TaskSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = []
 
     def get_queryset(self):
         # Filter tasks by site if site_id is provided
@@ -18,15 +18,15 @@ class TaskViewSet(viewsets.ModelViewSet):
         
         # Role-based filtering for tasks
         user = self.request.user
-        if user.groups.filter(name='PMC Head').exists() or user.is_superuser:
+        if user.groups.filter(name__in=['PMC Head', 'CEO']).exists() or user.is_superuser:
             return Task.objects.all()
-        elif user.groups.filter(name='Team Lead').exists():
+        elif user.groups.filter(name='Team Leader').exists():
             # Team lead sees tasks from their assigned projects
             from projects.models import Project
             project_ids = Project.objects.filter(team_lead=user).values_list('id', flat=True)
             site_ids = Task.objects.filter(project_id__in=project_ids).values_list('site_id', flat=True)
             return Task.objects.filter(site_id__in=site_ids)
-        elif user.groups.filter(name='Site Engineer').exists():
+        elif user.groups.filter(name__in=['Site Engineer', 'Billing Site Engineer', 'QAQC Site Engineer']).exists():
             # Site engineer sees only their assigned tasks
             return Task.objects.filter(assigned_to=user)
         
@@ -36,7 +36,7 @@ class TaskViewSet(viewsets.ModelViewSet):
 class DailyProgressReportViewSet(viewsets.ModelViewSet):
     queryset = DailyProgressReport.objects.all()
     serializer_class = DailyProgressReportSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = []
 
     def get_queryset(self):
         """
@@ -48,9 +48,9 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         user = self.request.user
         
         # Check user groups
-        is_admin = user.groups.filter(name='PMC Head').exists() or user.is_superuser
-        is_team_lead = user.groups.filter(name='Team Lead').exists()
-        is_site_engineer = user.groups.filter(name='Site Engineer').exists()
+        is_admin = user.groups.filter(name__in=['PMC Head', 'CEO']).exists() or user.is_superuser
+        is_team_lead = user.groups.filter(name='Team Leader').exists()
+        is_site_engineer = user.groups.filter(name__in=['Site Engineer', 'Billing Site Engineer', 'QAQC Site Engineer']).exists()
         
         # Filter by task_id if provided
         task_id = self.request.query_params.get('task_id')
@@ -106,12 +106,12 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         
         # Check if user has permission to approve
         user = request.user
-        is_admin = user.groups.filter(name='PMC Head').exists() or user.is_superuser
-        is_team_lead = user.groups.filter(name='Team Lead').exists()
+        is_admin = user.groups.filter(name__in=['PMC Head', 'CEO']).exists() or user.is_superuser
+        is_team_lead = user.groups.filter(name='Team Leader').exists()
         
         if not (is_admin or is_team_lead):
             return Response(
-                {'error': 'Only Team Lead or PMC Head can approve DPRs'},
+                {'error': 'Only Team Leader or PMC Head can approve DPRs'},
                 status=status.HTTP_403_FORBIDDEN
             )
         
@@ -145,12 +145,12 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         
         # Check if user has permission to reject
         user = request.user
-        is_admin = user.groups.filter(name='PMC Head').exists() or user.is_superuser
-        is_team_lead = user.groups.filter(name='Team Lead').exists()
+        is_admin = user.groups.filter(name__in=['PMC Head', 'CEO']).exists() or user.is_superuser
+        is_team_lead = user.groups.filter(name='Team Leader').exists()
         
         if not (is_admin or is_team_lead):
             return Response(
-                {'error': 'Only Team Lead or PMC Head can reject DPRs'},
+                {'error': 'Only Team Leader or PMC Head can reject DPRs'},
                 status=status.HTTP_403_FORBIDDEN
             )
         

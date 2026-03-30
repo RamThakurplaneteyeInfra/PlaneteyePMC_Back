@@ -46,7 +46,8 @@ class ProjectProgressStatusViewSet(viewsets.ModelViewSet):
     
     queryset = ProjectProgressStatus.objects.all()
     serializer_class = ProjectProgressStatusSerializer
-    # Using role from request (temporary). Do not require auth for now.
+    # Disable authentication completely
+    authentication_classes = []
     permission_classes = [AllowAny]
     
     # ---- Swagger schemas (fix FloatField showing as string in Swagger UI) ----

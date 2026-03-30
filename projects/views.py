@@ -4,33 +4,40 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.db.models import Q
 from .models import Project, Site
-from .serializers import ProjectSerializer, SiteSerializer
+from .serializers import ProjectSerializer, SiteSerializer, ProjectInitSerializer
 import pandas as pd
 from datetime import datetime
 from django.utils.dateparse import parse_date
 from .models import Project, Site, ProjectDashboardData
-from .serializers import ProjectSerializer, SiteSerializer, ProjectDashboardDataSerializer
+from .serializers import ProjectSerializer, SiteSerializer, ProjectDashboardDataSerializer, ProjectInitSerializer
+
+from django.contrib.auth.models import User
 
 class ProjectViewSet(viewsets.ModelViewSet):
     queryset = Project.objects.all()
     serializer_class = ProjectSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = []
 
     def get_queryset(self):
         # Swagger / OpenAPI schema generation runs without a real user
         if getattr(self, "swagger_fake_view", False):
             return Project.objects.none()
-        # Return all projects for PMC Head, or filter by assignment for others
+        # Return all projects for unauthenticated users
         user = self.request.user
-        if user.groups.filter(name='PMC Head').exists() or user.is_superuser:
+        if not user.is_authenticated:
+            return Project.objects.all().order_by('-created_at')
+        # Return all projects for PMC Head and Coordinator, or filter by assignment for others
+        if user.groups.filter(name__in=['PMC Head', 'CEO', 'Coordinator']).exists() or user.is_superuser:
             return Project.objects.all().order_by('-created_at')
         
         # For Site Engineers, show active/planning projects they are assigned to OR all active projects
-        if user.groups.filter(name='Site Engineer').exists():
+        if user.groups.filter(name__in=['Site Engineer', 'Billing Site Engineer', 'QAQC Site Engineer']).exists():
             # First, get projects explicitly assigned to this site engineer
             assigned_projects = Project.objects.filter(
                 Q(team_lead=user) |
                 Q(site_engineers=user) |
+                Q(billing_site_engineer=user) |
+                Q(qaqc_site_engineer=user) |
                 Q(coordinators=user) |
                 Q(pmc_head=user)
             ).distinct()
@@ -55,7 +62,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         """Set creator and auto-assign pmc_head if applicable."""
         user = self.request.user
         save_kwargs = {'created_by': user}
-        if user.groups.filter(name='PMC Head').exists() or user.is_superuser:
+        if user.groups.filter(name__in=['PMC Head', 'CEO']).exists() or user.is_superuser:
             save_kwargs['pmc_head'] = user
         serializer.save(**save_kwargs)
 
@@ -234,12 +241,366 @@ class ProjectViewSet(viewsets.ModelViewSet):
             serializer = ProjectDashboardDataSerializer(dashboard_data)
             return Response(serializer.data)
         except ProjectDashboardData.DoesNotExist:
-            return Response({'error': 'No dashboard data found for this project'}, status=404) 
+            return Response({'error': 'No dashboard data found for this project'}, status=404)
+
+    @action(detail=True, methods=['post'], url_path='assign-team-lead')
+    def assign_team_lead(self, request, pk=None):
+        """
+        Assign a Team Leader to the project.
+        API: POST /api/projects-data/projects/{id}/assign-team-lead/
+        Body: { "user_id": <user_id> }
+        """
+        project = self.get_object()
+        user = request.user
+        
+        # Check if user is a Coordinator for this project or PMC Head
+        if not (user.groups.filter(name__in=['Coordinator', 'PMC Head', 'CEO']).exists() or 
+                user.is_superuser or
+                project.coordinators.filter(id=user.id).exists() or
+                project.pmc_head == user):
+            return Response({'error': 'You do not have permission to assign a team lead'}, status=403)
+        
+        user_id = request.data.get('user_id')
+        if not user_id:
+            return Response({'error': 'user_id is required'}, status=400)
+        
+        try:
+            team_lead = User.objects.get(id=user_id)
+            # Verify user has Team Leader group
+            if not team_lead.groups.filter(name='Team Leader').exists():
+                return Response({'error': 'Selected user must have Team Leader role'}, status=400)
+            
+            project.team_lead = team_lead
+            project.save()
+            
+            serializer = ProjectSerializer(project, context={'request': request})
+            return Response({
+                'success': True,
+                'message': f'Team Leader {team_lead.username} assigned successfully',
+                'project': serializer.data
+            })
+        except User.DoesNotExist:
+            return Response({'error': 'User not found'}, status=404)
+
+    @action(detail=True, methods=['post'], url_path='add-site-engineers')
+    def add_site_engineers(self, request, pk=None):
+        """
+        Add Site Engineers to the project.
+        API: POST /api/projects-data/projects/{id}/add-site-engineers/
+        Body: { "user_ids": [<user_id1>, <user_id2>, ...] }
+        """
+        project = self.get_object()
+        user = request.user
+        
+        # Check if user is a Team Lead for this project or PMC Head
+        if not (user.groups.filter(name__in=['Team Leader', 'PMC Head', 'CEO']).exists() or 
+                user.is_superuser or
+                project.team_lead == user or
+                project.pmc_head == user):
+            return Response({'error': 'You do not have permission to add site engineers'}, status=403)
+        
+        user_ids = request.data.get('user_ids', [])
+        if not user_ids:
+            return Response({'error': 'user_ids array is required'}, status=400)
+        
+        # Limit to 3 site engineers
+        current_count = project.site_engineers.count()
+        if current_count + len(user_ids) > 3:
+            return Response({'error': f'Cannot add more than 3 site engineers. Currently have {current_count}, can add {3 - current_count} more.'}, status=400)
+        
+        added_engineers = []
+        errors = []
+        
+        for user_id in user_ids:
+            try:
+                site_engineer = User.objects.get(id=user_id)
+                # Verify user has Site Engineer group
+                if not site_engineer.groups.filter(name__in=['Site Engineer', 'Billing Site Engineer', 'QAQC Site Engineer']).exists():
+                    errors.append(f'User {user_id} must have Site Engineer role')
+                    continue
+                
+                project.site_engineers.add(site_engineer)
+                added_engineers.append(site_engineer.username)
+            except User.DoesNotExist:
+                errors.append(f'User {user_id} not found')
+        
+        project.save()
+        serializer = ProjectSerializer(project, context={'request': request})
+        
+        return Response({
+            'success': True,
+            'message': f'Site Engineers added successfully: {added_engineers}',
+            'warnings': errors if errors else None,
+            'project': serializer.data
+        })
+
+    @action(detail=True, methods=['post'], url_path='add-billing-site-engineer')
+    def add_billing_site_engineer(self, request, pk=None):
+        """
+        Add a Billing Site Engineer to the project.
+        API: POST /api/projects-data/projects/{id}/add-billing-site-engineer/
+        Body: { "user_id": <user_id> }
+        """
+        project = self.get_object()
+        user = request.user
+        
+        # Check if user is a Team Lead for this project or PMC Head
+        if not (user.groups.filter(name__in=['Team Leader', 'PMC Head', 'CEO']).exists() or 
+                user.is_superuser or
+                project.team_lead == user or
+                project.pmc_head == user):
+            return Response({'error': 'You do not have permission to add a billing site engineer'}, status=403)
+        
+        user_id = request.data.get('user_id')
+        if not user_id:
+            return Response({'error': 'user_id is required'}, status=400)
+        
+        try:
+            billing_engineer = User.objects.get(id=user_id)
+            # Verify user has Billing Site Engineer group
+            if not billing_engineer.groups.filter(name='Billing Site Engineer').exists():
+                return Response({'error': 'Selected user must have Billing Site Engineer role'}, status=400)
+            
+            # Check if already assigned as billing engineer
+            if project.billing_site_engineer == billing_engineer:
+                return Response({'error': 'This user is already assigned as Billing Site Engineer'}, status=400)
+            
+            project.billing_site_engineer = billing_engineer
+            project.save()
+            serializer = ProjectSerializer(project, context={'request': request})
+            
+            return Response({
+                'success': True,
+                'message': f'Billing Site Engineer {billing_engineer.username} added successfully',
+                'project': serializer.data
+            })
+        except User.DoesNotExist:
+            return Response({'error': 'User not found'}, status=404)
+
+    @action(detail=True, methods=['post'], url_path='add-qaqc-site-engineer')
+    def add_qaqc_site_engineer(self, request, pk=None):
+        """
+        Add a QAQC Site Engineer to the project.
+        API: POST /api/projects-data/projects/{id}/add-qaqc-site-engineer/
+        Body: { "user_id": <user_id> }
+        """
+        project = self.get_object()
+        user = request.user
+        
+        # Check if user is a Team Lead for this project or PMC Head
+        if not (user.groups.filter(name__in=['Team Leader', 'PMC Head', 'CEO']).exists() or 
+                user.is_superuser or
+                project.team_lead == user or
+                project.pmc_head == user):
+            return Response({'error': 'You do not have permission to add a QAQC site engineer'}, status=403)
+        
+        user_id = request.data.get('user_id')
+        if not user_id:
+            return Response({'error': 'user_id is required'}, status=400)
+        
+        try:
+            qaqc_engineer = User.objects.get(id=user_id)
+            # Verify user has QAQC Site Engineer group
+            if not qaqc_engineer.groups.filter(name='QAQC Site Engineer').exists():
+                return Response({'error': 'Selected user must have QAQC Site Engineer role'}, status=400)
+            
+            # Check if already assigned as QAQC engineer
+            if project.qaqc_site_engineer == qaqc_engineer:
+                return Response({'error': 'This user is already assigned as QAQC Site Engineer'}, status=400)
+            
+            project.qaqc_site_engineer = qaqc_engineer
+            project.save()
+            serializer = ProjectSerializer(project, context={'request': request})
+            
+            return Response({
+                'success': True,
+                'message': f'QAQC Site Engineer {qaqc_engineer.username} added successfully',
+                'project': serializer.data
+            })
+        except User.DoesNotExist:
+            return Response({'error': 'User not found'}, status=404)
+
+    @action(detail=True, methods=['post'], url_path='assign-coordinator')
+    def assign_coordinator(self, request, pk=None):
+        """
+        Assign a Coordinator to the project.
+        API: POST /api/projects-data/projects/{id}/assign-coordinator/
+        Body: { "user_id": <user_id> }
+        """
+        project = self.get_object()
+        user = request.user
+        
+        # Check if user is PMC Head or CEO
+        if not (user.groups.filter(name__in=['PMC Head', 'CEO']).exists() or user.is_superuser or project.pmc_head == user):
+            return Response({'error': 'You do not have permission to assign a coordinator'}, status=403)
+        
+        user_id = request.data.get('user_id')
+        if not user_id:
+            return Response({'error': 'user_id is required'}, status=400)
+        
+        try:
+            coordinator = User.objects.get(id=user_id)
+            # Verify user has Coordinator group
+            if not coordinator.groups.filter(name='Coordinator').exists():
+                return Response({'error': 'Selected user must have Coordinator role'}, status=400)
+            
+            project.coordinators.add(coordinator)
+            project.save()
+            
+            serializer = ProjectSerializer(project, context={'request': request})
+            return Response({
+                'success': True,
+                'message': f'Coordinator {coordinator.username} assigned successfully',
+                'project': serializer.data
+            })
+        except User.DoesNotExist:
+            return Response({'error': 'User not found'}, status=404)
+
+    @action(detail=False, methods=['get'], url_path='available-users')
+    def available_users(self, request):
+        """
+        Get available users that can be assigned to projects.
+        Filters out users who are already assigned to active/in-progress projects.
+        API: GET /api/projects-data/projects/available-users/?role=Team%20Leader
+        """
+        role = request.query_params.get('role')
+        group_name = role if role else 'Team Leader'
+        
+        # Get all users with the specified role
+        users = User.objects.filter(groups__name=group_name).distinct()
+        
+        # Get IDs of users who are already assigned to active projects
+        # An active project is any project NOT in 'completed' or 'cancelled' status
+        excluded_user_ids = set()
+        
+        if group_name == 'Team Leader':
+            # Exclude Team Leaders who are already assigned to active projects
+            active_tl_projects = Project.objects.exclude(
+                status__in=['completed', 'cancelled', 'not_started']
+            ).exclude(team_lead__isnull=True)
+            excluded_user_ids.update(
+                active_tl_projects.values_list('team_lead_id', flat=True)
+            )
+        elif group_name in ['Site Engineer', 'Billing Site Engineer', 'QAQC Site Engineer']:
+            # Exclude Site Engineers who are already assigned to active projects
+            # Check all site engineer fields
+            active_se_projects = Project.objects.exclude(
+                status__in=['completed', 'cancelled', 'not_started']
+            )
+            
+            # Site Engineers in ManyToMany field
+            excluded_user_ids.update(
+                active_se_projects.values_list('site_engineers__id', flat=True)
+            )
+            # Billing Site Engineer
+            excluded_user_ids.update(
+                active_se_projects.exclude(
+                    billing_site_engineer__isnull=True
+                ).values_list('billing_site_engineer_id', flat=True)
+            )
+            # QAQC Site Engineer
+            excluded_user_ids.update(
+                active_se_projects.exclude(
+                    qaqc_site_engineer__isnull=True
+                ).values_list('qaqc_site_engineer_id', flat=True)
+            )
+        
+        # Filter out users who are already assigned to active projects
+        available_users = users.exclude(id__in=excluded_user_ids)
+        
+        user_list = []
+        for u in available_users:
+            user_list.append({
+                'id': u.id,
+                'username': u.username,
+                'name': f"{u.first_name} {u.last_name}".strip() or u.username,
+                'email': u.email,
+                'role': group_name
+            })
+        
+        return Response(user_list)
+
+    # ==========================================================================
+    # Project Initialization API
+    # ==========================================================================
+    @action(detail=False, methods=['post'], url_path='init')
+    def init_project(self, request):
+        """
+        Initialize a new project with PMC Head input.
+        
+        API: POST /api/projects-data/projects/init/
+        
+        Input fields:
+        - name (required, unique)
+        - location (required)
+        - project_start (required)
+        - contract_finish (required)
+        - forecast_finish (optional)
+        - original_contract_value (required, >= 0)
+        - approved_vo (required, >= 0)
+        - pending_vo (required, >= 0)
+        - bac (required, > 0)
+        - working_hours_per_day (required, > 0)
+        - working_days_per_month (required, > 0)
+        - assigned_users (optional, list of user IDs)
+        
+        Auto-calculated fields (returned in response):
+        - revised_contract_value = original_contract_value + approved_vo
+        - delay_days = (forecast_finish - contract_finish).days
+        """
+        serializer = ProjectInitSerializer(data=request.data)
+        
+        if serializer.is_valid():
+            # Get the current user as creator
+            user = request.user if request.user.is_authenticated else None
+            
+            # Create the project
+            project = serializer.save()
+            
+            # Set created_by and pmc_head if user is authenticated
+            if user:
+                project.created_by = user
+                if user.groups.filter(name__in=['PMC Head', 'CEO']).exists() or user.is_superuser:
+                    project.pmc_head = user
+                project.save()
+            
+            # Return the created project with calculated fields
+            response_serializer = ProjectInitSerializer(project)
+            return Response({
+                'success': True,
+                'message': 'Project initialized successfully',
+                'project': response_serializer.data
+            }, status=201)
+        
+        return Response({
+            'success': False,
+            'errors': serializer.errors
+        }, status=400)
+
+    @action(detail=False, methods=['get'], url_path='init-list')
+    def list_init_projects(self, request):
+        """
+        Get list of projects with initialization fields only.
+        
+        API: GET /api/projects-data/projects/init-list/
+        
+        Returns only the project initialization fields:
+        - name, location
+        - project_start, contract_finish, forecast_finish
+        - original_contract_value, approved_vo, pending_vo
+        - bac
+        - working_hours_per_day, working_days_per_month
+        - revised_contract_value, delay_days
+        """
+        queryset = self.get_queryset()
+        serializer = ProjectInitSerializer(queryset, many=True)
+        return Response(serializer.data)
+
 
 class SiteViewSet(viewsets.ModelViewSet):
     queryset = Site.objects.all()
     serializer_class = SiteSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = []
 
     def get_queryset(self):
         # Filter sites based on the project ID if provided in the URL
