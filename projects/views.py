@@ -238,10 +238,22 @@ class ProjectViewSet(viewsets.ModelViewSet):
         project = self.get_object()
         try:
             dashboard_data = project.dashboard_data
-            serializer = ProjectDashboardDataSerializer(dashboard_data)
-            return Response(serializer.data)
         except ProjectDashboardData.DoesNotExist:
-            return Response({'error': 'No dashboard data found for this project'}, status=404)
+            # Fallback: Create dashboard data with project's initialized fields
+            dashboard_data = ProjectDashboardData.objects.create(
+                project=project,
+                original_contract_value=project.original_contract_value,
+                approved_vo=project.approved_vo,
+                revised_contract_value=project.revised_contract_value,
+                pending_vo=project.pending_vo,
+                project_start_date=project.project_start,
+                contract_finish_date=project.contract_finish,
+                forecast_finish_date=project.forecast_finish,
+                delay_days=project.delay_days
+            )
+            
+        serializer = ProjectDashboardDataSerializer(dashboard_data)
+        return Response(serializer.data)
 
     @action(detail=True, methods=['post'], url_path='assign-team-lead')
     def assign_team_lead(self, request, pk=None):

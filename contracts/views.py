@@ -103,7 +103,8 @@ class ContractViewSet(viewsets.ModelViewSet):
         - date: filter by created_at date (YYYY-MM-DD)
 
         For list():
-        - return ONLY approved contracts
+        - return ONLY approved contracts for regular users
+        - return ALL contracts for PMC Head/CEO
         """
         qs = Contract.objects.all()
 
@@ -117,9 +118,12 @@ class ContractViewSet(viewsets.ModelViewSet):
             if d:
                 qs = qs.filter(created_at__date=d)
 
-        # Default list endpoint returns approved only (dashboard requirement)
+        # Default list endpoint returns approved only for regular users
+        # PMC Head and CEO can see all contracts
         if self.action == "list":
-            qs = qs.filter(status=Contract.Status.APPROVED)
+            role = _get_role_from_request(self.request)
+            if role not in ["PMC Head", "CEO"]:
+                qs = qs.filter(status=Contract.Status.APPROVED)
 
         return qs.order_by("-created_at")
 

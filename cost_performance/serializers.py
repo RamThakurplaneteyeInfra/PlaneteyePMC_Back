@@ -7,33 +7,45 @@ from rest_framework import serializers
 
 from .models import ProjectCostPerformance
 
-MONTH_YEAR_PATTERN = re.compile(r"^([A-Za-z]{3})-(\d{4})$")
+MONTH_YEAR_PATTERN = re.compile(r"^([A-Za-z]+)-(\d{4})$")
 
+def _parse_flexible_month_year(s: str) -> datetime:
+    s = s.title()
+    try:
+        return datetime.strptime(s, "%b-%Y")
+    except ValueError:
+        try:
+            return datetime.strptime(s, "%B-%Y")
+        except ValueError:
+            raise ValueError(f"Invalid month or year in '{s}'.")
 
 def parse_month_year(value: str) -> str:
     s = (value or "").strip()
     if not MONTH_YEAR_PATTERN.match(s):
         raise serializers.ValidationError(
-            'month_year must look like "Jan-2023".'
+            'month_year must look like "Jan-2023" or "January-2023".'
         )
     try:
-        dt = datetime.strptime(s, "%b-%Y")
+        dt = _parse_flexible_month_year(s)
     except ValueError:
-        try:
-            dt = datetime.strptime(s.title(), "%b-%Y")
-        except ValueError:
-            raise serializers.ValidationError("Invalid month or year.")
+        raise serializers.ValidationError("Invalid month or year.")
     return dt.strftime("%b-%Y")
 
 
 def month_year_sort_key(month_year: str) -> tuple[int, int]:
-    dt = datetime.strptime(month_year.strip(), "%b-%Y")
-    return (dt.year, dt.month)
+    try:
+        dt = _parse_flexible_month_year(month_year.strip())
+        return (dt.year, dt.month)
+    except ValueError:
+        return (0, 0)
 
 
 def dashboard_month_label(month_year: str) -> str:
-    dt = datetime.strptime(month_year.strip(), "%b-%Y")
-    return dt.strftime("%b-%y")
+    try:
+        dt = _parse_flexible_month_year(month_year.strip())
+        return dt.strftime("%b-%y")
+    except ValueError:
+        return month_year.strip()[:6]
 
 
 class ProjectCostPerformanceInputSerializer(serializers.ModelSerializer):

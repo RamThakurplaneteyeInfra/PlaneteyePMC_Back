@@ -77,7 +77,7 @@ class ProjectCostPerformanceViewSet(viewsets.ModelViewSet):
         qs = ProjectCostPerformance.objects.all()
         pn = self.request.query_params.get("project_name")
         if pn:
-            qs = qs.filter(project_name__iexact=pn.strip())
+            qs = qs.filter(project_name__icontains=pn.strip())
         return qs
 
     @swagger_auto_schema(
@@ -176,7 +176,7 @@ class ProjectCostPerformanceViewSet(viewsets.ModelViewSet):
                 {"detail": "Query parameter project_name is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        rows = list(ProjectCostPerformance.objects.filter(project_name__iexact=pn))
+        rows = list(ProjectCostPerformance.objects.filter(project_name__icontains=pn))
         rows.sort(key=lambda r: month_year_sort_key(r.month_year))
 
         def r4(x):

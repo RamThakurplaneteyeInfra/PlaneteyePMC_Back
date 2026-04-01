@@ -129,13 +129,13 @@ class ProjectProgressStatusViewSet(viewsets.ModelViewSet):
     
     def _check_billing_engineer_permission(self, request, action_name="perform this action"):
         """
-        Check if user has Billing Site Engineer role.
+        Check if user has Billing Site Engineer or PMC Head role.
         Returns (is_allowed, error_response) tuple.
         """
         role = _get_role_from_request(request)
-        if role != "Billing Site Engineer":
+        if role not in ["Billing Site Engineer", "PMC Head"]:
             return False, Response(
-                {"detail": f"Only Billing Site Engineer can {action_name} (role='Billing Site Engineer')."},
+                {"detail": f"Only Billing Site Engineer or PMC Head can {action_name} (role='Billing Site Engineer' or 'PMC Head')."},
                 status=status.HTTP_403_FORBIDDEN,
             )
         return True, None

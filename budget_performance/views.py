@@ -61,7 +61,11 @@ class BudgetCostPerformanceViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "head", "options"]
 
     def get_queryset(self):
-        return BudgetCostPerformance.objects.all().order_by("-created_at")
+        qs = BudgetCostPerformance.objects.all()
+        pn = self.request.query_params.get("project_name")
+        if pn:
+            qs = qs.filter(project_name__iexact=pn.strip())
+        return qs.order_by("-created_at")
 
     @swagger_auto_schema(
         operation_summary="Create budget vs cost performance (EVM)",

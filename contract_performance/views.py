@@ -111,23 +111,41 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
         return True, None
-    
+
+    def _check_view_contract_performance_permission(self, request):
+        """List/retrieve: Billing Site Engineer, PMC Head, or CEO."""
+        role = _get_role_from_request(request)
+        if role in ("Billing Site Engineer", "PMC Head", "CEO"):
+            return True, None
+        return False, Response(
+            {
+                "detail": "Only Billing Site Engineer, PMC Head, or CEO can view contract performance "
+                "(pass role as query param or X-Role header)."
+            },
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     @swagger_auto_schema(
         operation_description="List all Contract Performance records. Filter by project_name, date, and performance_status.",
         manual_parameters=[
             openapi.Parameter('project_name', openapi.IN_QUERY, description="Filter by project name (case-insensitive partial match)", type=openapi.TYPE_STRING),
             openapi.Parameter('date', openapi.IN_QUERY, description="Filter by created date (YYYY-MM-DD)", type=openapi.TYPE_STRING, format=openapi.FORMAT_DATE),
             openapi.Parameter('performance_status', openapi.IN_QUERY, description="Filter by performance status (red, yellow, green)", type=openapi.TYPE_STRING),
-            openapi.Parameter('role', openapi.IN_QUERY, description="User role (required: 'Billing Site Engineer')", type=openapi.TYPE_STRING),
+            openapi.Parameter(
+                'role',
+                openapi.IN_QUERY,
+                description="User role: Billing Site Engineer | PMC Head | CEO",
+                type=openapi.TYPE_STRING,
+            ),
         ],
         responses={200: ContractPerformanceSerializer(many=True), 403: "Forbidden"}
     )
     def list(self, request, *args, **kwargs):
-        """List all contract performance records (Billing Site Engineer only)"""
-        is_allowed, error_response = self._check_billing_engineer_permission(request, "view contract performance")
+        """List contract performance (Billing Site Engineer, PMC Head, or CEO)."""
+        is_allowed, error_response = self._check_view_contract_performance_permission(request)
         if not is_allowed:
             return error_response
-        
+
         return super().list(request, *args, **kwargs)
     
     @swagger_auto_schema(
@@ -156,11 +174,11 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
         responses={200: ContractPerformanceSerializer, 403: "Forbidden", 404: "Not Found"}
     )
     def retrieve(self, request, *args, **kwargs):
-        """Retrieve single contract performance record (Billing Site Engineer only)"""
-        is_allowed, error_response = self._check_billing_engineer_permission(request, "view contract performance")
+        """Retrieve single contract performance record (Billing Site Engineer, PMC Head, or CEO)."""
+        is_allowed, error_response = self._check_view_contract_performance_permission(request)
         if not is_allowed:
             return error_response
-        
+
         return super().retrieve(request, *args, **kwargs)
     
     @swagger_auto_schema(
