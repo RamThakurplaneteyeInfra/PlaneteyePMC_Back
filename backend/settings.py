@@ -74,6 +74,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     # Custom CSRF exemption for API
     'backend.middleware.CSRFMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware', 
 ]
 
 ROOT_URLCONF = 'backend.urls'
@@ -258,3 +259,26 @@ SIMPLE_JWT = {
     "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
+
+# ==============================
+# AUTO CREATE SUPERUSER (RENDER)
+# ==============================
+import os
+from django.contrib.auth import get_user_model
+
+try:
+    if os.environ.get("CREATE_SUPERUSER") == "True":
+        User = get_user_model()
+
+        username = os.environ.get("DJANGO_SUPERUSER_USERNAME")
+        email = os.environ.get("DJANGO_SUPERUSER_EMAIL")
+        password = os.environ.get("DJANGO_SUPERUSER_PASSWORD")
+
+        if username and password:
+            if not User.objects.filter(username=username).exists():
+                print("🚀 Creating superuser...")
+                User.objects.create_superuser(username, email, password)
+            else:
+                print("✅ Superuser already exists")
+except Exception as e:
+    print(f"Superuser creation error: {e}")

@@ -3,7 +3,7 @@ services:
     name: pmc-backend
     runtime: docker
     buildCommand: docker build -t pmc-backend .
-    startCommand: gunicorn backend.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120
+    startCommand: /entrypoint.sh
     envVars:
       - key: SECRET_KEY
         generateValue: true
@@ -43,6 +43,12 @@ services:
         value: False
       - key: CSRF_USE_SESSIONS
         value: False
+      - key: DJANGO_SUPERUSER_USERNAME
+        value: admin
+      - key: DJANGO_SUPERUSER_EMAIL
+        value: admin@example.com
+      - key: DJANGO_SUPERUSER_PASSWORD
+        generateValue: true
 
 databases:
   - name: pmc-db

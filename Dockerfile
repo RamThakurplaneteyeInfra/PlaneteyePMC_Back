@@ -29,5 +29,12 @@ COPY . /app/
 # Create media directory
 RUN mkdir -p /app/media
 
-# Run everything at runtime (IMPORTANT)
-CMD ["sh", "-c", "python manage.py collectstatic --noinput && python manage.py migrate && gunicorn backend.wsgi:application --bind 0.0.0.0:$PORT --workers 3 --timeout 120"]
+# Copy and make entrypoint executable
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Expose port
+EXPOSE 8000
+
+# Run entrypoint script
+ENTRYPOINT ["/entrypoint.sh"]
