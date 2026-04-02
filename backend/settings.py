@@ -26,7 +26,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-&r9k5p6ni*+&#kk=wv-ezcdynz6@n=gi8cn+5pjy&_!4-1^px3'
+SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-&r9k5p6ni*+&#kk=wv-ezcdynz6@n=gi8cn+5pjy&_!4-1^px3')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -106,7 +106,7 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 USE_POSTGRESQL = os.environ.get('USE_POSTGRESQL', 'True').lower() == 'true'
 
 # Default PostgreSQL password for this project (local); set DB_PASSWORD to override.
-_DEFAULT_DB_PASSWORD = 'root'
+_DEFAULT_DB_PASSWORD = os.environ.get('DB_PASSWORD', 'root')
 
 if USE_POSTGRESQL:
     DATABASES = {

@@ -36,8 +36,8 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
     
     Endpoints:
     - POST   /api/contract-performance/                 -> Billing Site Engineer creates
-    - GET    /api/contract-performance/                 -> Billing Site Engineer views all
-    - GET    /api/contract-performance/{id}/            -> Billing Site Engineer retrieves single
+    - GET    /api/contract-performance/                 -> Billing Site Engineer, PMC Head, CEO, or Coordinator views all
+    - GET    /api/contract-performance/{id}/            -> Billing Site Engineer, PMC Head, CEO, or Coordinator retrieves single
     - PUT    /api/contract-performance/{id}/            -> Billing Site Engineer updates (full)
     - PATCH  /api/contract-performance/{id}/            -> Billing Site Engineer updates (partial)
     - DELETE /api/contract-performance/{id}/            -> Billing Site Engineer deletes
@@ -113,13 +113,13 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
         return True, None
 
     def _check_view_contract_performance_permission(self, request):
-        """List/retrieve: Billing Site Engineer, PMC Head, or CEO."""
+        """List/retrieve: Billing Site Engineer, PMC Head, CEO, or Coordinator."""
         role = _get_role_from_request(request)
-        if role in ("Billing Site Engineer", "PMC Head", "CEO"):
+        if role in ("Billing Site Engineer", "PMC Head", "CEO", "Coordinator"):
             return True, None
         return False, Response(
             {
-                "detail": "Only Billing Site Engineer, PMC Head, or CEO can view contract performance "
+                "detail": "Only Billing Site Engineer, PMC Head, CEO, or Coordinator can view contract performance "
                 "(pass role as query param or X-Role header)."
             },
             status=status.HTTP_403_FORBIDDEN,
@@ -134,14 +134,14 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
             openapi.Parameter(
                 'role',
                 openapi.IN_QUERY,
-                description="User role: Billing Site Engineer | PMC Head | CEO",
+                description="User role: Billing Site Engineer | PMC Head | CEO | Coordinator",
                 type=openapi.TYPE_STRING,
             ),
         ],
         responses={200: ContractPerformanceSerializer(many=True), 403: "Forbidden"}
     )
     def list(self, request, *args, **kwargs):
-        """List contract performance (Billing Site Engineer, PMC Head, or CEO)."""
+        """List contract performance (Billing Site Engineer, PMC Head, CEO, or Coordinator)."""
         is_allowed, error_response = self._check_view_contract_performance_permission(request)
         if not is_allowed:
             return error_response
@@ -174,7 +174,7 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
         responses={200: ContractPerformanceSerializer, 403: "Forbidden", 404: "Not Found"}
     )
     def retrieve(self, request, *args, **kwargs):
-        """Retrieve single contract performance record (Billing Site Engineer, PMC Head, or CEO)."""
+        """Retrieve single contract performance record (Billing Site Engineer, PMC Head, CEO, or Coordinator)."""
         is_allowed, error_response = self._check_view_contract_performance_permission(request)
         if not is_allowed:
             return error_response

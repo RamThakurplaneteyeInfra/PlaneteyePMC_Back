@@ -36,8 +36,8 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
     
     Endpoints:
     - POST   /api/invoicing/                 -> Billing Site Engineer creates
-    - GET    /api/invoicing/                 -> Billing Site Engineer views all
-    - GET    /api/invoicing/{id}/            -> Billing Site Engineer retrieves single
+    - GET    /api/invoicing/                 -> Billing Site Engineer, PMC Head, CEO, or Coordinator views all
+    - GET    /api/invoicing/{id}/            -> Billing Site Engineer, PMC Head, CEO, or Coordinator retrieves single
     - PUT    /api/invoicing/{id}/            -> Billing Site Engineer updates (full)
     - PATCH  /api/invoicing/{id}/            -> Billing Site Engineer updates (partial)
     - DELETE /api/invoicing/{id}/            -> Billing Site Engineer deletes
@@ -108,13 +108,13 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
         return True, None
 
     def _check_view_invoicing_permission(self, request):
-        """List/retrieve: Billing Site Engineer, PMC Head, or CEO (read-only for the latter)."""
+        """List/retrieve: Billing Site Engineer, PMC Head, CEO, or Coordinator (read-only for the latter)."""
         role = _get_role_from_request(request)
-        if role in ("Billing Site Engineer", "PMC Head", "CEO"):
+        if role in ("Billing Site Engineer", "PMC Head", "CEO", "Coordinator"):
             return True, None
         return False, Response(
             {
-                "detail": "Only Billing Site Engineer, PMC Head, or CEO can view invoicing information "
+                "detail": "Only Billing Site Engineer, PMC Head, CEO, or Coordinator can view invoicing information "
                 "(pass role as query param or X-Role header)."
             },
             status=status.HTTP_403_FORBIDDEN,
@@ -128,14 +128,14 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
             openapi.Parameter(
                 'role',
                 openapi.IN_QUERY,
-                description="User role: Billing Site Engineer | PMC Head | CEO",
+                description="User role: Billing Site Engineer | PMC Head | CEO | Coordinator",
                 type=openapi.TYPE_STRING,
             ),
         ],
         responses={200: InvoicingInformationSerializer(many=True), 403: "Forbidden"}
     )
     def list(self, request, *args, **kwargs):
-        """List invoicing records (Billing Site Engineer, PMC Head, or CEO)."""
+        """List invoicing records (Billing Site Engineer, PMC Head, CEO, or Coordinator)."""
         is_allowed, error_response = self._check_view_invoicing_permission(request)
         if not is_allowed:
             return error_response
@@ -168,7 +168,7 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
         responses={200: InvoicingInformationSerializer, 403: "Forbidden", 404: "Not Found"}
     )
     def retrieve(self, request, *args, **kwargs):
-        """Retrieve single invoicing record (Billing Site Engineer, PMC Head, or CEO)."""
+        """Retrieve single invoicing record (Billing Site Engineer, PMC Head, CEO, or Coordinator)."""
         is_allowed, error_response = self._check_view_invoicing_permission(request)
         if not is_allowed:
             return error_response

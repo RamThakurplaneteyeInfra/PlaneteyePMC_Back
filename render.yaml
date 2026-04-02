@@ -1,0 +1,51 @@
+services:
+  - type: web
+    name: pmc-backend
+    runtime: docker
+    buildCommand: docker build -t pmc-backend .
+    startCommand: gunicorn backend.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEBUG
+        value: False
+      - key: ALLOWED_HOSTS
+        value: .onrender.com
+      - key: USE_POSTGRESQL
+        value: True
+      - key: DB_NAME
+        fromDatabase:
+          name: pmc-db
+          property: database
+      - key: DB_USER
+        fromDatabase:
+          name: pmc-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: pmc-db
+          property: password
+      - key: DB_HOST
+        fromDatabase:
+          name: pmc-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: pmc-db
+          property: port
+      - key: CORS_ALLOW_ALL_ORIGINS
+        value: False
+      - key: CORS_ALLOW_CREDENTIALS
+        value: True
+      - key: CSRF_COOKIE_SECURE
+        value: True
+      - key: CSRF_COOKIE_HTTPONLY
+        value: False
+      - key: CSRF_USE_SESSIONS
+        value: False
+
+databases:
+  - name: pmc-db
+    databaseName: pmc_db
+    user: postgres
+    plan: free
