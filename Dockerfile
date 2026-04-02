@@ -26,14 +26,8 @@ RUN pip install --no-cache-dir --upgrade pip \
 # Copy project
 COPY . /app/
 
-# Collect static files
-RUN python manage.py collectstatic --noinput
-
-# Run migrations
-RUN python manage.py migrate
-
 # Create media directory
 RUN mkdir -p /app/media
 
-# Run gunicorn (IMPORTANT: dynamic PORT for Render)
-CMD ["sh", "-c", "python manage.py migrate && gunicorn backend.wsgi:application --bind 0.0.0.0:$PORT --workers 3 --timeout 120"]
+# Run everything at runtime (IMPORTANT)
+CMD ["sh", "-c", "python manage.py collectstatic --noinput && python manage.py migrate && gunicorn backend.wsgi:application --bind 0.0.0.0:$PORT --workers 3 --timeout 120"]
