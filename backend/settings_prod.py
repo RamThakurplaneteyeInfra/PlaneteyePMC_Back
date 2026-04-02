@@ -1,7 +1,7 @@
 """
 Production settings for backend project.
 """
-
+import dj_database_url
 from .settings import *
 import os
 
@@ -16,19 +16,11 @@ ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '*').split(',')
 
 # Database - PostgreSQL (external)
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.environ.get('DB_NAME'),
-        'USER': os.environ.get('DB_USER'),
-        'PASSWORD': os.environ.get('DB_PASSWORD'),
-        'HOST': os.environ.get('DB_HOST'),
-        'PORT': os.environ.get('DB_PORT', '5432'),
-        'OPTIONS': {
-            'sslmode': 'require',   # IMPORTANT for cloud DB
-            'connect_timeout': 10,
-        },
-        'CONN_MAX_AGE': 600,
-    }
+    'default': dj_database_url.parse(
+        os.environ.get('DATABASE_URL'),
+        conn_max_age=600,
+        ssl_require=True
+    )
 }
 
 # Static files
