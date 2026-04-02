@@ -1,4 +1,4 @@
-# Use Python 3.11 slim image (compatible with Django 6.0)
+# Use Python 3.11 slim image
 FROM python:3.11-slim
 
 # Set environment variables
@@ -29,11 +29,11 @@ COPY . /app/
 # Collect static files
 RUN python manage.py collectstatic --noinput
 
+# Run migrations
+RUN python manage.py migrate
+
 # Create media directory
 RUN mkdir -p /app/media
 
-# Expose port
-EXPOSE 8000
-
-# Run gunicorn
-CMD ["gunicorn", "backend.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "120"]
+# Run gunicorn (IMPORTANT: dynamic PORT for Render)
+CMD ["sh", "-c", "python manage.py migrate && gunicorn backend.wsgi:application --bind 0.0.0.0:$PORT --workers 3 --timeout 120"]
