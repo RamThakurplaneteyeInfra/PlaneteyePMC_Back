@@ -5,16 +5,13 @@ import dj_database_url
 from .settings import *
 import os
 
-# SECURITY WARNING: keep the secret key used in production secret!
+# SECURITY
 SECRET_KEY = os.environ.get('SECRET_KEY')
-
-# SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
 
-# Allowed hosts
 ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '*').split(',')
 
-# Database - PostgreSQL (external)
+# DATABASE (Render PostgreSQL)
 DATABASES = {
     'default': dj_database_url.parse(
         os.environ.get('DATABASE_URL'),
@@ -23,27 +20,36 @@ DATABASES = {
     )
 }
 
-# Static files
+# ================= STATIC FILES (FIXED FOR RENDER) =================
 STATIC_URL = '/static/'
-STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
-# Media files
+# WhiteNoise (IMPORTANT)
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+
+# ================= MEDIA FILES =================
 MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
-# Security settings (FIXED)
-SECURE_SSL_REDIRECT = False   # IMPORTANT: avoid redirect loop on Render
+# ================= MIDDLEWARE FIX =================
+MIDDLEWARE = [
+    'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',   # IMPORTANT (Swagger fix)
+] + MIDDLEWARE
+
+# ================= SECURITY SETTINGS =================
+SECURE_SSL_REDIRECT = False   # avoid redirect loop on Render
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = 'DENY'
 
-# CORS settings
-CORS_ALLOW_ALL_ORIGINS = False
+# ================= CORS =================
+CORS_ALLOW_ALL_ORIGINS = True   # allow frontend temporarily
 CORS_ALLOW_CREDENTIALS = True
 
-# Logging
+# ================= LOGGING =================
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
