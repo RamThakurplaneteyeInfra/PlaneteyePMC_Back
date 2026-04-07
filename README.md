@@ -37,12 +37,12 @@ python manage.py create_demo_users
 
 | Role | username | password |
 |------|----------|----------|
-| PMC Head | `pmc_head` | `123` |
-| Coordinator | `pmc_coordinator` | `123` |
-| Team Leader | `pmc_tl` | `123` |
-| Billing Site Engineer | `pmc_bse` | `123` |
-| Site Engineer | `pmc_se` | `123` |
-| QAQC Site Engineer | `pmc_qaqc` | `123` |
+| PMC Head | `pmc_head` | `pmc@123` |
+| Coordinator | `pmc_coordinator` | `coordinator@123` |
+| Team Leader | `pmc_tl` | `tl@123` |
+| Billing Site Engineer | `pmc_bse` | `bse@123` |
+| Site Engineer | `pmc_se` | `se@123` |
+| QAQC Site Engineer | `pmc_qaqc` | `qaqc@123` |
 
 Make sure each user is added to the matching Django `Group` name (exactly as shown above), because the API dashboards/permissions are derived from `user.groups` after login.
 

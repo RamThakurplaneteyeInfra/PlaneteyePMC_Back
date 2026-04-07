@@ -1,4 +1,17 @@
 from django.utils.dateparse import parse_date
+"""
+    The above code defines a Django REST framework viewset for managing Contract Performance records
+    with various endpoints and permission checks based on user roles.
+    
+    :param request: The `request` parameter in the context of Django REST framework represents the HTTP
+    request that is received by the view. It contains information about the request, such as headers,
+    query parameters, data, user authentication, and more. The request object provides access to details
+    of the incoming request, allowing you to
+    :return: The code provided defines a Django REST framework viewset for managing Contract Performance
+    records. It includes methods for creating, retrieving, updating, partially updating, and deleting
+    contract performance records. The viewset also includes permission checks based on the role of the
+    user making the request.
+"""
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny

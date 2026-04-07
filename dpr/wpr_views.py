@@ -155,9 +155,16 @@ class WeeklyProgressReportAPIView(APIView):
                 )
         
         # Build DPR queryset with project filter
+        # Use case-insensitive search with PostgreSQL
         queryset = DailyProgressReport.objects.filter(
-            project_name__icontains=project_name
+            project_name__iexact=project_name
         )
+        
+        # If no exact match, try icontains as fallback
+        if not queryset.exists():
+            queryset = DailyProgressReport.objects.filter(
+                project_name__icontains=project_name
+            )
         
         # If month/year are not specified, get the latest available data
         if month is None or year is None:

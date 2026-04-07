@@ -1,0 +1,420 @@
+[
+  {
+    "project_name": "Thane Project",
+    "job_no": "THN-2026-001",
+    "report_date": "2026-03-16",
+    "unresolved_issues": "Minor delay in material delivery",
+    "quality_status": "All quality checks passed",
+    "bill_status": "Submitted",
+    "gfc_status": "Approved",
+    "issued_by": "Site Engineer",
+    "designation": "Junior Engineer",
+    "status": "approved",
+    "activities": [
+      {
+        "date": "2026-03-16",
+        "activity": "Site clearing and mobilization",
+        "target_achieved": 100.0,
+        "deliverables": "As per schedule",
+        "next_day_plan": "Continue work as planned",
+        "remarks": "Progress on track"
+      }
+    ]
+  },
+  {
+    "project_name": "Thane Project",
+    "job_no": "THN-2026-001",
+    "report_date": "2026-03-17",
+    "unresolved_issues": "Minor delay in material delivery",
+    "quality_status": "All quality checks passed",
+    "bill_status": "Submitted",
+    "gfc_status": "Approved",
+    "issued_by": "Site Engineer",
+    "designation": "Junior Engineer",
+    "status": "approved",
+    "activities": [
+      {
+        "date": "2026-03-17",
+        "activity": "Excavation work - Phase 1",
+        "target_achieved": 80.0,
+        "deliverables": "As per schedule",
+        "next_day_plan": "Continue work as planned",
+        "remarks": "Progress on track"
+      }
+    ]
+  },
+  {
+    "project_name": "Thane Project",
+    "job_no": "THN-2026-001",
+    "report_date": "2026-03-18",
+    "unresolved_issues": "Minor delay in material delivery",
+    "quality_status": "All quality checks passed",
+    "bill_status": "Submitted",
+    "gfc_status": "Approved",
+    "issued_by": "Site Engineer",
+    "designation": "Junior Engineer",
+    "status": "approved",
+    "activities": [
+      {
+        "date": "2026-03-18",
+        "activity": "Excavation completed",
+        "target_achieved": 100.0,
+        "deliverables": "As per schedule",
+        "next_day_plan": "Continue work as planned",
+        "remarks": "Progress on track"
+      }
+    ]
+  },
+  {
+    "project_name": "Thane Project",
+    "job_no": "THN-2026-001",
+    "report_date": "2026-03-19",
+    "unresolved_issues": "Minor delay in material delivery",
+    "quality_status": "All quality checks passed",
+    "bill_status": "Submitted",
+    "gfc_status": "Approved",
+    "issued_by": "Site Engineer",
+    "designation": "Junior Engineer",
+    "status": "approved",
+    "activities": [
+      {
+        "date": "2026-03-19",
+        "activity": "Foundation marking and setting",
+        "target_achieved": 60.0,
+        "deliverables": "As per schedule",
+        "next_day_plan": "Continue work as planned",
+        "remarks": "Progress on track"
+      }
+    ]
+  },
+  {
+    "project_name": "Thane Project",
+    "job_no": "THN-2026-001",
+    "report_date": "2026-03-20",
+    "unresolved_issues": "Minor delay in material delivery",
+    "quality_status": "All quality checks passed",
+    "bill_status": "Submitted",
+    "gfc_status": "Approved",
+    "issued_by": "Site Engineer",
+    "designation": "Junior Engineer",
+    "status": "approved",
+    "activities": [
+      {
+        "date": "2026-03-20",
+        "activity": "Rebar binding - Section A",
+        "target_achieved": 40.0,
+        "deliverables": "As per schedule",
+        "next_day_plan": "Continue work as planned",
+        "remarks": "Progress on track"
+      }
+    ]
+  },
+  {
+    "project_name": "Thane Project",
+    "job_no": "THN-2026-001",
+    "report_date": "2026-03-21",
+    "unresolved_issues": "Minor delay in material delivery",
+    "quality_status": "All quality checks passed",
+    "bill_status": "Submitted",
+    "gfc_status": "Approved",
+    "issued_by": "Site Engineer",
+    "designation": "Junior Engineer",
+    "status": "approved",
+    "activities": [
+      {
+        "date": "2026-03-21",
+        "activity": "Rebar binding completed",
+        "target_achieved": 100.0,
+        "deliverables": "As per schedule",
+        "next_day_plan": "Continue work as planned",
+        "remarks": "Progress on track"
+      }
+    ]
+  },
+  {
+    "project_name": "Thane Project",
+    "job_no": "THN-2026-001",
+    "report_date": "2026-03-22",
+    "unresolved_issues": "Minor delay in material delivery",
+    "quality_status": "All quality checks passed",
+    "bill_status": "Submitted",
+    "gfc_status": "Approved",
+    "issued_by": "Site Engineer",
+    "designation": "Junior Engineer",
+    "status": "approved",
+    "activities": [
+      {
+        "date": "2026-03-22",
+        "activity": "Concrete pouring - Foundation",
+        "target_achieved": 35.0,
+        "deliverables": "As per schedule",
+        "next_day_plan": "Continue work as planned",
+        "remarks": "Progress on track"
+      }
+    ]
+  },
+  {
+    "project_name": "Thane Project",
+    "job_no": "THN-2026-001",
+    "report_date": "2026-03-23",
+    "unresolved_issues": "Minor delay in material delivery",
+    "quality_status": "All quality checks passed",
+    "bill_status": "Submitted",
+    "gfc_status": "Approved",
+    "issued_by": "Site Engineer",
+    "designation": "Junior Engineer",
+    "status": "approved",
+    "activities": [
+      {
+        "date": "2026-03-23",
+        "activity": "Concrete curing",
+        "target_achieved": 100.0,
+        "deliverables": "As per schedule",
+        "next_day_plan": "Continue work as planned",
+        "remarks": "Progress on track"
+      }
+    ]
+  },
+  {
+    "project_name": "Thane Project",
+    "job_no": "THN-2026-001",
+    "report_date": "2026-03-24",
+    "unresolved_issues": "Minor delay in material delivery",
+    "quality_status": "All quality checks passed",
+    "bill_status": "Submitted",
+    "gfc_status": "Approved",
+    "issued_by": "Site Engineer",
+    "designation": "Junior Engineer",
+    "status": "approved",
+    "activities": [
+      {
+        "date": "2026-03-24",
+        "activity": "Formwork removal",
+        "target_achieved": 70.0,
+        "deliverables": "As per schedule",
+        "next_day_plan": "Continue work as planned",
+        "remarks": "Progress on track"
+      }
+    ]
+  },
+  {
+    "project_name": "Thane Project",
+    "job_no": "THN-2026-001",
+    "report_date": "2026-03-25",
+    "unresolved_issues": "Minor delay in material delivery",
+    "quality_status": "All quality checks passed",
+    "bill_status": "Submitted",
+    "gfc_status": "Approved",
+    "issued_by": "Site Engineer",
+    "designation": "Junior Engineer",
+    "status": "approved",
+    "activities": [
+      {
+        "date": "2026-03-25",
+        "activity": "Quality inspection",
+        "target_achieved": 100.0,
+        "deliverables": "As per schedule",
+        "next_day_plan": "Continue work as planned",
+        "remarks": "Progress on track"
+      }
+    ]
+  },
+  {
+    "project_name": "Thane Project",
+    "job_no": "THN-2026-001",
+    "report_date": "2026-03-26",
+    "unresolved_issues": "Minor delay in material delivery",
+    "quality_status": "All quality checks passed",
+    "bill_status": "Submitted",
+    "gfc_status": "Approved",
+    "issued_by": "Site Engineer",
+    "designation": "Junior Engineer",
+    "status": "approved",
+    "activities": [
+      {
+        "date": "2026-03-26",
+        "activity": "Brick masonry - Ground floor",
+        "target_achieved": 25.0,
+        "deliverables": "As per schedule",
+        "next_day_plan": "Continue work as planned",
+        "remarks": "Progress on track"
+      }
+    ]
+  },
+  {
+    "project_name": "Thane Project",
+    "job_no": "THN-2026-001",
+    "report_date": "2026-03-27",
+    "unresolved_issues": "Minor delay in material delivery",
+    "quality_status": "All quality checks passed",
+    "bill_status": "Submitted",
+    "gfc_status": "Approved",
+    "issued_by": "Site Engineer",
+    "designation": "Junior Engineer",
+    "status": "approved",
+    "activities": [
+      {
+        "date": "2026-03-27",
+        "activity": "Brick masonry continued",
+        "target_achieved": 50.0,
+        "deliverables": "As per schedule",
+        "next_day_plan": "Continue work as planned",
+        "remarks": "Progress on track"
+      }
+    ]
+  },
+  {
+    "project_name": "Thane Project",
+    "job_no": "THN-2026-001",
+    "report_date": "2026-03-28",
+    "unresolved_issues": "Minor delay in material delivery",
+    "quality_status": "All quality checks passed",
+    "bill_status": "Submitted",
+    "gfc_status": "Approved",
+    "issued_by": "Site Engineer",
+    "designation": "Junior Engineer",
+    "status": "approved",
+    "activities": [
+      {
+        "date": "2026-03-28",
+        "activity": "Plumbing rough-in",
+        "target_achieved": 30.0,
+        "deliverables": "As per schedule",
+        "next_day_plan": "Continue work as planned",
+        "remarks": "Progress on track"
+      }
+    ]
+  },
+  {
+    "project_name": "Thane Project",
+    "job_no": "THN-2026-001",
+    "report_date": "2026-03-29",
+    "unresolved_issues": "Minor delay in material delivery",
+    "quality_status": "All quality checks passed",
+    "bill_status": "Submitted",
+    "gfc_status": "Approved",
+    "issued_by": "Site Engineer",
+    "designation": "Junior Engineer",
+    "status": "approved",
+    "activities": [
+      {
+        "date": "2026-03-29",
+        "activity": "Electrical conduit laying",
+        "target_achieved": 20.0,
+        "deliverables": "As per schedule",
+        "next_day_plan": "Continue work as planned",
+        "remarks": "Progress on track"
+      }
+    ]
+  },
+  {
+    "project_name": "Thane Project",
+    "job_no": "THN-2026-001",
+    "report_date": "2026-03-30",
+    "unresolved_issues": "Minor delay in material delivery",
+    "quality_status": "All quality checks passed",
+    "bill_status": "Submitted",
+    "gfc_status": "Approved",
+    "issued_by": "Site Engineer",
+    "designation": "Junior Engineer",
+    "status": "approved",
+    "activities": [
+      {
+        "date": "2026-03-30",
+        "activity": "Brick masonry completion",
+        "target_achieved": 100.0,
+        "deliverables": "As per schedule",
+        "next_day_plan": "Continue work as planned",
+        "remarks": "Progress on track"
+      }
+    ]
+  },
+  {
+    "project_name": "Thane Project",
+    "job_no": "THN-2026-001",
+    "report_date": "2026-03-31",
+    "unresolved_issues": "Minor delay in material delivery",
+    "quality_status": "All quality checks passed",
+    "bill_status": "Submitted",
+    "gfc_status": "Approved",
+    "issued_by": "Site Engineer",
+    "designation": "Junior Engineer",
+    "status": "approved",
+    "activities": [
+      {
+        "date": "2026-03-31",
+        "activity": "Plumbing fixtures installation",
+        "target_achieved": 40.0,
+        "deliverables": "As per schedule",
+        "next_day_plan": "Continue work as planned",
+        "remarks": "Progress on track"
+      }
+    ]
+  },
+  {
+    "project_name": "Thane Project",
+    "job_no": "THN-2026-001",
+    "report_date": "2026-04-01",
+    "unresolved_issues": "Minor delay in material delivery",
+    "quality_status": "All quality checks passed",
+    "bill_status": "Submitted",
+    "gfc_status": "Approved",
+    "issued_by": "Site Engineer",
+    "designation": "Junior Engineer",
+    "status": "approved",
+    "activities": [
+      {
+        "date": "2026-04-01",
+        "activity": "Electrical wiring",
+        "target_achieved": 35.0,
+        "deliverables": "As per schedule",
+        "next_day_plan": "Continue work as planned",
+        "remarks": "Progress on track"
+      }
+    ]
+  },
+  {
+    "project_name": "Thane Project",
+    "job_no": "THN-2026-001",
+    "report_date": "2026-04-02",
+    "unresolved_issues": "Minor delay in material delivery",
+    "quality_status": "All quality checks passed",
+    "bill_status": "Submitted",
+    "gfc_status": "Approved",
+    "issued_by": "Site Engineer",
+    "designation": "Junior Engineer",
+    "status": "approved",
+    "activities": [
+      {
+        "date": "2026-04-02",
+        "activity": "Plastering work",
+        "target_achieved": 15.0,
+        "deliverables": "As per schedule",
+        "next_day_plan": "Continue work as planned",
+        "remarks": "Progress on track"
+      }
+    ]
+  },
+  {
+    "project_name": "Thane Project",
+    "job_no": "THN-2026-001",
+    "report_date": "2026-04-03",
+    "unresolved_issues": "Minor delay in material delivery",
+    "quality_status": "All quality checks passed",
+    "bill_status": "Submitted",
+    "gfc_status": "Approved",
+    "issued_by": "Site Engineer",
+    "designation": "Junior Engineer",
+    "status": "approved",
+    "activities": [
+      {
+        "date": "2026-04-03",
+        "activity": "Ceiling false work",
+        "target_achieved": 10.0,
+        "deliverables": "As per schedule",
+        "next_day_plan": "Continue work as planned",
+        "remarks": "Progress on track"
+      }
+    ]
+  }
+]
