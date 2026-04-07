@@ -18,7 +18,7 @@ class Command(BaseCommand):
     help = "Create demo users (password=123) and assign them to role groups"
 
     DEMO_USERS = [
-        {"username": "pmc_head", "password": "pmc@123", "group": "PMC Head", "site_engineer_type": None},
+        {"username": "pmc_head", "password": "Project@123", "group": "PMC Head", "site_engineer_type": None},
         {"username": "pmc_coordinator", "password": "coordinator@123", "group": "Coordinator", "site_engineer_type": None},
         {"username": "pmc_tl", "password": "tl@123", "group": "Team Leader", "site_engineer_type": None},
         {

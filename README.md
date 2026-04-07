@@ -37,7 +37,7 @@ python manage.py create_demo_users
 
 | Role | username | password |
 |------|----------|----------|
-| PMC Head | `pmc_head` | `pmc@123` |
+| PMC Head | `pmc_head` | `Project@123` |
 | Coordinator | `pmc_coordinator` | `coordinator@123` |
 | Team Leader | `pmc_tl` | `tl@123` |
 | Billing Site Engineer | `pmc_bse` | `bse@123` |
