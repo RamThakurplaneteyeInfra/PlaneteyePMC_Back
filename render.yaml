@@ -59,7 +59,7 @@ services:
       - key: EMAIL_HOST_USER
         value: your-email@gmail.com
       - key: EMAIL_HOST_PASSWORD
-        value: your-app-password
+        sync: false
       - key: DEFAULT_FROM_EMAIL
         value: your-email@gmail.com
       - key: REDIS_URL

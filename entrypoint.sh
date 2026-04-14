@@ -38,6 +38,6 @@ EOF
 echo "Starting Daphne ASGI server for WebSocket support..."
 exec daphne backend.asgi:application \
     --bind 0.0.0.0 \
-    --port 8000 \
-    --access-log \
+    --port ${PORT:-8000} \
+    --access-log access.log \
     --proxy-headers
