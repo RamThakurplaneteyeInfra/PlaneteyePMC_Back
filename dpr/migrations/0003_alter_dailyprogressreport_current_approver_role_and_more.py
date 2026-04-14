@@ -25,6 +25,8 @@ def remove_duplicates(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
+    
+    atomic = False
 
     dependencies = [
         ('dpr', '0002_add_approval_workflow'),
