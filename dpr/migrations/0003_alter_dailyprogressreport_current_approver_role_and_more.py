@@ -85,13 +85,4 @@ class Migration(migrations.Migration):
                 name='dpr_dailypr_status_ac4a48_idx'
             ),
         ),
-
-        # 🔥 STEP 2: ADD CONSTRAINT AFTER CLEANUP
-        migrations.AddConstraint(
-            model_name='dailyprogressreport',
-            constraint=models.UniqueConstraint(
-                fields=('project_name', 'report_date'),
-                name='unique_project_date_dpr'
-            ),
-        ),
     ]
