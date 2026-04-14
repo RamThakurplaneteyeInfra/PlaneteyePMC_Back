@@ -1,43 +1,47 @@
 #!/bin/bash
-
-# Exit on error
 set -e
 
 echo "Starting PMC Backend deployment..."
 
-# Run migrations
-echo "Running database migrations..."
+# Step 1: Run migrations FIRST
+echo "Running migrations..."
 python manage.py migrate --noinput
 
-# Collect static files
+# Step 2: Clean duplicates AFTER migration
+echo "Cleaning duplicate DPR data..."
+
+python manage.py shell << EOF
+from django.db.models import Count
+from dpr.models import DPR
+
+duplicates = (
+    DPR.objects
+    .values('project_name', 'report_date')
+    .annotate(count=Count('id'))
+    .filter(count__gt=1)
+)
+
+for item in duplicates:
+    qs = DPR.objects.filter(
+        project_name=item['project_name'],
+        report_date=item['report_date']
+    )
+    qs.exclude(id=qs.first().id).delete()
+
+print("Duplicate cleanup done")
+EOF
+
+# Step 3: Collect static files
 echo "Collecting static files..."
 python manage.py collectstatic --noinput
 
-# Create superuser if it doesn't exist
-echo "Checking for superuser..."
-python manage.py shell << EOF
-from django.contrib.auth import get_user_model
-import os
+# Step 4: Create superuser safely
+echo "Creating superuser..."
+python manage.py createsuperuser --noinput || true
 
-User = get_user_model()
-
-# Get superuser credentials from environment variables
-username = os.environ.get('DJANGO_SUPERUSER_USERNAME', 'admin')
-email = os.environ.get('DJANGO_SUPERUSER_EMAIL', 'admin@example.com')
-password = os.environ.get('DJANGO_SUPERUSER_PASSWORD', 'admin123')
-
-# Check if superuser exists
-if not User.objects.filter(username=username).exists():
-    print(f"Creating superuser: {username}")
-    User.objects.create_superuser(username=username, email=email, password=password)
-    print("Superuser created successfully!")
-else:
-    print(f"Superuser '{username}' already exists")
-EOF
-
-echo "Starting Daphne ASGI server for WebSocket support..."
+# Step 5: Start server
+echo "Starting Daphne..."
 exec daphne backend.asgi:application \
     --bind 0.0.0.0 \
     --port ${PORT:-8000} \
-    --access-log access.log \
     --proxy-headers
