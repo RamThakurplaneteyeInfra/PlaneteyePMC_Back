@@ -25,27 +25,6 @@ http://127.0.0.1:8000
 }
 ```
 
-### Dev/Test Login Accounts (set up in Django DB)
-Use password `123` for all users.
-
-Before testing login, seed roles and demo users in your local DB:
-```bash
-cd backend
-python manage.py create_roles
-python manage.py create_demo_users
-```
-
-| Role | username | password |
-|------|----------|----------|
-| PMC Head | `pmc_head` | `Project@123` |
-| Coordinator | `pmc_coordinator` | `coordinator@123` |
-| Team Leader | `pmc_tl` | `tl@123` |
-| Billing Site Engineer | `pmc_bse` | `bse@123` |
-| Site Engineer | `pmc_se` | `se@123` |
-| QAQC Site Engineer | `pmc_qaqc` | `qaqc@123` |
-
-Make sure each user is added to the matching Django `Group` name (exactly as shown above), because the API dashboards/permissions are derived from `user.groups` after login.
-
 ---
 
 ## API Endpoints
@@ -210,13 +189,25 @@ Make sure each user is added to the matching Django `Group` name (exactly as sho
 
 ### 13. Cost Performance (EVM)
 
+Earned Value Management tracking with improved relational data model.
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/cost-performance/` | GET | List all cost performance records |
-| `/api/cost-performance/` | POST | Create new cost record |
+| `/api/cost-performance/` | GET | List all cost performance records (`?project_name=` filter) |
+| `/api/cost-performance/` | POST | Create new cost record (auto-creates Project if needed) |
+| `/api/cost-performance/dashboard/` | GET | EVM dashboard series for project |
+| `/api/cost-performance/evm-dashboard/` | POST | Enhanced EVM dashboard computation |
 | `/api/cost-performance/{id}/` | GET | Get cost details |
 | `/api/cost-performance/{id}/` | PUT | Update cost record |
 | `/api/cost-performance/{id}/` | DELETE | Delete cost record |
+
+**Query Parameters:**
+- `project_name` - Filter by project name (case-insensitive)
+
+**Features:**
+- Automatic Project creation from `project_name`
+- ForeignKey relationships for data integrity
+- Computed EVM metrics: EAC, CV, SV, CPI, VAC
 
 ---
 
@@ -256,6 +247,26 @@ Response includes:
 - `insights` - Human-readable insights
 - `alerts` - Alert flags (hasFatality, highNearMiss)
 - `severityIndex` - Normalized 0-100 score
+
+---
+
+## Recent Data Model Improvements
+
+### Cost Performance (EVM) Migration ✅
+- **Module**: `cost_performance`
+- **Before**: Used `project_name` CharField for project identification
+- **After**: ForeignKey relationship to `Project` model
+- **Benefits**:
+  - Referential integrity constraints
+  - Improved query performance with indexes
+  - Prevention of orphaned records
+  - Consistent project data across the system
+- **API Compatibility**: All existing endpoints work unchanged
+- **Migration**: Zero-downtime with automatic Project creation
+
+### Other Modules
+- **budget_performance**: Still uses `project_name` (separate EVM implementation)
+- **Future migrations**: Consider similar improvements for other modules as needed
 
 ---
 
@@ -320,8 +331,8 @@ backend/
 ├── projects/          # Projects & sites management
 ├── operations/       # Tasks & operation reports
 ├── dpr/             # Daily Progress Reports
-├── contracts/       # Contract management
-├── invoicing/      # Invoice tracking
+├── contracts/       # Contract management (Contract values)
+├── invoicing/      # Invoice tracking 
 ├── contract_performance/  # Contract performance metrics
 ├── project_progress/      # Project progress tracking
 ├── budget_performance/    # Budget vs cost (EVM)

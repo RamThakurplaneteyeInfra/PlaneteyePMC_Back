@@ -3,6 +3,9 @@ from django.contrib.auth.models import User
 from django.core.validators import MinValueValidator
 from decimal import Decimal
 
+# Constants
+ZERO = Decimal('0.00')
+
 class Project(models.Model):
     STATUS_CHOICES = [
         ('planning', 'Planning'),
@@ -11,7 +14,7 @@ class Project(models.Model):
         ('on_hold', 'On Hold'),
     ]
 
-    name = models.CharField(max_length=255)
+    name = models.CharField(max_length=255, db_index=True)
     client_name = models.CharField(max_length=255, blank=True)
     description = models.TextField(blank=True)
     location = models.CharField(max_length=255, blank=True)
@@ -37,11 +40,11 @@ class Project(models.Model):
     coordinators = models.ManyToManyField(User, blank=True, related_name='coordinator_projects')
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_projects')
 
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='planning')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='planning', db_index=True)
     start_date = models.DateField(null=True, blank=True) # Keeping for compatibility
     end_date = models.DateField(null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True, db_index=True)
 
     # ==========================================================================
     # Project Initialization Fields (PMC Head Input)
@@ -115,20 +118,65 @@ class Project(models.Model):
         Override save to auto-calculate derived fields:
         - revised_contract_value = original_contract_value + approved_vo
         - delay_days = (forecast_finish - contract_finish).days
+        Only recalculate if relevant fields have changed.
         """
+        # Check if this is a new project creation
+        is_new = self.pk is None
+
+        # Normalize string fields
+        if self.name:
+            self.name = self.name.strip()
+        if self.client_name:
+            self.client_name = self.client_name.strip()
+        if self.location:
+            self.location = self.location.strip()
+
+        # Only recalculate if this is a new instance or relevant fields have changed
+        if self.pk is None:
+            # New instance, always calculate
+            self._calculate_derived_fields()
+        else:
+            # Existing instance, check if calculation fields changed
+            try:
+                old_instance = Project.objects.get(pk=self.pk)
+                if (old_instance.original_contract_value != self.original_contract_value or
+                    old_instance.approved_vo != self.approved_vo or
+                    old_instance.forecast_finish != self.forecast_finish or
+                    old_instance.contract_finish != self.contract_finish):
+                    self._calculate_derived_fields()
+            except Project.DoesNotExist:
+                # Fallback to always calculate if instance not found
+                self._calculate_derived_fields()
+
+        super().save(*args, **kwargs)
+
+        # Send notification for new project creation
+        if is_new:
+            from services.notifications import notify_project_created
+            notify_project_created(self)
+
+    def _calculate_derived_fields(self):
+        """Helper method to calculate derived fields"""
         # Calculate Revised Contract Value
         self.revised_contract_value = (
-            (self.original_contract_value or Decimal('0.00')) + 
-            (self.approved_vo or Decimal('0.00'))
+            (self.original_contract_value or ZERO) +
+            (self.approved_vo or ZERO)
         )
-        
+
         # Calculate Delay Days
         if self.forecast_finish and self.contract_finish:
             self.delay_days = (self.forecast_finish - self.contract_finish).days
         else:
             self.delay_days = 0
-        
-        super().save(*args, **kwargs)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Project"
+        verbose_name_plural = "Projects"
+        indexes = [
+            models.Index(fields=["name", "status"], name="project_name_status_idx"),
+            models.Index(fields=["status", "created_at"], name="project_status_created_idx"),
+        ]
 
     def __str__(self):
         return self.name
@@ -140,10 +188,10 @@ class Site(models.Model):
         ('completed', 'Completed'),
     ]
 
-    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='sites')
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='sites', db_index=True)
     name = models.CharField(max_length=255)
     location = models.CharField(max_length=255)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='not_started')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='not_started', db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -191,8 +239,8 @@ class ProjectDashboardData(models.Model):
     
     # Additional JSON field for flexible data storage
     additional_data = models.JSONField(default=dict, blank=True)
-    
-    created_at = models.DateTimeField(auto_now_add=True)
+
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:

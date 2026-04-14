@@ -2,11 +2,13 @@
 Manpower & man-hours API: monthly planned/actual, MH, cumulative MH, dashboard series.
 """
 
+from django.core.cache import cache
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from .models import ProjectManpower
@@ -69,9 +71,14 @@ class ProjectManpowerViewSet(viewsets.ModelViewSet):
     serializer_class = ProjectManpowerSerializer
     permission_classes = [AllowAny]
     http_method_names = ["get", "post", "head", "options"]
+    pagination_class = PageNumberPagination
 
     def get_queryset(self):
-        qs = ProjectManpower.objects.all()
+        qs = ProjectManpower.objects.only(
+            "id", "project_name", "month_year", "planned_manpower", "actual_manpower",
+            "working_hours_per_day", "working_days_per_month", "planned_mh", "actual_mh",
+            "planned_mh_cumulative", "actual_mh_cumulative", "created_at"
+        )
         pn = self.request.query_params.get("project_name")
         if pn:
             qs = qs.filter(project_name__iexact=pn.strip())
@@ -89,12 +96,18 @@ class ProjectManpowerViewSet(viewsets.ModelViewSet):
             ),
         },
     )
+    def perform_create(self, serializer):
+        super().perform_create(serializer)
+        # Cache invalidation
+        cache.delete_pattern("manpower_list:*")
+        cache.delete_pattern("manpower_dashboard:*")
+
     def create(self, request, *args, **kwargs):
         ser = ProjectManpowerInputSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
-        instance = ser.save()
+        self.perform_create(ser)
         return Response(
-            ProjectManpowerSerializer(instance).data,
+            ProjectManpowerSerializer(ser.instance).data,
             status=status.HTTP_201_CREATED,
         )
 
@@ -113,15 +126,14 @@ class ProjectManpowerViewSet(viewsets.ModelViewSet):
         responses={200: ProjectManpowerSerializer(many=True)},
     )
     def list(self, request, *args, **kwargs):
-        qs = ProjectManpower.objects.all()
-        pn = request.query_params.get("project_name")
-        if pn:
-            qs = qs.filter(project_name__iexact=pn.strip())
-        rows = list(qs)
-        rows.sort(
-            key=lambda r: (r.project_name.lower(), month_year_sort_key(r.month_year))
-        )
-        return Response(ProjectManpowerSerializer(rows, many=True).data)
+        cache_key = f"manpower_list:{request.get_full_path()}"
+        data = cache.get(cache_key)
+        if data is not None:
+            return Response(data)
+
+        response = super().list(request, *args, **kwargs)
+        cache.set(cache_key, response.data, 300)  # 5 minutes
+        return response
 
     @swagger_auto_schema(auto_schema=None)
     def retrieve(self, request, *args, **kwargs):
@@ -186,33 +198,47 @@ class ProjectManpowerViewSet(viewsets.ModelViewSet):
                 {"detail": "Query parameter project_name is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        rows = list(
-            ProjectManpower.objects.filter(project_name__iexact=pn).order_by(
-                "month_year"
-            )
-        )
-        rows.sort(key=lambda r: month_year_sort_key(r.month_year))
 
-        months = [dashboard_month_label(r.month_year) for r in rows]
-        planned_mp = [r.planned_manpower for r in rows]
-        actual_mp = [r.actual_manpower for r in rows]
-        planned_c = [round(r.planned_mh_cumulative, 2) for r in rows]
-        actual_c = [round(r.actual_mh_cumulative, 2) for r in rows]
-        eff = [
-            None if r.planned_manpower == 0
-            else round(r.actual_manpower / r.planned_manpower, 4)
-            for r in rows
-        ]
-        below = [r.actual_manpower < r.planned_manpower for r in rows]
+        cache_key = f"manpower_dashboard:{pn}"
+        data = cache.get(cache_key)
+        if data is not None:
+            return Response(data)
 
-        return Response(
-            {
-                "months": months,
-                "planned_manpower": planned_mp,
-                "actual_manpower": actual_mp,
-                "planned_mh_cumulative": planned_c,
-                "actual_mh_cumulative": actual_c,
-                "manpower_efficiency": eff,
-                "actual_below_planned": below,
-            }
-        )
+        rows = ProjectManpower.objects.filter(project_name__iexact=pn).only(
+            "month_year", "planned_manpower", "actual_manpower",
+            "planned_mh_cumulative", "actual_mh_cumulative"
+        ).order_by("month_year")
+
+        # Pre-allocate lists
+        months = []
+        planned_manpower = []
+        actual_manpower = []
+        planned_mh_cumulative = []
+        actual_mh_cumulative = []
+        manpower_efficiency = []
+        actual_below_planned = []
+
+        for r in rows:
+            months.append(dashboard_month_label(r.month_year))
+            planned_manpower.append(r.planned_manpower)
+            actual_manpower.append(r.actual_manpower)
+            planned_mh_cumulative.append(round(r.planned_mh_cumulative, 2))
+            actual_mh_cumulative.append(round(r.actual_mh_cumulative, 2))
+            if r.planned_manpower == 0:
+                manpower_efficiency.append(None)
+            else:
+                manpower_efficiency.append(round(r.actual_manpower / r.planned_manpower, 4))
+            actual_below_planned.append(r.actual_manpower < r.planned_manpower)
+
+        data = {
+            "months": months,
+            "planned_manpower": planned_manpower,
+            "actual_manpower": actual_manpower,
+            "planned_mh_cumulative": planned_mh_cumulative,
+            "actual_mh_cumulative": actual_mh_cumulative,
+            "manpower_efficiency": manpower_efficiency,
+            "actual_below_planned": actual_below_planned,
+        }
+
+        cache.set(cache_key, data, 300)  # 5 minutes
+        return Response(data)

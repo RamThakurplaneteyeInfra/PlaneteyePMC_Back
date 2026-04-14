@@ -360,3 +360,168 @@ See `SWAGGER_SETUP.md` for detailed setup instructions.
 ## Support
 
 For issues or questions, check the Django admin interface or review the API responses for detailed error messages.
+
+# Daily Progress Report (DPR) Module
+
+## Overview
+
+* Purpose of DPR system
+* Tracks daily project progress and activities
+* Supports multi-level approval workflow
+
+## Workflow
+
+* Draft → Pending Team Lead → Pending Coordinator → Pending PMC Head → Approved/Rejected
+* Each stage requires approval by respective role
+
+## Main Fields
+
+* project_name
+* job_no
+* report_date
+* issued_by, designation
+* status, current_approver_role
+* approval tracking fields
+
+## Activities
+
+* Each DPR can have multiple activities
+* Tracks:
+
+  * activity description
+  * deliverables
+  * target achieved %
+  * next day plan
+  * remarks
+
+## Approval System
+
+* submitted_by
+* approved_by
+* rejected_by
+* rejection_reason
+* approved_at timestamp
+
+## Performance Optimizations
+
+* Indexed fields for faster queries
+* Composite indexes for workflow filtering
+* DecimalField for accurate percentage tracking
+
+## Developer Notes
+
+* Workflow logic is critical — do NOT modify without impact analysis
+* Always use prefetch_related("activities") in views
+* Avoid modifying status manually
+
+## Best Practices
+
+* Ensure consistent project_name formatting
+* Avoid duplicate DPR entries
+* Use proper approval flow
+
+# Daily Progress Report (DPR) ViewSet
+
+## Overview
+
+* Handles DPR CRUD and approval workflow
+* Supports nested activities
+
+## Endpoints
+
+* GET /dpr/
+* POST /dpr/
+* GET /dpr/{id}/
+* PUT /dpr/{id}/
+* DELETE /dpr/{id}/
+* GET /dpr/{id}/activities/
+* POST /dpr/{id}/submit/
+* POST /dpr/{id}/approve_team_lead/
+* POST /dpr/{id}/approve_coordinator/
+* POST /dpr/{id}/approve_pmc_head/
+* POST /dpr/{id}/reject/
+* GET /dpr/pending_approval/
+* GET /dpr/rejected/
+
+## Filtering Options
+
+* project_name (case-insensitive)
+* date
+* date_from
+* date_to
+
+## Workflow Logic
+
+* Draft → Pending Team Lead → Pending Coordinator → Pending PMC Head → Approved
+* Rejection sends DPR back to lower roles
+
+## Activities Handling
+
+* Nested activities supported
+* Activities fetched via dedicated endpoint
+
+## Performance Optimizations
+
+* select_related and prefetch_related for query optimization
+* Cached responses for heavy endpoints
+* Optimized filtering logic
+* Reduced database queries
+
+## Developer Notes
+
+* Do NOT modify workflow logic without impact analysis
+* Always use optimized queryset in views
+* Ensure caching is properly invalidated
+
+## Best Practices
+
+* Always pass role when required
+* Use filtering for efficient queries
+* Avoid unnecessary API calls
+
+# Daily Progress Report Serializer
+
+## Overview
+
+* Handles DPR creation, update, and nested activity management
+* Ensures validation and workflow integrity
+
+## Nested Activities
+
+* Supports multiple activities per DPR
+* Activities are:
+
+  * created in bulk during DPR creation
+  * replaced entirely during update
+
+## Validation Rules
+
+* Activity must have:
+
+  * date
+  * activity description
+* target_achieved must be between 0 and 100
+
+## Workflow Fields
+
+* status is read-only
+* submitted_by, approved_by, rejected_by managed internally
+* current_approver_role controlled by workflow
+
+## Performance Optimizations
+
+* Bulk creation of activities
+* Transaction handling for data consistency
+* Reduced database queries
+
+## Developer Notes
+
+* Do NOT modify nested activity logic
+* Do NOT bypass transaction handling
+* Ensure validation remains consistent
+
+## Best Practices
+
+* Always validate nested activity data
+* Avoid partial updates of activities
+* Use bulk operations for performance

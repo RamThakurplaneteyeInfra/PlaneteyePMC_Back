@@ -147,7 +147,20 @@ class ProjectProgressStatusViewSet(viewsets.ModelViewSet):
             openapi.Parameter('month', openapi.IN_QUERY, description="Filter by specific month (YYYY-MM-01)", type=openapi.TYPE_STRING, format=openapi.FORMAT_DATE),
             openapi.Parameter('start_month', openapi.IN_QUERY, description="Filter from this month onwards (YYYY-MM-01)", type=openapi.TYPE_STRING, format=openapi.FORMAT_DATE),
             openapi.Parameter('end_month', openapi.IN_QUERY, description="Filter up to this month (YYYY-MM-01)", type=openapi.TYPE_STRING, format=openapi.FORMAT_DATE),
-            openapi.Parameter('role', openapi.IN_QUERY, description="User role (required: 'Billing Site Engineer')", type=openapi.TYPE_STRING),
+            openapi.Parameter(
+                'role',
+                openapi.IN_QUERY,
+                description="User role: Billing Site Engineer | PMC Head",
+                type=openapi.TYPE_STRING,
+                required=False
+            ),
+            openapi.Parameter(
+                'X-Role',
+                openapi.IN_HEADER,
+                description="User role header: Billing Site Engineer | PMC Head",
+                type=openapi.TYPE_STRING,
+                required=False
+            ),
         ],
         responses={200: ProjectProgressStatusSerializer(many=True), 403: "Forbidden"}
     )
@@ -182,6 +195,22 @@ class ProjectProgressStatusViewSet(viewsets.ModelViewSet):
     
     @swagger_auto_schema(
         operation_description="Retrieve a single Project Progress Status record by ID.",
+        manual_parameters=[
+            openapi.Parameter(
+                'role',
+                openapi.IN_QUERY,
+                description="User role: Billing Site Engineer | PMC Head",
+                type=openapi.TYPE_STRING,
+                required=False
+            ),
+            openapi.Parameter(
+                'X-Role',
+                openapi.IN_HEADER,
+                description="User role header: Billing Site Engineer | PMC Head",
+                type=openapi.TYPE_STRING,
+                required=False
+            ),
+        ],
         responses={200: ProjectProgressStatusSerializer, 403: "Forbidden", 404: "Not Found"}
     )
     def retrieve(self, request, *args, **kwargs):

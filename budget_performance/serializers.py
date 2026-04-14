@@ -10,6 +10,9 @@ Calculations (EVM):
 
 Input accepts only project_name, budget_at_completion, earned_value, actual_cost.
 Calculated fields are never taken from the client.
+
+Internally uses ForeignKey to Project model for data integrity,
+but API maintains backward compatibility.
 """
 
 from decimal import Decimal, ROUND_HALF_UP
@@ -17,6 +20,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from rest_framework import serializers
 
 from .models import BudgetCostPerformance
+from projects.models import Project
 
 
 def _to_decimal(value) -> Decimal:
@@ -46,16 +50,22 @@ class BudgetCostPerformanceInputSerializer(serializers.Serializer):
         trim_whitespace=True,
         help_text="Project name",
     )
-    budget_at_completion = serializers.FloatField(
+    budget_at_completion = serializers.DecimalField(
+        max_digits=24,
+        decimal_places=4,
         required=False,
         help_text="Budget at completion (BAC). Alias: bac",
     )
-    earned_value = serializers.FloatField(
+    earned_value = serializers.DecimalField(
+        max_digits=24,
+        decimal_places=4,
         required=False,
         min_value=0,
         help_text="Earned value (BCWP). Alias: bcwp",
     )
-    actual_cost = serializers.FloatField(
+    actual_cost = serializers.DecimalField(
+        max_digits=24,
+        decimal_places=4,
         required=False,
         help_text="Actual cost (ACWP). Alias: acwp",
     )
@@ -86,26 +96,25 @@ class BudgetCostPerformanceInputSerializer(serializers.Serializer):
     def validate_project_name(self, value: str) -> str:
         if not value or not value.strip():
             raise serializers.ValidationError("project_name cannot be empty.")
-        return value.strip()
+        # Normalize project name: strip whitespace and title case for consistency
+        return value.strip().title()
 
-    def validate_budget_at_completion(self, value: float) -> float:
-        bac = _to_decimal(value)
-        if bac <= 0:
+    def validate_budget_at_completion(self, value: Decimal) -> Decimal:
+        if value <= 0:
             raise serializers.ValidationError(
                 "budget_at_completion (BAC) must be greater than 0."
             )
-        return float(bac)
+        return value
 
-    def validate_actual_cost(self, value: float) -> float:
-        acwp = _to_decimal(value)
-        if acwp <= 0:
+    def validate_actual_cost(self, value: Decimal) -> Decimal:
+        if value <= 0:
             raise serializers.ValidationError(
                 "actual_cost (ACWP) must be greater than 0 (avoids division by zero for CPI)."
             )
-        return float(acwp)
+        return value
 
-    def validate_earned_value(self, value: float) -> float:
-        return float(_to_decimal(value))
+    def validate_earned_value(self, value: Decimal) -> Decimal:
+        return value
 
     def validate(self, attrs):
         missing = [
@@ -123,7 +132,7 @@ class BudgetCostPerformanceInputSerializer(serializers.Serializer):
                     **{f: "This field is required." for f in missing},
                 }
             )
-        bcwp = _to_decimal(attrs["earned_value"])
+        bcwp = attrs["earned_value"]
         if bcwp == 0:
             raise serializers.ValidationError(
                 {
@@ -136,11 +145,19 @@ class BudgetCostPerformanceInputSerializer(serializers.Serializer):
         return attrs
 
     def create(self, validated_data):
-        bac = Decimal(str(validated_data["budget_at_completion"]))
-        bcwp = Decimal(str(validated_data["earned_value"]))
-        acwp = Decimal(str(validated_data["actual_cost"]))
-        name = validated_data["project_name"]
+        # Get or create project using normalized name
+        project_name = validated_data["project_name"]
+        project, created = Project.objects.get_or_create(
+            name=project_name,
+            defaults={'budget': Decimal('0.00')}
+        )
 
+        # All values are already Decimal from validation
+        bac = validated_data["budget_at_completion"]
+        bcwp = validated_data["earned_value"]
+        acwp = validated_data["actual_cost"]
+
+        # Perform calculations in Decimal for precision
         # CPI = BCWP / ACWP (ACWP > 0 and BCWP > 0 already enforced)
         cpi = (bcwp / acwp).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
         # EAC = BAC / CPI
@@ -153,7 +170,8 @@ class BudgetCostPerformanceInputSerializer(serializers.Serializer):
         cv = (bcwp - acwp).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
 
         return BudgetCostPerformance.objects.create(
-            project_name=name,
+            project_name=project_name,  # Keep for backward compatibility during transition
+            project=project,  # New ForeignKey field
             bac=bac,
             bcwp=bcwp,
             acwp=acwp,
@@ -171,6 +189,7 @@ class BudgetCostPerformanceInputSerializer(serializers.Serializer):
 class BudgetCostPerformanceSerializer(serializers.ModelSerializer):
     """
     Dashboard/API response: matches required JSON keys (bac, bcwp, acwp, …).
+    Returns project_name from ForeignKey for backward compatibility.
     """
 
     class Meta:
@@ -192,9 +211,10 @@ class BudgetCostPerformanceSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        # Return numeric types suitable for JSON dashboards (not decimal strings)
+        # Return numeric types suitable for JSON dashboards
+        # Convert Decimal to float only for final output
         out = {
-            "project_name": data["project_name"],
+            "project_name": data["project_name"],  # This comes from the CharField, not the ForeignKey
             "bac": float(data["bac"]),
             "bcwp": float(data["bcwp"]),
             "acwp": float(data["acwp"]),

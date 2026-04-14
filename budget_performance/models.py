@@ -6,6 +6,8 @@ Inputs map to: BAC (budget at completion), BCWP (earned value), ACWP (actual cos
 
 from django.db import models
 
+from projects.models import Project
+
 
 class BudgetCostPerformance(models.Model):
     """
@@ -16,7 +18,14 @@ class BudgetCostPerformance(models.Model):
     - ACWP: Actual Cost of Work Performed
     """
 
-    project_name = models.CharField(max_length=255, db_index=True)
+    project_name = models.CharField(max_length=255, db_index=True)  # Keep for transition
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='budget_performances'
+    )
 
     bac = models.DecimalField(
         max_digits=24,

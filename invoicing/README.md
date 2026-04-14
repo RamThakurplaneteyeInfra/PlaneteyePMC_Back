@@ -266,3 +266,138 @@ The Invoicing Information model is registered in Django Admin. You can:
 - Edit records (with automatic `net_due` calculation)
 
 Access at: `https://fv5k8l3m-8000.inc1.devtunnels.ms/admin/invoicing/invoicinginformation/`
+
+# Invoicing Information Module
+
+## Overview
+
+* Tracks billing and collection data per project
+* Supports financial monitoring and reporting
+
+## Key Fields
+
+* project_name
+* gross_billed
+* net_billed_without_vat
+* net_collected
+* net_due (calculated)
+
+## Calculation Logic
+
+* net_due = net_billed_without_vat - net_collected
+* Automatically calculated in save()
+
+## Data Integrity
+
+* All monetary fields use DecimalField for precision
+* Values must be non-negative
+
+## Performance Optimizations
+
+* Indexed fields for faster queries
+* Optimized save() method
+* Efficient filtering by project and date
+
+## Tracking Fields
+
+* created_by
+* updated_by
+* created_at
+* updated_at
+
+## Developer Notes
+
+* Do NOT modify net_due calculation logic
+* Always rely on save() for derived field updates
+* Maintain Decimal precision
+
+## Best Practices
+
+* Ensure consistent project_name formatting
+* Avoid manual modification of net_due
+* Use filters for efficient queries
+
+# Invoicing Serializer
+
+## Overview
+
+* Handles validation and serialization of invoicing data
+* Ensures data integrity for financial records
+
+## Key Features
+
+* Decimal-based financial validation
+* Automatic net_due calculation (read-only)
+* Logical constraint enforcement
+
+## Validation Rules
+
+* All monetary fields must be ≥ 0
+* net_collected ≤ net_billed_without_vat
+
+## Update Handling
+
+* Automatically sets updated_by if provided in request
+* Maintains audit trail
+
+## Performance Optimizations
+
+* Decimal precision for manhours
+* Efficient validation logic
+* Structured serializers
+
+## Developer Notes
+
+* Do NOT modify validation logic without impact analysis
+* net_due is always calculated in model, not serializer
+* Ensure Decimal precision is maintained
+
+## Best Practices
+
+* Always pass valid financial values
+* Avoid manual manipulation of net_due
+* Maintain consistent project_name formatting
+
+# Invoicing ViewSet
+
+## Overview
+
+* Handles invoicing CRUD operations
+* Implements role-based access control
+
+## Endpoints
+
+* POST /invoicing/
+* GET /invoicing/
+* GET /invoicing/{id}/
+* PUT /invoicing/{id}/
+* PATCH /invoicing/{id}/
+* DELETE /invoicing/{id}/
+
+## Role Access
+
+* Billing Site Engineer → full access
+* PMC Head, CEO, Coordinator → read-only
+
+## Filtering
+
+* project_name (partial match)
+* date (YYYY-MM-DD)
+
+## Performance Optimizations
+
+* Reduced database payload
+* Cached API responses
+* Optimized role handling
+
+## Developer Notes
+
+* Do NOT modify role logic
+* Ensure cache invalidation after changes
+* Maintain response structure
+
+## Best Practices
+
+* Use filters to limit data
+* Avoid unnecessary API calls
+* Maintain consistent role values

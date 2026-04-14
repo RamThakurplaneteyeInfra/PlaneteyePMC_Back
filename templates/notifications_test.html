@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Real-time Notifications Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .notification {
+            background: #f0f8ff;
+            border: 1px solid #add8e6;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 10px 0;
+            animation: slideIn 0.5s ease-in;
+        }
+        .notification.error {
+            background: #ffe6e6;
+            border-color: #ff9999;
+        }
+        .notification.success {
+            background: #e6ffe6;
+            border-color: #99ff99;
+        }
+        .notification.warning {
+            background: #fff8e6;
+            border-color: #ffdd99;
+        }
+        @keyframes slideIn {
+            from { transform: translateX(-100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        .status.connected {
+            background: #e6ffe6;
+            border: 1px solid #99ff99;
+        }
+        .status.disconnected {
+            background: #ffe6e6;
+            border: 1px solid #ff9999;
+        }
+    </style>
+</head>
+<body>
+    <h1>Real-time Notifications Test</h1>
+
+    <div id="status" class="status disconnected">
+        WebSocket: Disconnected
+    </div>
+
+    <div id="notifications"></div>
+
+    <script>
+        const wsScheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+        const wsUrl = `${wsScheme}://${window.location.host}/ws/notifications/`;
+        let socket = null;
+
+        function connectWebSocket() {
+            socket = new WebSocket(wsUrl);
+
+            socket.onopen = function(e) {
+                console.log('WebSocket connected');
+                document.getElementById('status').className = 'status connected';
+                document.getElementById('status').textContent = 'WebSocket: Connected';
+            };
+
+            socket.onmessage = function(e) {
+                const data = JSON.parse(e.data);
+                console.log('Received notification:', data);
+
+                const notification = JSON.parse(data.message);
+                displayNotification(notification);
+            };
+
+            socket.onclose = function(e) {
+                console.log('WebSocket disconnected');
+                document.getElementById('status').className = 'status disconnected';
+                document.getElementById('status').textContent = 'WebSocket: Disconnected - Reconnecting...';
+
+                // Reconnect after 3 seconds
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            socket.onerror = function(e) {
+                console.error('WebSocket error:', e);
+            };
+        }
+
+        function displayNotification(notification) {
+            // Show browser notification
+            showBrowserNotification(notification);
+
+            const notificationsDiv = document.getElementById('notifications');
+
+            const notificationDiv = document.createElement('div');
+            notificationDiv.className = `notification ${getNotificationClass(notification.type)}`;
+
+            const timestamp = new Date(notification.timestamp).toLocaleString();
+
+            notificationDiv.innerHTML = `
+                <h3>${notification.title}</h3>
+                <p>${notification.message}</p>
+                <small>Received: ${timestamp}</small>
+                ${notification.data ? `<pre>Data: ${JSON.stringify(notification.data, null, 2)}</pre>` : ''}
+            `;
+
+            notificationsDiv.insertBefore(notificationDiv, notificationsDiv.firstChild);
+
+            // Auto-remove after 30 seconds
+            setTimeout(() => {
+                notificationDiv.remove();
+            }, 30000);
+        }
+
+        function showBrowserNotification(notification) {
+            console.log('Attempting to show browser notification:', notification);
+            if ('Notification' in window && Notification.permission === 'granted') {
+                console.log('Creating notification...');
+                const browserNotification = new Notification(notification.title, {
+                    body: notification.message,
+                    // icon: '/static/favicon.ico', // Removed due to 404
+                    tag: 'notification-' + Date.now(), // Unique tag to prevent duplicates
+                });
+
+                // Auto-close after 5 seconds
+                setTimeout(() => {
+                    browserNotification.close();
+                }, 5000);
+
+                // Click to focus window
+                browserNotification.onclick = function() {
+                    window.focus();
+                    browserNotification.close();
+                };
+                console.log('Browser notification created');
+            } else {
+                console.log('Notification not granted or not supported');
+            }
+        }
+
+        function getNotificationClass(type) {
+            const classes = {
+                'project_created': 'success',
+                'project_assigned': 'warning',
+                'dpr_submitted': 'warning',
+                'dpr_approved': 'success',
+                'dpr_rejected': 'error'
+            };
+            return classes[type] || 'warning';
+        }
+
+        // Request notification permission on page load
+        if ('Notification' in window) {
+            if (Notification.permission === 'default') {
+                Notification.requestPermission().then(permission => {
+                    console.log('Notification permission:', permission);
+                });
+            } else {
+                console.log('Notification permission:', Notification.permission);
+            }
+        } else {
+            console.log('Notifications not supported');
+        }
+
+        // Connect on page load
+        connectWebSocket();
+
+        // Add some test buttons (you can remove these in production)
+        document.addEventListener('DOMContentLoaded', function() {
+            const testButtons = document.createElement('div');
+            testButtons.innerHTML = `
+                <h3>Test Buttons (Development Only)</h3>
+                <button onclick="testNotification('project_created')">Test Project Created</button>
+                <button onclick="testNotification('project_assigned')">Test Project Assigned</button>
+                <button onclick="testNotification('dpr_submitted')">Test DPR Submitted</button>
+                <button onclick="testNotification('dpr_approved')">Test DPR Approved</button>
+                <button onclick="testNotification('dpr_rejected')">Test DPR Rejected</button>
+            `;
+            document.body.appendChild(testButtons);
+        });
+
+        function testNotification(type) {
+            console.log('Sending test notification...');
+            // Send request to backend to trigger WebSocket notification
+            fetch('/notifications/send-test/')
+                .then(response => {
+                    console.log('Response status:', response.status);
+                    return response.json();
+                })
+                .then(data => console.log('Test notification sent:', data))
+                .catch(error => console.error('Error sending test notification:', error));
+        }
+    </script>
+</body>
+</html>

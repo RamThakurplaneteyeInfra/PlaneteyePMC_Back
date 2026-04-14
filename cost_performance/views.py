@@ -2,10 +2,14 @@
 Cost performance EVM API: monthly BCWS/BCWP/ACWP/FCST → EAC, CV, SV (+ CPI, VAC).
 """
 
+import hashlib
+
+from django.core.cache import cache
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
@@ -72,12 +76,15 @@ class ProjectCostPerformanceViewSet(viewsets.ModelViewSet):
     serializer_class = ProjectCostPerformanceSerializer
     permission_classes = [AllowAny]
     http_method_names = ["get", "post", "head", "options"]
+    pagination_class = PageNumberPagination
 
     def get_queryset(self):
-        qs = ProjectCostPerformance.objects.all()
+        qs = ProjectCostPerformance.objects.select_related("project").only(
+            "id", "project__name", "month_year", "bcws", "bcwp", "acwp", "fcst", "eac", "cv", "sv", "cpi", "vac"
+        )
         pn = self.request.query_params.get("project_name")
         if pn:
-            qs = qs.filter(project_name__icontains=pn.strip())
+            qs = qs.filter(project__name__icontains=pn.strip())
         return qs
 
     @swagger_auto_schema(
@@ -96,6 +103,13 @@ class ProjectCostPerformanceViewSet(viewsets.ModelViewSet):
         ser = ProjectCostPerformanceInputSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         instance = ser.save()
+
+        # Cache invalidation
+        pn = instance.project.name
+        cache.delete(f"cost_performance_list:all")
+        cache.delete(f"cost_performance_list:{pn}")
+        cache.delete(f"cost_performance_dashboard:{pn}")
+
         return Response(
             ProjectCostPerformanceSerializer(instance).data,
             status=status.HTTP_201_CREATED,
@@ -116,11 +130,23 @@ class ProjectCostPerformanceViewSet(viewsets.ModelViewSet):
         responses={200: ProjectCostPerformanceSerializer(many=True)},
     )
     def list(self, request, *args, **kwargs):
-        rows = list(self.get_queryset())
-        rows.sort(
-            key=lambda r: (r.project_name.lower(), month_year_sort_key(r.month_year))
-        )
-        return Response(ProjectCostPerformanceSerializer(rows, many=True).data)
+        pn = self.request.query_params.get("project_name")
+        cache_key = f"cost_performance_list:{pn}" if pn else "cost_performance_list:all"
+        data = cache.get(cache_key)
+        if data is not None:
+            return Response(data)
+
+        qs = self.get_queryset().order_by("project__name", "month_year")
+        page = self.paginate_queryset(qs)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            data = self.get_paginated_response(serializer.data).data
+        else:
+            serializer = self.get_serializer(qs, many=True)
+            data = serializer.data
+
+        cache.set(cache_key, data, 300)  # 5 minutes
+        return Response(data)
 
     @swagger_auto_schema(auto_schema=None)
     def retrieve(self, request, *args, **kwargs):
@@ -176,8 +202,15 @@ class ProjectCostPerformanceViewSet(viewsets.ModelViewSet):
                 {"detail": "Query parameter project_name is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        rows = list(ProjectCostPerformance.objects.filter(project_name__icontains=pn))
-        rows.sort(key=lambda r: month_year_sort_key(r.month_year))
+
+        cache_key = f"cost_performance_dashboard:{pn}"
+        data = cache.get(cache_key)
+        if data is not None:
+            return Response(data)
+
+        rows = ProjectCostPerformance.objects.filter(project__name__icontains=pn).only(
+            "month_year", "bcws", "bcwp", "acwp", "fcst", "eac", "cv", "sv", "cpi", "vac"
+        ).order_by("month_year")
 
         def r4(x):
             return round(float(x), 4) if x is not None else None
@@ -196,6 +229,8 @@ class ProjectCostPerformanceViewSet(viewsets.ModelViewSet):
             "over_budget_cost": [r.cv < 0 for r in rows],
             "behind_schedule": [r.sv < 0 for r in rows],
         }
+
+        cache.set(cache_key, data, 300)  # 5 minutes
         return Response(data)
 
     # ========================================
@@ -241,11 +276,11 @@ class ProjectCostPerformanceViewSet(viewsets.ModelViewSet):
     def evm_dashboard(self, request):
         """
         Compute EVM dashboard metrics from monthly data.
-        
+
         Accepts:
         - BAC (Budget at Completion)
         - Monthly data with BCWS, percentComplete/BCWP, AC
-        
+
         Returns:
         - Summary (BCWP, AC, CV, CPI, Status, EAC, ETC)
         - Monthly data (all computed metrics per month)
@@ -253,6 +288,13 @@ class ProjectCostPerformanceViewSet(viewsets.ModelViewSet):
         """
         ser = EVMDashboardInputSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
+
+        # Generate cache key from request data
+        request_hash = hashlib.md5(str(request.data).encode()).hexdigest()
+        cache_key = f"cost_performance_evm_dashboard:{request_hash}"
+        data = cache.get(cache_key)
+        if data is not None:
+            return Response(data)
         
         project_name = ser.validated_data['project_name']
         bac = float(ser.validated_data['bac'])
@@ -419,5 +461,6 @@ class ProjectCostPerformanceViewSet(viewsets.ModelViewSet):
             'monthly': processed_monthly,
             'cumulative': cumulative_data,
         }
-        
+
+        cache.set(cache_key, response_data, 300)  # 5 minutes
         return Response(response_data)

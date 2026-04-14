@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import User
+from django.conf import settings
 
 
 class UserProfile(models.Model):
@@ -76,3 +77,38 @@ class UserProfile(models.Model):
         if role:
             return role
         return "No Role Assigned"
+
+
+class Notification(models.Model):
+    """
+    Model for logging sent notifications/emails
+    """
+    NOTIFICATION_TYPES = [
+        ('project_assigned', 'Project Assigned'),
+        ('dpr_submitted', 'DPR Submitted'),
+        ('dpr_approved', 'DPR Approved'),
+        ('dpr_rejected', 'DPR Rejected'),
+    ]
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='notifications',
+        help_text="User who received the notification"
+    )
+    message = models.TextField(help_text="Notification message content")
+    notification_type = models.CharField(
+        max_length=20,
+        choices=NOTIFICATION_TYPES,
+        help_text="Type of notification"
+    )
+    is_read = models.BooleanField(default=False, help_text="Whether the user has read the notification")
+    created_at = models.DateTimeField(auto_now_add=True, help_text="When the notification was created")
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Notification"
+        verbose_name_plural = "Notifications"
+
+    def __str__(self):
+        return f"{self.notification_type} - {self.user.username} - {self.created_at}"

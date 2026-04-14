@@ -1,8 +1,11 @@
+from django.core.cache import cache
 from django.utils.dateparse import parse_date
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import cache_page
 """
     The above code defines a Django REST framework viewset for managing Contract Performance records
     with various endpoints and permission checks based on user roles.
-    
+
     :param request: The `request` parameter in the context of Django REST framework represents the HTTP
     request that is received by the view. It contains information about the request, such as headers,
     query parameters, data, user authentication, and more. The request object provides access to details
@@ -14,6 +17,7 @@ from django.utils.dateparse import parse_date
 """
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
@@ -24,14 +28,49 @@ from .models import ContractPerformance
 from .serializers import ContractPerformanceSerializer
 
 
+class ContractPerformancePagination(PageNumberPagination):
+    """Pagination for contract performance records."""
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
+# Role normalization mapping for case-insensitive input
+ROLE_NORMALIZATION_MAP = {
+    "billing site engineer": "Billing Site Engineer",
+    "pmc head": "PMC Head",
+    "ceo": "CEO",
+    "coordinator": "Coordinator",
+}
+
+
+def _normalize_role_input(role_input: str) -> str | None:
+    """
+    Normalize role input to canonical role values.
+    - Strip whitespace
+    - Convert to lowercase for matching
+    - Map to correct canonical role name
+    """
+    if not role_input:
+        return None
+
+    # Strip whitespace and convert to lowercase for matching
+    normalized_input = role_input.strip().lower()
+
+    # Map to canonical role name
+    return ROLE_NORMALIZATION_MAP.get(normalized_input)
+
+
 def _get_role_from_request(request) -> str | None:
     """
-    Simple role extraction (temporary).
+    Simple role extraction with case-insensitive normalization (temporary).
     Requirement says: use request.data['role'] for now.
 
-    We also support:
-    - query param: ?role=Billing Site Engineer (helps for GET)
-    - header: X-Role: Billing Site Engineer
+    We support:
+    - query param: ?role=billing site engineer (helps for GET) - case-insensitive
+    - header: X-Role: billing site engineer - case-insensitive (backend support only)
+
+    Role input is normalized to canonical values before validation.
     """
     role = None
     try:
@@ -40,13 +79,15 @@ def _get_role_from_request(request) -> str | None:
         role = None
     if not role:
         role = request.query_params.get("role") or request.headers.get("X-Role")
-    return role
+
+    # Normalize role input to canonical values
+    return _normalize_role_input(role)
 
 
 class ContractPerformanceViewSet(viewsets.ModelViewSet):
     """
     Contract Performance endpoints.
-    
+
     Endpoints:
     - POST   /api/contract-performance/                 -> Billing Site Engineer creates
     - GET    /api/contract-performance/                 -> Billing Site Engineer, PMC Head, CEO, or Coordinator views all
@@ -55,11 +96,41 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
     - PATCH  /api/contract-performance/{id}/            -> Billing Site Engineer updates (partial)
     - DELETE /api/contract-performance/{id}/            -> Billing Site Engineer deletes
     """
-    
+
     queryset = ContractPerformance.objects.all()
     serializer_class = ContractPerformanceSerializer
-    # Using role from request (temporary). Do not require auth for now.
     permission_classes = [AllowAny]
+    pagination_class = ContractPerformancePagination
+
+    def initial(self, request, *args, **kwargs):
+        """
+        Initialize the viewset and cache the role for this request.
+        """
+        super().initial(request, *args, **kwargs)
+        # Cache role once per request to avoid multiple extractions
+        self._cached_role = _get_role_from_request(request)
+
+    def _get_role_from_cache(self) -> str | None:
+        """Get the cached role for this request."""
+        return getattr(self, '_cached_role', None)
+
+    def _get_cache_key(self, request):
+        """Generate cache key based on query parameters."""
+        params = []
+        project_name = request.query_params.get("project_name", "").strip()
+        if project_name:
+            params.append(f"project:{project_name}")
+
+        date_str = request.query_params.get("date", "").strip()
+        if date_str:
+            params.append(f"date:{date_str}")
+
+        status = request.query_params.get("performance_status", "").strip()
+        if status:
+            params.append(f"status:{status}")
+
+        param_str = "|".join(params) if params else "all"
+        return f"contract_performance_list:{param_str}"
     
     # ---- Swagger schemas (fix DecimalField showing as string in Swagger UI) ----
     _performance_create_schema = openapi.Schema(
@@ -89,35 +160,45 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         """
-        Filtering:
-        - project_name: partial match (case-insensitive)
-        - date: filter by created_at date (YYYY-MM-DD)
-        - performance_status: filter by status (red, yellow, green)
+        Optimized queryset with action-specific logic and field selection.
         """
-        qs = ContractPerformance.objects.all()
-        
-        project_name = self.request.query_params.get("project_name")
-        if project_name:
-            qs = qs.filter(project_name__icontains=project_name)
-        
-        date_str = self.request.query_params.get("date")
-        if date_str:
-            d = parse_date(date_str)
-            if d:
-                qs = qs.filter(created_at__date=d)
-        
-        performance_status = self.request.query_params.get("performance_status")
-        if performance_status:
-            qs = qs.filter(performance_status=performance_status)
-        
-        return qs.order_by("-created_at")
+        # Use .only() to fetch only required fields for performance
+        qs = ContractPerformance.objects.only(
+            'id', 'project_name', 'contract_value', 'earned_value',
+            'earned_value_percentage', 'actual_billed', 'actual_billed_percentage',
+            'variance', 'variance_percentage', 'performance_status',
+            'created_by', 'updated_by', 'created_at', 'updated_at'
+        )
+
+        # Apply different logic based on action
+        if self.action == 'list':
+            # For list view: apply filtering with normalized inputs
+            project_name = self.request.query_params.get("project_name")
+            if project_name:
+                # Normalize input by stripping whitespace
+                qs = qs.filter(project_name__icontains=project_name.strip())
+
+            date_str = self.request.query_params.get("date")
+            if date_str:
+                d = parse_date(date_str.strip())
+                if d:
+                    qs = qs.filter(created_at__date=d)
+
+            performance_status = self.request.query_params.get("performance_status")
+            if performance_status:
+                qs = qs.filter(performance_status=performance_status.strip())
+
+            return qs.order_by("-created_at")
+        else:
+            # For retrieve/detail view: return full queryset without filtering
+            return qs
     
     def _check_billing_engineer_permission(self, request, action_name="perform this action"):
         """
-        Check if user has Billing Site Engineer role.
+        Check if user has Billing Site Engineer role using cached role.
         Returns (is_allowed, error_response) tuple.
         """
-        role = _get_role_from_request(request)
+        role = self._get_role_from_cache()
         if role != "Billing Site Engineer":
             return False, Response(
                 {"detail": f"Only Billing Site Engineer can {action_name} (role='Billing Site Engineer')."},
@@ -126,8 +207,8 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
         return True, None
 
     def _check_view_contract_performance_permission(self, request):
-        """List/retrieve: Billing Site Engineer, PMC Head, CEO, or Coordinator."""
-        role = _get_role_from_request(request)
+        """List/retrieve: Billing Site Engineer, PMC Head, CEO, or Coordinator using cached role."""
+        role = self._get_role_from_cache()
         if role in ("Billing Site Engineer", "PMC Head", "CEO", "Coordinator"):
             return True, None
         return False, Response(
@@ -144,17 +225,21 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
             openapi.Parameter('project_name', openapi.IN_QUERY, description="Filter by project name (case-insensitive partial match)", type=openapi.TYPE_STRING),
             openapi.Parameter('date', openapi.IN_QUERY, description="Filter by created date (YYYY-MM-DD)", type=openapi.TYPE_STRING, format=openapi.FORMAT_DATE),
             openapi.Parameter('performance_status', openapi.IN_QUERY, description="Filter by performance status (red, yellow, green)", type=openapi.TYPE_STRING),
+            openapi.Parameter('page', openapi.IN_QUERY, description='Page number for pagination', type=openapi.TYPE_INTEGER, required=False),
+            openapi.Parameter('page_size', openapi.IN_QUERY, description='Number of records per page (max 100)', type=openapi.TYPE_INTEGER, required=False),
             openapi.Parameter(
                 'role',
                 openapi.IN_QUERY,
-                description="User role: Billing Site Engineer | PMC Head | CEO | Coordinator",
+                description="User role: billing site engineer | pmc head | ceo | coordinator (case-insensitive)",
                 type=openapi.TYPE_STRING,
+                required=False
             ),
         ],
         responses={200: ContractPerformanceSerializer(many=True), 403: "Forbidden"}
     )
+    @method_decorator(cache_page(300))  # 5 minutes cache
     def list(self, request, *args, **kwargs):
-        """List contract performance (Billing Site Engineer, PMC Head, CEO, or Coordinator)."""
+        """List contract performance with caching (Billing Site Engineer, PMC Head, CEO, or Coordinator)."""
         is_allowed, error_response = self._check_view_contract_performance_permission(request)
         if not is_allowed:
             return error_response
@@ -171,10 +256,14 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
         is_allowed, error_response = self._check_billing_engineer_permission(request, "create contract performance")
         if not is_allowed:
             return error_response
-        
+
         serializer = self.get_serializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         performance = serializer.save()
+
+        # Cache invalidation: clear relevant cache keys after creation
+        cache.delete_pattern("contract_performance_list:*")
+
         headers = self.get_success_headers(serializer.data)
         return Response(
             self.get_serializer(performance).data,
@@ -184,6 +273,15 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
     
     @swagger_auto_schema(
         operation_description="Retrieve a single Contract Performance record by ID.",
+        manual_parameters=[
+            openapi.Parameter(
+                'role',
+                openapi.IN_QUERY,
+                description="User role: billing site engineer | pmc head | ceo | coordinator (case-insensitive)",
+                type=openapi.TYPE_STRING,
+                required=False
+            ),
+        ],
         responses={200: ContractPerformanceSerializer, 403: "Forbidden", 404: "Not Found"}
     )
     def retrieve(self, request, *args, **kwargs):
@@ -204,14 +302,18 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
         is_allowed, error_response = self._check_billing_engineer_permission(request, "update contract performance")
         if not is_allowed:
             return error_response
-        
+
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
         serializer = self.get_serializer(instance, data=request.data, partial=partial, context={'request': request})
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
+
+        # Cache invalidation: clear relevant cache keys after update
+        cache.delete_pattern("contract_performance_list:*")
+
         return Response(serializer.data)
-    
+
     @swagger_auto_schema(
         operation_description="Partially update a Contract Performance record. All calculated fields are auto-updated.",
         request_body=_performance_update_schema,
@@ -222,10 +324,11 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
         is_allowed, error_response = self._check_billing_engineer_permission(request, "update contract performance")
         if not is_allowed:
             return error_response
-        
+
         kwargs['partial'] = True
-        return self.update(request, *args, **kwargs)
-    
+        result = self.update(request, *args, **kwargs)
+        return result
+
     @swagger_auto_schema(
         operation_description="Delete a Contract Performance record.",
         responses={204: "No Content", 403: "Forbidden", 404: "Not Found"}
@@ -235,5 +338,10 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
         is_allowed, error_response = self._check_billing_engineer_permission(request, "delete contract performance")
         if not is_allowed:
             return error_response
-        
-        return super().destroy(request, *args, **kwargs)
+
+        result = super().destroy(request, *args, **kwargs)
+
+        # Cache invalidation: clear relevant cache keys after deletion
+        cache.delete_pattern("contract_performance_list:*")
+
+        return result

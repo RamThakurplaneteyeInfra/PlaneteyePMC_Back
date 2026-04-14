@@ -1,25 +1,38 @@
 # Health & Safety Serializers
+from decimal import Decimal
 from rest_framework import serializers
 from .models import HealthSafetyReport
+
+# Constants for incident types
+INCIDENT_KEYS = ['fatalities', 'significant', 'major', 'minor', 'near_miss']
 
 
 class HealthSafetyInputSerializer(serializers.Serializer):
     """
     Serializer for input data - accepts JSON as per requirements
     """
-    totalManhours = serializers.FloatField(min_value=0, required=True)
+    totalManhours = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=Decimal('0'), required=True)
     incidents = serializers.DictField(
         child=serializers.IntegerField(min_value=0),
         required=True
     )
+
+    def validate_incidents(self, value):
+        """
+        Validate that all required incident keys are present
+        """
+        missing_keys = set(INCIDENT_KEYS) - set(value.keys())
+        if missing_keys:
+            raise serializers.ValidationError(f"Missing required incident keys: {', '.join(missing_keys)}")
+        return value
 
 
 class HealthSafetyReportSerializer(serializers.ModelSerializer):
     """
     Serializer for Health & Safety Report model
     """
-    totalIncidents = serializers.ReadOnlyField()
-    
+    totalIncidents = serializers.IntegerField(source='total_incidents', read_only=True)
+
     class Meta:
         model = HealthSafetyReport
         fields = [
@@ -33,7 +46,7 @@ class HealthSafetyReportSerializer(serializers.ModelSerializer):
 class IncidentBreakdownSerializer(serializers.Serializer):
     """Serializer for incident breakdown with counts and percentages"""
     count = serializers.IntegerField()
-    percentage = serializers.FloatField()
+    percentage = serializers.DecimalField(max_digits=5, decimal_places=2)
 
 
 class PyramidItemSerializer(serializers.Serializer):
@@ -59,4 +72,4 @@ class HealthSafetyStatusResponseSerializer(serializers.Serializer):
     pyramid = PyramidItemSerializer(many=True)
     insights = serializers.ListField(child=serializers.CharField())
     alerts = AlertFlagsSerializer(required=False)
-    severityIndex = serializers.FloatField(required=False)
+    severityIndex = serializers.DecimalField(max_digits=5, decimal_places=2, required=False)

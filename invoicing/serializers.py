@@ -2,8 +2,30 @@ from decimal import Decimal
 from rest_framework import serializers
 from .models import InvoicingInformation
 
+# Constants
+ZERO = Decimal("0")
+
 
 class InvoicingInformationSerializer(serializers.ModelSerializer):
+    """
+    Serializer for Invoicing Information.
+
+    Notes:
+    - net_due is auto-calculated (read-only)
+    - All monetary fields use DecimalField for precision
+    - Validation ensures non-negative values
+    """
+
+    def _validate_non_negative_decimal(self, value, field_name):
+        """
+        Helper method to validate non-negative Decimal values.
+        Returns ZERO if None, raises ValidationError if negative.
+        """
+        if value is None:
+            return ZERO
+        if value < ZERO:
+            raise serializers.ValidationError(f"{field_name} must be >= 0.")
+        return value
     """
     Serializer for Invoicing Information.
     
@@ -36,50 +58,43 @@ class InvoicingInformationSerializer(serializers.ModelSerializer):
     
     def validate_gross_billed(self, value):
         """Validate gross_billed >= 0"""
-        if value is None:
-            return Decimal("0")
-        if value < 0:
-            raise serializers.ValidationError("gross_billed must be >= 0.")
-        return value
-    
+        return self._validate_non_negative_decimal(value, "gross_billed")
+
     def validate_net_billed_without_vat(self, value):
         """Validate net_billed_without_vat >= 0"""
-        if value is None:
-            return Decimal("0")
-        if value < 0:
-            raise serializers.ValidationError("net_billed_without_vat must be >= 0.")
-        return value
-    
+        return self._validate_non_negative_decimal(value, "net_billed_without_vat")
+
     def validate_net_collected(self, value):
         """Validate net_collected >= 0"""
-        if value is None:
-            return Decimal("0")
-        if value < 0:
-            raise serializers.ValidationError("net_collected must be >= 0.")
-        return value
+        return self._validate_non_negative_decimal(value, "net_collected")
     
     def validate(self, attrs):
         """
         Additional validation:
         - Ensure net_collected <= net_billed_without_vat (logical constraint)
+        - Normalize project_name
         """
-        net_billed = attrs.get("net_billed_without_vat")
-        if net_billed is None and self.instance:
-            net_billed = self.instance.net_billed_without_vat
-        if net_billed is None:
-            net_billed = Decimal("0")
-        
-        net_collected = attrs.get("net_collected")
-        if net_collected is None and self.instance:
-            net_collected = self.instance.net_collected
-        if net_collected is None:
-            net_collected = Decimal("0")
-        
+        # Normalize project_name
+        if "project_name" in attrs and attrs["project_name"]:
+            attrs["project_name"] = attrs["project_name"].strip()
+
+        # Get values with fallback: validated_data -> instance -> ZERO
+        net_billed = (
+            attrs.get("net_billed_without_vat") or
+            (self.instance.net_billed_without_vat if self.instance else None) or
+            ZERO
+        )
+        net_collected = (
+            attrs.get("net_collected") or
+            (self.instance.net_collected if self.instance else None) or
+            ZERO
+        )
+
         if net_collected > net_billed:
             raise serializers.ValidationError({
                 "net_collected": "net_collected cannot exceed net_billed_without_vat."
             })
-        
+
         return attrs
     
     def update(self, instance, validated_data):
@@ -88,10 +103,8 @@ class InvoicingInformationSerializer(serializers.ModelSerializer):
         """
         # If updated_by is not provided, try to get it from request context
         if "updated_by" not in validated_data:
-            request = self.context.get("request")
-            if request and hasattr(request, "data"):
-                updated_by = request.data.get("updated_by")
-                if updated_by:
-                    validated_data["updated_by"] = updated_by
-        
+            updated_by = self.context.get("request", {}).data.get("updated_by")
+            if updated_by:
+                validated_data["updated_by"] = updated_by
+
         return super().update(instance, validated_data)

@@ -86,6 +86,8 @@ urlpatterns = [
     path('api/', include('cost_performance.urls')),
     # Health & Safety API
     path('api/health-safety/', include('health_safety.urls')),
+    # Notifications Test Page
+    path('notifications/', include('notifications.urls')),
 ]
 
 if settings.DEBUG:

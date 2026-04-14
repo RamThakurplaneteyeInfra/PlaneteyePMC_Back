@@ -22,7 +22,7 @@ class ProjectManpower(models.Model):
     planned_mh_cumulative = models.FloatField(default=0)
     actual_mh_cumulative = models.FloatField(default=0)
 
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class Meta:
         ordering = ["project_name", "month_year"]
@@ -34,6 +34,14 @@ class ProjectManpower(models.Model):
                 name="manpower_unique_project_month_year",
             ),
         ]
+
+    def save(self, *args, **kwargs):
+        # Normalize project_name and month_year by stripping whitespace
+        if self.project_name:
+            self.project_name = self.project_name.strip()
+        if self.month_year:
+            self.month_year = self.month_year.strip()
+        super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return f"{self.project_name} — {self.month_year}"
@@ -49,10 +57,14 @@ class ProjectManpower(models.Model):
             dt = datetime.strptime(my.strip(), "%b-%Y")
             return (dt.year, dt.month)
 
-        rows = list(cls.objects.filter(project_name=project_name))
+        # Fetch only required fields to reduce memory usage
+        rows = list(cls.objects.filter(project_name=project_name).only(
+            "id", "month_year", "planned_mh", "actual_mh", "planned_mh_cumulative", "actual_mh_cumulative"
+        ))
         rows.sort(key=lambda r: _key(r.month_year))
         p_cum = 0.0
         a_cum = 0.0
+        rows_to_update = []
         for row in rows:
             p_cum += row.planned_mh
             a_cum += row.actual_mh
@@ -60,7 +72,10 @@ class ProjectManpower(models.Model):
                 row.planned_mh_cumulative != p_cum
                 or row.actual_mh_cumulative != a_cum
             ):
-                cls.objects.filter(pk=row.pk).update(
-                    planned_mh_cumulative=round(p_cum, 4),
-                    actual_mh_cumulative=round(a_cum, 4),
-                )
+                row.planned_mh_cumulative = round(p_cum, 4)
+                row.actual_mh_cumulative = round(a_cum, 4)
+                rows_to_update.append(row)
+
+        # Use bulk_update for efficient batch updates
+        if rows_to_update:
+            cls.objects.bulk_update(rows_to_update, ["planned_mh_cumulative", "actual_mh_cumulative"])

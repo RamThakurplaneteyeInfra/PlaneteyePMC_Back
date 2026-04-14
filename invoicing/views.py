@@ -1,7 +1,9 @@
+from django.core.cache import cache
 from django.utils.dateparse import parse_date
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from drf_yasg.utils import swagger_auto_schema
@@ -47,6 +49,14 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
     serializer_class = InvoicingInformationSerializer
     # Using role from request (temporary). Do not require auth for now.
     permission_classes = [AllowAny]
+    pagination_class = PageNumberPagination
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        # Extract and normalize role once
+        self.request_role = _get_role_from_request(request)
+        if self.request_role:
+            self.request_role = self.request_role.strip().lower()
     
     # ---- Swagger schemas (fix DecimalField showing as string in Swagger UI) ----
     _invoicing_create_schema = openapi.Schema(
@@ -80,37 +90,39 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
         - project_name: partial match (case-insensitive)
         - date: filter by created_at date (YYYY-MM-DD)
         """
-        qs = InvoicingInformation.objects.all()
-        
+        qs = InvoicingInformation.objects.only(
+            "id", "project_name", "gross_billed", "net_billed_without_vat",
+            "net_collected", "net_due", "created_by", "updated_by",
+            "created_at", "updated_at"
+        )
+
         project_name = self.request.query_params.get("project_name")
         if project_name:
-            qs = qs.filter(project_name__icontains=project_name)
-        
+            qs = qs.filter(project_name__icontains=project_name.strip())
+
         date_str = self.request.query_params.get("date")
         if date_str:
             d = parse_date(date_str)
             if d:
                 qs = qs.filter(created_at__date=d)
-        
+
         return qs.order_by("-created_at")
     
-    def _check_billing_engineer_permission(self, request, action_name="perform this action"):
+    def _check_billing_engineer_permission(self, action_name="perform this action"):
         """
         Check if user has Billing Site Engineer role.
         Returns (is_allowed, error_response) tuple.
         """
-        role = _get_role_from_request(request)
-        if role != "Billing Site Engineer":
+        if self.request_role != "billing site engineer":
             return False, Response(
                 {"detail": f"Only Billing Site Engineer can {action_name} (role='Billing Site Engineer')."},
                 status=status.HTTP_403_FORBIDDEN,
             )
         return True, None
 
-    def _check_view_invoicing_permission(self, request):
+    def _check_view_invoicing_permission(self):
         """List/retrieve: Billing Site Engineer, PMC Head, CEO, or Coordinator (read-only for the latter)."""
-        role = _get_role_from_request(request)
-        if role in ("Billing Site Engineer", "PMC Head", "CEO", "Coordinator"):
+        if self.request_role in ("billing site engineer", "pmc head", "ceo", "coordinator"):
             return True, None
         return False, Response(
             {
@@ -130,62 +142,112 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
                 openapi.IN_QUERY,
                 description="User role: Billing Site Engineer | PMC Head | CEO | Coordinator",
                 type=openapi.TYPE_STRING,
+                required=False
+            ),
+            openapi.Parameter(
+                'X-Role',
+                openapi.IN_HEADER,
+                description="User role header: Billing Site Engineer | PMC Head | CEO | Coordinator",
+                type=openapi.TYPE_STRING,
+                required=False
             ),
         ],
         responses={200: InvoicingInformationSerializer(many=True), 403: "Forbidden"}
     )
     def list(self, request, *args, **kwargs):
         """List invoicing records (Billing Site Engineer, PMC Head, CEO, or Coordinator)."""
-        is_allowed, error_response = self._check_view_invoicing_permission(request)
+        cache_key = f"invoicing_list:{request.get_full_path()}"
+        data = cache.get(cache_key)
+        if data is not None:
+            return Response(data)
+
+        is_allowed, error_response = self._check_view_invoicing_permission()
         if not is_allowed:
             return error_response
 
-        return super().list(request, *args, **kwargs)
+        response = super().list(request, *args, **kwargs)
+        cache.set(cache_key, response.data, 300)  # 5 minutes
+        return response
     
     @swagger_auto_schema(
         operation_description="Create a new Invoicing Information record.",
         request_body=_invoicing_create_schema,
         responses={201: InvoicingInformationSerializer, 400: "Bad Request - Validation errors", 403: "Forbidden"}
     )
+    def perform_create(self, serializer):
+        super().perform_create(serializer)
+        # Cache invalidation
+        cache.delete_pattern("invoicing_list:*")
+        cache.delete_pattern("invoicing_retrieve:*")
+
     def create(self, request, *args, **kwargs):
         """Create invoicing record (Billing Site Engineer only)"""
-        is_allowed, error_response = self._check_billing_engineer_permission(request, "create invoicing information")
+        is_allowed, error_response = self._check_billing_engineer_permission("create invoicing information")
         if not is_allowed:
             return error_response
-        
+
         serializer = self.get_serializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
-        invoicing = serializer.save()
+        self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
         return Response(
-            self.get_serializer(invoicing).data, 
-            status=status.HTTP_201_CREATED, 
+            serializer.data,
+            status=status.HTTP_201_CREATED,
             headers=headers
         )
     
     @swagger_auto_schema(
         operation_description="Retrieve a single Invoicing Information record by ID.",
+        manual_parameters=[
+            openapi.Parameter(
+                'role',
+                openapi.IN_QUERY,
+                description="User role: Billing Site Engineer | PMC Head | CEO | Coordinator",
+                type=openapi.TYPE_STRING,
+                required=False
+            ),
+            openapi.Parameter(
+                'X-Role',
+                openapi.IN_HEADER,
+                description="User role header: Billing Site Engineer | PMC Head | CEO | Coordinator",
+                type=openapi.TYPE_STRING,
+                required=False
+            ),
+        ],
         responses={200: InvoicingInformationSerializer, 403: "Forbidden", 404: "Not Found"}
     )
     def retrieve(self, request, *args, **kwargs):
         """Retrieve single invoicing record (Billing Site Engineer, PMC Head, CEO, or Coordinator)."""
-        is_allowed, error_response = self._check_view_invoicing_permission(request)
+        cache_key = f"invoicing_retrieve:{kwargs['pk']}"
+        data = cache.get(cache_key)
+        if data is not None:
+            return Response(data)
+
+        is_allowed, error_response = self._check_view_invoicing_permission()
         if not is_allowed:
             return error_response
 
-        return super().retrieve(request, *args, **kwargs)
+        response = super().retrieve(request, *args, **kwargs)
+        cache.set(cache_key, response.data, 300)  # 5 minutes
+        return response
     
     @swagger_auto_schema(
         operation_description="Update an Invoicing Information record (full update). Use PATCH for partial update.",
         request_body=_invoicing_update_schema,
         responses={200: InvoicingInformationSerializer, 400: "Bad Request", 403: "Forbidden", 404: "Not Found"}
     )
+    def perform_update(self, serializer):
+        super().perform_update(serializer)
+        # Cache invalidation
+        cache.delete_pattern("invoicing_list:*")
+        cache.delete_pattern("invoicing_retrieve:*")
+
     def update(self, request, *args, **kwargs):
         """Update invoicing record (Billing Site Engineer only)"""
-        is_allowed, error_response = self._check_billing_engineer_permission(request, "update invoicing information")
+        is_allowed, error_response = self._check_billing_engineer_permission("update invoicing information")
         if not is_allowed:
             return error_response
-        
+
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
         serializer = self.get_serializer(instance, data=request.data, partial=partial, context={'request': request})
@@ -200,10 +262,10 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
     )
     def partial_update(self, request, *args, **kwargs):
         """Partially update invoicing record (Billing Site Engineer only)"""
-        is_allowed, error_response = self._check_billing_engineer_permission(request, "update invoicing information")
+        is_allowed, error_response = self._check_billing_engineer_permission("update invoicing information")
         if not is_allowed:
             return error_response
-        
+
         kwargs['partial'] = True
         return self.update(request, *args, **kwargs)
     
@@ -211,10 +273,16 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
         operation_description="Delete an Invoicing Information record.",
         responses={204: "No Content", 403: "Forbidden", 404: "Not Found"}
     )
+    def perform_destroy(self, instance):
+        super().perform_destroy(instance)
+        # Cache invalidation
+        cache.delete_pattern("invoicing_list:*")
+        cache.delete_pattern("invoicing_retrieve:*")
+
     def destroy(self, request, *args, **kwargs):
         """Delete invoicing record (Billing Site Engineer only)"""
-        is_allowed, error_response = self._check_billing_engineer_permission(request, "delete invoicing information")
+        is_allowed, error_response = self._check_billing_engineer_permission("delete invoicing information")
         if not is_allowed:
             return error_response
-        
+
         return super().destroy(request, *args, **kwargs)

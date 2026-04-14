@@ -35,10 +35,9 @@ else:
     print(f"Superuser '{username}' already exists")
 EOF
 
-echo "Starting Gunicorn server..."
-exec gunicorn backend.wsgi:application \
-    --bind 0.0.0.0:8000 \
-    --workers 3 \
-    --timeout 120 \
-    --access-logfile - \
-    --error-logfile -
+echo "Starting Daphne ASGI server for WebSocket support..."
+exec daphne backend.asgi:application \
+    --bind 0.0.0.0 \
+    --port 8000 \
+    --access-log \
+    --proxy-headers

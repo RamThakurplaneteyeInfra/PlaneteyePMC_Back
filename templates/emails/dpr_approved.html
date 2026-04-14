@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>DPR Approved Notification</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background-color: #4CAF50; color: white; padding: 20px; text-align: center; }
+        .content { padding: 20px; background-color: #f9f9f9; }
+        .footer { background-color: #333; color: white; padding: 10px; text-align: center; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>DPR Approved</h1>
+        </div>
+        <div class="content">
+            <p>Dear {{ submitter.get_full_name|default:submitter.username }},</p>
+
+            <p>Your Daily Progress Report has been approved:</p>
+
+            <ul>
+                <li><strong>Project Name:</strong> {{ dpr.project_name }}</li>
+                <li><strong>Report Date:</strong> {{ dpr.report_date|date:"F j, Y" }}</li>
+                <li><strong>Job No:</strong> {{ dpr.job_no }}</li>
+                <li><strong>Status:</strong> Approved</li>
+                <li><strong>Approved By:</strong> {{ dpr.approved_by.get_full_name|default:dpr.approved_by.username }}</li>
+                <li><strong>Approved At:</strong> {{ dpr.approved_at|date:"F j, Y H:i" }}</li>
+            </ul>
+
+            <p>The DPR is now finalized and archived.</p>
+
+            <p>Best regards,<br>
+            PMC System</p>
+        </div>
+        <div class="footer">
+            <p>This is an automated notification from the PMC System.</p>
+        </div>
+    </div>
+</body>
+</html>

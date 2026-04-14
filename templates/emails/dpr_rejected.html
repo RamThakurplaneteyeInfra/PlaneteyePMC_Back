@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>DPR Rejected Notification</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background-color: #f44336; color: white; padding: 20px; text-align: center; }
+        .content { padding: 20px; background-color: #f9f9f9; }
+        .rejection-reason { background-color: #ffebee; border-left: 4px solid #f44336; padding: 15px; margin: 20px 0; }
+        .footer { background-color: #333; color: white; padding: 10px; text-align: center; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>DPR Rejected</h1>
+        </div>
+        <div class="content">
+            <p>Dear {{ submitter.get_full_name|default:submitter.username }},</p>
+
+            <p>Your Daily Progress Report has been rejected:</p>
+
+            <ul>
+                <li><strong>Project Name:</strong> {{ dpr.project_name }}</li>
+                <li><strong>Report Date:</strong> {{ dpr.report_date|date:"F j, Y" }}</li>
+                <li><strong>Job No:</strong> {{ dpr.job_no }}</li>
+                <li><strong>Status:</strong> Rejected</li>
+                <li><strong>Rejected By:</strong> {{ dpr.rejected_by.get_full_name|default:dpr.rejected_by.username }}</li>
+            </ul>
+
+            <div class="rejection-reason">
+                <h3>Rejection Reason:</h3>
+                <p>{{ dpr.rejection_reason|default:"No reason provided" }}</p>
+            </div>
+
+            <p>Please review the feedback and resubmit the DPR with the necessary corrections.</p>
+
+            <p>Best regards,<br>
+            PMC System</p>
+        </div>
+        <div class="footer">
+            <p>This is an automated notification from the PMC System.</p>
+        </div>
+    </div>
+</body>
+</html>

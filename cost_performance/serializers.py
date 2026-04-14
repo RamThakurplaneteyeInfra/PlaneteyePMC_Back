@@ -1,15 +1,19 @@
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from decimal import Decimal
+from functools import lru_cache
 
 from django.db import IntegrityError
 from rest_framework import serializers
 
 from .models import ProjectCostPerformance
+from projects.models import Project
 
 MONTH_YEAR_PATTERN = re.compile(r"^([A-Za-z]+)-(\d{4})$")
 
-def _parse_flexible_month_year(s: str) -> datetime:
+@lru_cache(maxsize=128)
+def _parse_flexible_month_year_cached(s: str) -> datetime:
+    """Cached version of month-year parsing for performance."""
     s = s.title()
     try:
         return datetime.strptime(s, "%b-%Y")
@@ -18,6 +22,12 @@ def _parse_flexible_month_year(s: str) -> datetime:
             return datetime.strptime(s, "%B-%Y")
         except ValueError:
             raise ValueError(f"Invalid month or year in '{s}'.")
+
+
+def _parse_flexible_month_year(s: str) -> datetime:
+    """Parse month-year with caching for performance."""
+    return _parse_flexible_month_year_cached(s)
+
 
 def parse_month_year(value: str) -> str:
     s = (value or "").strip()
@@ -32,6 +42,7 @@ def parse_month_year(value: str) -> str:
     return dt.strftime("%b-%Y")
 
 
+@lru_cache(maxsize=128)
 def month_year_sort_key(month_year: str) -> tuple[int, int]:
     try:
         dt = _parse_flexible_month_year(month_year.strip())
@@ -40,6 +51,7 @@ def month_year_sort_key(month_year: str) -> tuple[int, int]:
         return (0, 0)
 
 
+@lru_cache(maxsize=128)
 def dashboard_month_label(month_year: str) -> str:
     try:
         dt = _parse_flexible_month_year(month_year.strip())
@@ -51,12 +63,15 @@ def dashboard_month_label(month_year: str) -> str:
 class ProjectCostPerformanceInputSerializer(serializers.ModelSerializer):
     """POST: bcws, bcwp, acwp, fcst; optional bac for VAC. No eac/cv/sv/cpi/vac."""
 
-    bac = serializers.FloatField(required=False, allow_null=True)
+    bac = serializers.DecimalField(max_digits=18, decimal_places=4, required=False, allow_null=True)
+    project_name = serializers.CharField(write_only=True, required=True)  # For backward compatibility
+    project = serializers.PrimaryKeyRelatedField(read_only=True)
 
     class Meta:
         model = ProjectCostPerformance
         fields = (
             "project_name",
+            "project",
             "month_year",
             "bcws",
             "bcwp",
@@ -68,46 +83,54 @@ class ProjectCostPerformanceInputSerializer(serializers.ModelSerializer):
     def validate_month_year(self, value):
         return parse_month_year(value)
 
-    def _non_negative(self, attrs, *names):
-        for n in names:
-            v = attrs.get(n)
-            if v is None:
-                continue
-            if float(v) < 0:
-                raise serializers.ValidationError({n: "Must be >= 0."})
-            attrs[n] = float(v)
+    def _validate_non_negative_decimal(self, value, field_name):
+        """
+        Validate that a decimal value is non-negative.
+        Returns default Decimal("0") if None, otherwise validates >= 0.
+        """
+        if value is None:
+            return Decimal("0")
+        if value < 0:
+            raise serializers.ValidationError({field_name: "Must be >= 0."})
+        return value
 
     def validate(self, attrs):
-        attrs["project_name"] = (attrs.get("project_name") or "").strip()
-        if not attrs["project_name"]:
+        # Normalize project_name once
+        project_name = (attrs.get("project_name") or "").strip()
+        if not project_name:
             raise serializers.ValidationError({"project_name": "Required."})
-        
-        # Validate ACWP >= 0
-        acwp = attrs.get("acwp")
-        if acwp is not None and float(acwp) < 0:
-            raise serializers.ValidationError({"acwp": "Must be >= 0."})
-        
-        # Validate FCST >= 0
-        fcst = attrs.get("fcst")
-        if fcst is not None and float(fcst) < 0:
-            raise serializers.ValidationError({"fcst": "Must be >= 0."})
-        
-        # Validate BAC > 0 (if provided)
-        bac = attrs.get("bac")
-        if bac is not None:
-            if float(bac) <= 0:
-                raise serializers.ValidationError({"bac": "Must be greater than 0."})
-        
-        # Validate other non-negative fields
-        self._non_negative(attrs, "bcws", "bcwp")
 
-        if ProjectCostPerformance.objects.filter(
-            project_name=attrs["project_name"],
-            month_year=attrs["month_year"],
-        ).exists():
-            raise serializers.ValidationError(
-                {"month_year": "Already exists for this project."}
-            )
+        # Get or create project using get_or_create for efficiency
+        project, created = Project.objects.get_or_create(
+            name=project_name,
+            defaults={'budget': Decimal('0')}
+        )
+        attrs["project"] = project
+
+        # Keep project_name for backward compatibility
+        attrs["project_name"] = project_name
+
+        # Validate all financial fields using Decimal (no float conversions)
+        # ACWP >= 0
+        acwp = attrs.get("acwp")
+        if acwp is not None and acwp < 0:
+            raise serializers.ValidationError({"acwp": "Must be >= 0."})
+
+        # FCST >= 0
+        fcst = attrs.get("fcst")
+        if fcst is not None and fcst < 0:
+            raise serializers.ValidationError({"fcst": "Must be >= 0."})
+
+        # BAC > 0 if provided
+        bac = attrs.get("bac")
+        if bac is not None and bac <= 0:
+            raise serializers.ValidationError({"bac": "Must be greater than 0."})
+
+        # BCWS and BCWP >= 0 using helper method
+        attrs["bcws"] = self._validate_non_negative_decimal(attrs.get("bcws"), "bcws")
+        attrs["bcwp"] = self._validate_non_negative_decimal(attrs.get("bcwp"), "bcwp")
+
+        # Remove redundant .exists() check - rely on database constraint
         return attrs
 
     def create(self, validated_data):
@@ -130,6 +153,7 @@ class ProjectCostPerformanceInputSerializer(serializers.ModelSerializer):
 class ProjectCostPerformanceSerializer(serializers.ModelSerializer):
     over_budget_cost = serializers.SerializerMethodField()
     behind_schedule = serializers.SerializerMethodField()
+    project_name = serializers.CharField(source='project.name', read_only=True)
 
     class Meta:
         model = ProjectCostPerformance
@@ -167,26 +191,15 @@ class ProjectCostPerformanceSerializer(serializers.ModelSerializer):
 class MonthlyDataInputSerializer(serializers.Serializer):
     """Serializer for monthly data in EVM dashboard input."""
     month = serializers.CharField(max_length=12, help_text="Month-Year (e.g., 'Jan-2022')")
-    bcws = serializers.FloatField(required=False, default=0, help_text="Budgeted Cost of Work Scheduled")
-    percent_complete = serializers.FloatField(required=False, default=None, min_value=0, max_value=100, help_text="Percentage complete (0-100)")
-    bcwp = serializers.FloatField(required=False, default=None, help_text="Budgeted Cost of Work Performed (earned value)")
-    ac = serializers.FloatField(required=False, default=0, help_text="Actual Cost")
-
-    def validate(self, attrs):
-        # Must have either percent_complete or bcwp
-        percent_complete = attrs.get('percent_complete')
-        bcwp = attrs.get('bcwp')
-        
-        if percent_complete is None and bcwp is None:
-            raise serializers.ValidationError(
-                "Either 'percent_complete' or 'bcwp' must be provided."
-            )
-        return attrs
+    bcws = serializers.DecimalField(max_digits=18, decimal_places=4, required=False, default=0, help_text="Budgeted Cost of Work Scheduled")
+    percent_complete = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, default=None, min_value=0, max_value=100, help_text="Percentage complete (0-100)")
+    bcwp = serializers.DecimalField(max_digits=18, decimal_places=4, required=False, default=None, help_text="Budgeted Cost of Work Performed (earned value)")
+    ac = serializers.DecimalField(max_digits=18, decimal_places=4, required=False, default=0, help_text="Actual Cost")
 
 
 class EVMDashboardInputSerializer(serializers.Serializer):
     """Serializer for EVM dashboard bulk input.
-    
+
     Expected format:
     {
         "project_name": "Project Alpha",
@@ -203,50 +216,45 @@ class EVMDashboardInputSerializer(serializers.Serializer):
     }
     """
     project_name = serializers.CharField(max_length=255, help_text="Project name")
-    bac = serializers.FloatField(required=True, min_value=0, help_text="Budget at Completion")
+    bac = serializers.DecimalField(max_digits=18, decimal_places=4, required=True, min_value=0, help_text="Budget at Completion")
     monthly_data = serializers.ListField(
         child=MonthlyDataInputSerializer(),
         allow_empty=False,
         help_text="Array of monthly data points"
     )
 
-    def validate_monthly_data(self, value):
-        if not value:
-            raise serializers.ValidationError("At least one monthly data point is required.")
-        return value
-
 
 class MonthlyDataOutputSerializer(serializers.Serializer):
     """Serializer for monthly data in dashboard output."""
     month = serializers.CharField()
-    bcws = serializers.FloatField()
-    bcwp = serializers.FloatField()
-    ac = serializers.FloatField()
-    cv = serializers.FloatField()
-    cpi = serializers.FloatField(allow_null=True)
+    bcws = serializers.DecimalField(max_digits=18, decimal_places=4)
+    bcwp = serializers.DecimalField(max_digits=18, decimal_places=4)
+    ac = serializers.DecimalField(max_digits=18, decimal_places=4)
+    cv = serializers.DecimalField(max_digits=18, decimal_places=4)
+    cpi = serializers.DecimalField(max_digits=10, decimal_places=6, allow_null=True)
     status = serializers.CharField()
-    fcst = serializers.FloatField(allow_null=True)
+    fcst = serializers.DecimalField(max_digits=18, decimal_places=4, allow_null=True)
 
 
 class CumulativeDataOutputSerializer(serializers.Serializer):
     """Serializer for cumulative data in dashboard output."""
     month = serializers.CharField()
-    cumulative_bcws = serializers.FloatField()
-    cumulative_bcwp = serializers.FloatField()
-    cumulative_ac = serializers.FloatField()
-    cumulative_cv = serializers.FloatField()
-    cumulative_cpi = serializers.FloatField(allow_null=True)
+    cumulative_bcws = serializers.DecimalField(max_digits=18, decimal_places=4)
+    cumulative_bcwp = serializers.DecimalField(max_digits=18, decimal_places=4)
+    cumulative_ac = serializers.DecimalField(max_digits=18, decimal_places=4)
+    cumulative_cv = serializers.DecimalField(max_digits=18, decimal_places=4)
+    cumulative_cpi = serializers.DecimalField(max_digits=10, decimal_places=6, allow_null=True)
 
 
 class EVMSummarySerializer(serializers.Serializer):
     """Serializer for EVM summary section."""
-    bcwp = serializers.FloatField(help_text="Earned Value (Budgeted Cost of Work Performed)")
-    ac = serializers.FloatField(help_text="Actual Cost")
-    cv = serializers.FloatField(help_text="Cost Variance (BCWP - AC)")
-    cpi = serializers.FloatField(allow_null=True, help_text="Cost Performance Index")
+    bcwp = serializers.DecimalField(max_digits=18, decimal_places=4, help_text="Earned Value (Budgeted Cost of Work Performed)")
+    ac = serializers.DecimalField(max_digits=18, decimal_places=4, help_text="Actual Cost")
+    cv = serializers.DecimalField(max_digits=18, decimal_places=4, help_text="Cost Variance (BCWP - AC)")
+    cpi = serializers.DecimalField(max_digits=10, decimal_places=6, allow_null=True, help_text="Cost Performance Index")
     status = serializers.CharField(help_text="Budget status: under_budget, on_budget, or over_budget")
-    eac = serializers.FloatField(help_text="Estimate at Completion (BAC / CPI)")
-    etc = serializers.FloatField(help_text="Estimate to Complete (EAC - AC)")
+    eac = serializers.DecimalField(max_digits=18, decimal_places=4, help_text="Estimate at Completion (BAC / CPI)")
+    etc = serializers.DecimalField(max_digits=18, decimal_places=4, help_text="Estimate to Complete (EAC - AC)")
 
 
 class EVMDashboardOutputSerializer(serializers.Serializer):

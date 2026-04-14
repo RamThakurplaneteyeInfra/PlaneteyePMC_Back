@@ -18,7 +18,7 @@ class DailyProgressReport(models.Model):
         APPROVED = 'approved', 'Approved'
         REJECTED = 'rejected', 'Rejected'
     
-    project_name = models.CharField(max_length=255, help_text="Name of the project")
+    project_name = models.CharField(max_length=255, db_index=True, help_text="Name of the project")
     job_no = models.CharField(max_length=100, help_text="Job number or reference code")
     report_date = models.DateField(help_text="Date of the report")
     unresolved_issues = models.TextField(blank=True, help_text="Any unresolved issues")
@@ -29,12 +29,13 @@ class DailyProgressReport(models.Model):
     gfc_status = models.TextField(blank=True, help_text="GFC (Good for Construction) status")
     issued_by = models.CharField(max_length=255, help_text="Person who issued the report")
     designation = models.CharField(max_length=255, help_text="Designation of the issuer")
-    
+
     # Approval workflow fields
     status = models.CharField(
         max_length=25,
         choices=Status.choices,
         default=Status.DRAFT,
+        db_index=True,
         help_text="Current approval status of the DPR"
     )
     submitted_by = models.ForeignKey(
@@ -48,6 +49,7 @@ class DailyProgressReport(models.Model):
     current_approver_role = models.CharField(
         max_length=50,
         blank=True,
+        db_index=True,
         help_text="Role that should currently approve this DPR"
     )
     rejection_reason = models.TextField(
@@ -85,7 +87,17 @@ class DailyProgressReport(models.Model):
         indexes = [
             models.Index(fields=['project_name', '-report_date']),
             models.Index(fields=['-report_date']),
+            models.Index(fields=['status', 'current_approver_role']),
         ]
+        constraints = [
+            models.UniqueConstraint(fields=['project_name', 'report_date'], name='unique_project_date_dpr'),
+        ]
+
+    def save(self, *args, **kwargs):
+        # Normalize project_name by stripping whitespace
+        if self.project_name:
+            self.project_name = self.project_name.strip()
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"DPR - {self.project_name} ({self.report_date})"
@@ -105,8 +117,10 @@ class DPRActivity(models.Model):
     date = models.DateField(help_text="Date of the activity")
     activity = models.TextField(help_text="Description of the activity")
     deliverables = models.TextField(blank=True, help_text="Deliverables for this activity")
-    target_achieved = models.FloatField(
-        default=0.0,
+    target_achieved = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0.00,
         validators=[MinValueValidator(0.0), MaxValueValidator(100.0)],
         help_text="Target achieved percentage (0-100)"
     )

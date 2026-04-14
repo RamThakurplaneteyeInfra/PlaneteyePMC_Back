@@ -5,8 +5,9 @@ Output MH and cumulatives computed in create(); not accepted from client.
 
 import re
 from datetime import datetime
+from functools import lru_cache
 
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from rest_framework import serializers
 
 from .models import ProjectManpower
@@ -15,6 +16,7 @@ from .models import ProjectManpower
 MONTH_YEAR_PATTERN = re.compile(r"^([A-Za-z]{3})-(\d{4})$")
 
 
+@lru_cache(maxsize=128)
 def parse_month_year(value: str) -> tuple[datetime, str]:
     """
     Parse "Jan-2023" → (datetime, canonical "Jan-2023").
@@ -95,15 +97,6 @@ class ProjectManpowerInputSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"project_name": "This field may not be blank."}
             )
-        if ProjectManpower.objects.filter(
-            project_name=attrs["project_name"],
-            month_year=attrs["month_year"],
-        ).exists():
-            raise serializers.ValidationError(
-                {
-                    "month_year": "This month_year already exists for this project.",
-                }
-            )
         return attrs
 
     def create(self, validated_data):
@@ -117,19 +110,17 @@ class ProjectManpowerInputSerializer(serializers.ModelSerializer):
 
         validated_data["planned_mh"] = planned_mh
         validated_data["actual_mh"] = actual_mh
-        validated_data.setdefault("planned_mh_cumulative", 0)
-        validated_data.setdefault("actual_mh_cumulative", 0)
 
         try:
-            instance = ProjectManpower.objects.create(**validated_data)
+            with transaction.atomic():
+                instance = ProjectManpower.objects.create(**validated_data)
+                ProjectManpower.recalculate_cumulatives(validated_data["project_name"])
+                instance.refresh_from_db()
+                return instance
         except IntegrityError:
             raise serializers.ValidationError(
                 {"month_year": "This month_year already exists for this project."}
             )
-
-        ProjectManpower.recalculate_cumulatives(validated_data["project_name"])
-        instance.refresh_from_db()
-        return instance
 
 
 class ProjectManpowerSerializer(serializers.ModelSerializer):

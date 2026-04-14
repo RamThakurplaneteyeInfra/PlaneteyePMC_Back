@@ -2,10 +2,12 @@
 Project equipment API: monthly planned/actual, auto cumulative totals, dashboard series.
 """
 
+from django.core.cache import cache
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
@@ -31,9 +33,13 @@ class ProjectEquipmentViewSet(viewsets.ModelViewSet):
     serializer_class = ProjectEquipmentSerializer
     permission_classes = [AllowAny]
     http_method_names = ["get", "post", "head", "options"]
+    pagination_class = PageNumberPagination
 
     def get_queryset(self):
-        return ProjectEquipment.objects.all().order_by("project_name", "month")
+        return ProjectEquipment.objects.only(
+            "id", "project_name", "month", "planned_equipment", "actual_equipment",
+            "planned_cumulative", "actual_cumulative", "created_at"
+        ).order_by("project_name", "month")
 
     @swagger_auto_schema(
         tags=swagger_tags,
@@ -42,12 +48,18 @@ class ProjectEquipmentViewSet(viewsets.ModelViewSet):
         request_body=ProjectEquipmentInputSerializer,
         responses={201: ProjectEquipmentSerializer},
     )
+    def perform_create(self, serializer):
+        super().perform_create(serializer)
+        # Cache invalidation
+        cache.delete_pattern("equipment_list:*")
+        cache.delete_pattern("equipment_dashboard:*")
+
     def create(self, request, *args, **kwargs):
-        ser = ProjectEquipmentInputSerializer(data=request.data)
+        ser = self.get_serializer(data=request.data)
         ser.is_valid(raise_exception=True)
-        instance = ser.save()
+        self.perform_create(ser)
         return Response(
-            ProjectEquipmentSerializer(instance).data,
+            ProjectEquipmentSerializer(ser.instance).data,
             status=status.HTTP_201_CREATED,
         )
 
@@ -65,11 +77,14 @@ class ProjectEquipmentViewSet(viewsets.ModelViewSet):
         ],
     )
     def list(self, request, *args, **kwargs):
-        qs = self.get_queryset()
-        pn = request.query_params.get("project_name")
-        if pn:
-            qs = qs.filter(project_name__iexact=pn.strip())
-        return Response(ProjectEquipmentSerializer(qs, many=True).data)
+        cache_key = f"equipment_list:{request.get_full_path()}"
+        data = cache.get(cache_key)
+        if data is not None:
+            return Response(data)
+
+        response = super().list(request, *args, **kwargs)
+        cache.set(cache_key, response.data, 300)  # 5 minutes
+        return response
 
     @swagger_auto_schema(auto_schema=None)
     def retrieve(self, request, *args, **kwargs):
@@ -133,29 +148,48 @@ class ProjectEquipmentViewSet(viewsets.ModelViewSet):
                 {"detail": "Query parameter project_name is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        cache_key = f"equipment_dashboard:{pn}"
+        data = cache.get(cache_key)
+        if data is not None:
+            return Response(data)
+
         rows = (
             ProjectEquipment.objects.filter(project_name__iexact=pn)
+            .only("month", "planned_equipment", "actual_equipment", "planned_cumulative", "actual_cumulative")
             .order_by("month")
         )
-        months = [month_label(r.month) for r in rows]
-        planned_m = [r.planned_equipment for r in rows]
-        actual_m = [r.actual_equipment for r in rows]
-        planned_c = [r.planned_cumulative for r in rows]
-        actual_c = [r.actual_cumulative for r in rows]
-        eff = [
-            None if r.planned_equipment == 0
-            else round(r.actual_equipment / r.planned_equipment, 4)
-            for r in rows
-        ]
-        below = [r.actual_equipment < r.planned_equipment for r in rows]
-        return Response(
-            {
-                "months": months,
-                "planned_monthly": planned_m,
-                "actual_monthly": actual_m,
-                "planned_cumulative": planned_c,
-                "actual_cumulative": actual_c,
-                "equipment_efficiency": eff,
-                "actual_below_planned": below,
-            }
-        )
+
+        # Pre-allocate lists
+        months = []
+        planned_monthly = []
+        actual_monthly = []
+        planned_cumulative = []
+        actual_cumulative = []
+        equipment_efficiency = []
+        actual_below_planned = []
+
+        for r in rows:
+            months.append(month_label(r.month))
+            planned_monthly.append(r.planned_equipment)
+            actual_monthly.append(r.actual_equipment)
+            planned_cumulative.append(r.planned_cumulative)
+            actual_cumulative.append(r.actual_cumulative)
+            if r.planned_equipment == 0:
+                equipment_efficiency.append(None)
+            else:
+                equipment_efficiency.append(round(r.actual_equipment / r.planned_equipment, 4))
+            actual_below_planned.append(r.actual_equipment < r.planned_equipment)
+
+        data = {
+            "months": months,
+            "planned_monthly": planned_monthly,
+            "actual_monthly": actual_monthly,
+            "planned_cumulative": planned_cumulative,
+            "actual_cumulative": actual_cumulative,
+            "equipment_efficiency": equipment_efficiency,
+            "actual_below_planned": actual_below_planned,
+        }
+
+        cache.set(cache_key, data, 300)  # 5 minutes
+        return Response(data)

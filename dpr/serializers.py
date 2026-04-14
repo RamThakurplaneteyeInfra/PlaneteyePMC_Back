@@ -1,3 +1,4 @@
+from django.db import transaction, IntegrityError
 from rest_framework import serializers
 from .models import DailyProgressReport, DPRActivity
 from django.contrib.auth import get_user_model
@@ -73,7 +74,21 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
             'approved_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'status', 'submitted_by', 'current_approver_role', 'rejection_reason', 'rejected_by', 'approved_by', 'approved_at']
-    
+
+    def _extract_activities_data(self, validated_data):
+        """
+        Helper method to extract activities data from validated_data
+        """
+        return validated_data.pop('activities', [])
+
+    def validate_project_name(self, value):
+        """
+        Normalize project_name by stripping whitespace
+        """
+        if value:
+            return value.strip()
+        return value
+
     def validate(self, attrs):
         """
         Additional validation for the entire DPR object
@@ -96,18 +111,24 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         """
-        Override create to handle nested activities
+        Override create to handle nested activities with bulk creation and transaction
         """
-        activities_data = validated_data.pop('activities', [])
-        
+        activities_data = self._extract_activities_data(validated_data)
+
         try:
-            dpr = DailyProgressReport.objects.create(**validated_data)
-            
-            # Create associated activities
-            for activity_data in activities_data:
-                DPRActivity.objects.create(dpr=dpr, **activity_data)
-            
-            return dpr
+            with transaction.atomic():
+                dpr = DailyProgressReport.objects.create(**validated_data)
+
+                # Bulk create associated activities
+                if activities_data:
+                    activities = [DPRActivity(dpr=dpr, **activity_data) for activity_data in activities_data]
+                    DPRActivity.objects.bulk_create(activities)
+
+                return dpr
+        except IntegrityError as e:
+            # Handle unique constraint violations
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({'non_field_errors': ['Duplicate DPR for this project and date.']})
         except Exception as e:
             # Re-raise as ValidationError for better API response
             from rest_framework.exceptions import ValidationError
@@ -115,21 +136,32 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         """
-        Override update to handle nested activities
+        Override update to handle nested activities with bulk creation and transaction
         """
-        activities_data = validated_data.pop('activities', None)
-        
-        # Update main DPR fields
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
-        
-        # Handle activities update
-        if activities_data is not None:
-            # Delete existing activities
-            instance.activities.all().delete()
-            # Create new activities
-            for activity_data in activities_data:
-                DPRActivity.objects.create(dpr=instance, **activity_data)
-        
-        return instance
+        activities_data = self._extract_activities_data(validated_data)
+
+        try:
+            with transaction.atomic():
+                # Update main DPR fields
+                for attr, value in validated_data.items():
+                    setattr(instance, attr, value)
+                instance.save()
+
+                # Handle activities update
+                if activities_data is not None:
+                    # Delete existing activities
+                    instance.activities.all().delete()
+                    # Bulk create new activities
+                    if activities_data:
+                        activities = [DPRActivity(dpr=instance, **activity_data) for activity_data in activities_data]
+                        DPRActivity.objects.bulk_create(activities)
+
+                return instance
+        except IntegrityError as e:
+            # Handle unique constraint violations
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({'non_field_errors': ['Duplicate DPR for this project and date.']})
+        except Exception as e:
+            # Re-raise as ValidationError for better API response
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({'non_field_errors': [str(e)]})

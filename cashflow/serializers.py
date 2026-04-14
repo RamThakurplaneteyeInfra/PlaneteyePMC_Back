@@ -5,13 +5,21 @@ All cumulative_* fields are computed after save.
 
 import re
 from datetime import datetime
+from decimal import Decimal
+from functools import lru_cache
 
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from rest_framework import serializers
 
 from .models import CashFlow
 
 MONTH_YEAR_PATTERN = re.compile(r"^([A-Za-z]{3})-(\d{4})$")
+
+
+@lru_cache(maxsize=128)
+def _parse_month_year_cached(value: str) -> datetime:
+    """Cached datetime parsing for performance."""
+    return datetime.strptime(value, "%b-%Y")
 
 
 def parse_month_year(value: str) -> str:
@@ -22,26 +30,28 @@ def parse_month_year(value: str) -> str:
             'month_year must look like "Jan-2023" (3-letter month, 4-digit year).'
         )
     try:
-        dt = datetime.strptime(s, "%b-%Y")
+        dt = _parse_month_year_cached(s)
     except ValueError:
         try:
-            dt = datetime.strptime(s.title(), "%b-%Y")
+            dt = _parse_month_year_cached(s.title())
         except ValueError:
             raise serializers.ValidationError("Invalid month or year.")
     return dt.strftime("%b-%Y")
 
 
+@lru_cache(maxsize=128)
 def month_year_sort_key(month_year: str) -> tuple[int, int]:
-    dt = datetime.strptime(month_year.strip(), "%b-%Y")
+    dt = _parse_month_year_cached(month_year.strip())
     return (dt.year, dt.month)
 
 
+@lru_cache(maxsize=128)
 def dashboard_month_label(month_year: str) -> str:
-    dt = datetime.strptime(month_year.strip(), "%b-%Y")
+    dt = _parse_month_year_cached(month_year.strip())
     return dt.strftime("%b-%y")
 
 
-_NON_NEGATIVE_FLOAT_FIELDS = (
+_NON_NEGATIVE_DECIMAL_FIELDS = (
     "cash_in_monthly_plan",
     "cash_in_monthly_actual",
     "cash_out_monthly_plan",
@@ -72,39 +82,43 @@ class CashFlowInputSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"project_name": "This field may not be blank."}
             )
-        for fname in _NON_NEGATIVE_FLOAT_FIELDS:
+        for fname in _NON_NEGATIVE_DECIMAL_FIELDS:
             v = attrs.get(fname)
             if v is None:
                 continue
-            if float(v) < 0:
+            # Keep as Decimal for precision, don't convert to float
+            try:
+                decimal_value = Decimal(str(v))
+            except (ValueError, TypeError):
+                raise serializers.ValidationError(
+                    {fname: "Must be a valid number."}
+                )
+            if decimal_value < 0:
                 raise serializers.ValidationError(
                     {fname: "Must be greater than or equal to 0."}
                 )
-            attrs[fname] = float(v)
+            # Keep the Decimal value instead of converting to float
+            attrs[fname] = decimal_value
 
-        if CashFlow.objects.filter(
-            project_name=attrs["project_name"],
-            month_year=attrs["month_year"],
-        ).exists():
-            raise serializers.ValidationError(
-                {"month_year": "This month_year already exists for this project."}
-            )
+        # Remove redundant .exists() check - rely on database constraint
         return attrs
 
     def create(self, validated_data):
-        validated_data.setdefault("cash_in_cumulative_plan", 0)
-        validated_data.setdefault("cash_in_cumulative_actual", 0)
-        validated_data.setdefault("cash_out_cumulative_plan", 0)
-        validated_data.setdefault("cash_out_cumulative_actual", 0)
-        validated_data.setdefault("actual_cost_cumulative", 0)
+        # Remove unnecessary defaults since model provides them
         try:
             instance = CashFlow.objects.create(**validated_data)
         except IntegrityError:
             raise serializers.ValidationError(
                 {"month_year": "This month_year already exists for this project."}
             )
-        CashFlow.recalculate_cumulatives(validated_data["project_name"])
-        instance.refresh_from_db()
+
+        # Use transaction.on_commit to defer recalculation until after DB commit
+        def recalculate_after_commit():
+            CashFlow.recalculate_cumulatives(validated_data["project_name"])
+
+        transaction.on_commit(recalculate_after_commit)
+
+        # Remove refresh_from_db() - not needed since we don't modify the instance after creation
         return instance
 
 
@@ -137,11 +151,13 @@ class CashFlowSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_profit_actual_net(self, obj):
-        """Cumulative actual cash-in minus cumulative actual cash-out (same month end)."""
-        return round(
-            obj.cash_in_cumulative_actual - obj.cash_out_cumulative_actual,
-            4,
-        )
+        """
+        Cumulative actual cash-in minus cumulative actual cash-out (same month end).
+        Values are already stored with 4 decimal places, so no additional rounding needed.
+        """
+        # Since cumulative fields are stored as Decimal with 4 decimal places,
+        # the subtraction result maintains precision without additional rounding
+        return obj.cash_in_cumulative_actual - obj.cash_out_cumulative_actual
 
     def get_cash_out_exceeds_cash_in_actual(self, obj):
         return obj.cash_out_monthly_actual > obj.cash_in_monthly_actual

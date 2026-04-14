@@ -2,6 +2,8 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
+from rest_framework.pagination import PageNumberPagination
+from django.core.cache import cache
 from django.db.models import Q
 from django.utils.dateparse import parse_date
 from django.utils import timezone
@@ -9,15 +11,16 @@ from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 from .models import DailyProgressReport, DPRActivity
 from .serializers import DailyProgressReportSerializer, DPRActivitySerializer
+from services.notifications import notify_dpr_submitted, notify_dpr_approved, notify_dpr_rejected
 
 
 class DailyProgressReportViewSet(viewsets.ModelViewSet):
     """
     ViewSet for Daily Progress Report CRUD operations
-    
+
     Supports filtering by project_name and date.
     No authentication required for testing.
-    
+
     **Filtering Parameters:**
     - `project_name`: Filter by project name (case-insensitive partial match)
     - `date`: Filter by exact report date (YYYY-MM-DD)
@@ -28,6 +31,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
     queryset = DailyProgressReport.objects.all()
     serializer_class = DailyProgressReportSerializer
     permission_classes = [AllowAny]  # No authentication required for testing
+    pagination_class = PageNumberPagination
 
     @swagger_auto_schema(
         operation_description="List all Daily Progress Reports with optional filtering",
@@ -74,7 +78,14 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         responses={200: DailyProgressReportSerializer(many=True)}
     )
     def list(self, request, *args, **kwargs):
-        return super().list(request, *args, **kwargs)
+        cache_key = f"dpr_list:{request.get_full_path()}"
+        data = cache.get(cache_key)
+        if data is not None:
+            return Response(data)
+
+        response = super().list(request, *args, **kwargs)
+        cache.set(cache_key, response.data, 300)  # 5 minutes
+        return response
 
     def get_queryset(self):
         """
@@ -85,13 +96,21 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         - date_from: Filter reports from this date onwards
         - date_to: Filter reports up to this date
         """
-        queryset = DailyProgressReport.objects.all()
-        
+        queryset = DailyProgressReport.objects.select_related(
+            "submitted_by", "approved_by", "rejected_by"
+        ).prefetch_related("activities").only(
+            "id", "project_name", "job_no", "report_date", "unresolved_issues", "pending_letters",
+            "quality_status", "next_day_incident", "bill_status", "gfc_status", "issued_by",
+            "designation", "status", "submitted_by__username", "current_approver_role",
+            "rejection_reason", "rejected_by__username", "approved_by__username", "approved_at",
+            "created_at", "updated_at"
+        )
+
         # Filter by project_name
         project_name = self.request.query_params.get('project_name', None)
         if project_name:
-            queryset = queryset.filter(project_name__icontains=project_name)
-        
+            queryset = queryset.filter(project_name__icontains=project_name.strip())
+
         # Filter by exact date
         date = self.request.query_params.get('date', None)
         if date:
@@ -101,7 +120,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                     queryset = queryset.filter(report_date=date_obj)
             except (ValueError, TypeError):
                 pass  # Invalid date format, ignore filter
-        
+
         # Filter by date range
         date_from = self.request.query_params.get('date_from', None)
         if date_from:
@@ -111,7 +130,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                     queryset = queryset.filter(report_date__gte=date_from_obj)
             except (ValueError, TypeError):
                 pass
-        
+
         date_to = self.request.query_params.get('date_to', None)
         if date_to:
             try:
@@ -120,7 +139,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                     queryset = queryset.filter(report_date__lte=date_to_obj)
             except (ValueError, TypeError):
                 pass
-        
+
         # Order by latest first (handled in model Meta, but ensuring here too)
         return queryset.order_by('-report_date', '-created_at')
 
@@ -136,10 +155,17 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         request_body=DailyProgressReportSerializer,
         responses={201: DailyProgressReportSerializer}
     )
+    def perform_create(self, serializer):
+        super().perform_create(serializer)
+        # Cache invalidation
+        cache.delete_pattern("dpr_list:*")
+        cache.delete_pattern("dpr_pending_approval:*")
+        cache.delete_pattern("dpr_rejected:*")
+
     def create(self, request, *args, **kwargs):
         """
         Create a new Daily Progress Report with nested activities.
-        
+
         **Example Request:**
         ```json
         {
@@ -190,6 +216,13 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         request_body=DailyProgressReportSerializer,
         responses={200: DailyProgressReportSerializer}
     )
+    def perform_update(self, serializer):
+        super().perform_update(serializer)
+        # Cache invalidation
+        cache.delete_pattern("dpr_list:*")
+        cache.delete_pattern("dpr_pending_approval:*")
+        cache.delete_pattern("dpr_rejected:*")
+
     def update(self, request, *args, **kwargs):
         """
         Update a Daily Progress Report (full update).
@@ -217,6 +250,13 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
             404: "Not Found - DPR does not exist"
         }
     )
+    def perform_destroy(self, instance):
+        super().perform_destroy(instance)
+        # Cache invalidation
+        cache.delete_pattern("dpr_list:*")
+        cache.delete_pattern("dpr_pending_approval:*")
+        cache.delete_pattern("dpr_rejected:*")
+
     def destroy(self, request, *args, **kwargs):
         """
         Delete a Daily Progress Report.
@@ -237,13 +277,15 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
     def activities(self, request, pk=None):
         """
         Get all activities for a specific DPR.
-        
+
         **Endpoint:** GET /api/dpr/{id}/activities/
-        
+
         Returns a list of all activities associated with the DPR.
         """
         dpr = self.get_object()
-        activities = dpr.activities.all()
+        activities = dpr.activities.only(
+            "id", "date", "activity", "deliverables", "target_achieved", "next_day_plan", "remarks"
+        ).all()
         serializer = DPRActivitySerializer(activities, many=True)
         return Response(serializer.data)
 
@@ -284,7 +326,15 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         dpr.rejection_reason = ''  # Clear rejection reason on resubmission
         dpr.rejected_by = None
         dpr.save()
-        
+
+        # Send notification
+        notify_dpr_submitted(dpr)
+
+        # Cache invalidation
+        cache.delete_pattern("dpr_list:*")
+        cache.delete_pattern("dpr_pending_approval:*")
+        cache.delete_pattern("dpr_rejected:*")
+
         serializer = self.get_serializer(dpr)
         return Response(serializer.data)
 
@@ -317,7 +367,12 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         dpr.status = DailyProgressReport.Status.PENDING_COORDINATOR
         dpr.current_approver_role = 'Coordinator'
         dpr.save()
-        
+
+        # Cache invalidation
+        cache.delete_pattern("dpr_list:*")
+        cache.delete_pattern("dpr_pending_approval:*")
+        cache.delete_pattern("dpr_rejected:*")
+
         serializer = self.get_serializer(dpr)
         return Response(serializer.data)
 
@@ -350,7 +405,12 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         dpr.status = DailyProgressReport.Status.PENDING_PMC_HEAD
         dpr.current_approver_role = 'PMC Head'
         dpr.save()
-        
+
+        # Cache invalidation
+        cache.delete_pattern("dpr_list:*")
+        cache.delete_pattern("dpr_pending_approval:*")
+        cache.delete_pattern("dpr_rejected:*")
+
         serializer = self.get_serializer(dpr)
         return Response(serializer.data)
 
@@ -385,7 +445,15 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         dpr.approved_at = timezone.now()
         dpr.current_approver_role = ''
         dpr.save()
-        
+
+        # Send notification
+        notify_dpr_approved(dpr)
+
+        # Cache invalidation
+        cache.delete_pattern("dpr_list:*")
+        cache.delete_pattern("dpr_pending_approval:*")
+        cache.delete_pattern("dpr_rejected:*")
+
         serializer = self.get_serializer(dpr)
         return Response(serializer.data)
 
@@ -443,7 +511,15 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         dpr.rejection_reason = rejection_reason
         dpr.rejected_by = request.user
         dpr.save()
-        
+
+        # Send notification
+        notify_dpr_rejected(dpr)
+
+        # Cache invalidation
+        cache.delete_pattern("dpr_list:*")
+        cache.delete_pattern("dpr_pending_approval:*")
+        cache.delete_pattern("dpr_rejected:*")
+
         serializer = self.get_serializer(dpr)
         return Response(serializer.data)
 
@@ -464,39 +540,46 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
     def pending_approval(self, request):
         """
         Get all DPRs pending approval for a specific role.
-        
+
         **Endpoint:** GET /api/dpr/pending_approval/?role=Team Leader
-        
+
         Returns DPRs that are waiting for approval from the specified role.
         """
-        role = request.query_params.get('role', None)
-        
+        role = request.query_params.get('role', None).strip() if request.query_params.get('role') else None
+
         if not role:
             return Response(
                 {'error': 'Role parameter is required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
+        cache_key = f"dpr_pending_approval:{role}"
+        data = cache.get(cache_key)
+        if data is not None:
+            return Response(data)
+
         # Map role to status
         role_status_map = {
             'Team Leader': DailyProgressReport.Status.PENDING_TEAM_LEAD,
             'Coordinator': DailyProgressReport.Status.PENDING_COORDINATOR,
             'PMC Head': DailyProgressReport.Status.PENDING_PMC_HEAD,
         }
-        
+
         if role not in role_status_map:
             return Response(
                 {'error': f'Invalid role. Must be one of: {", ".join(role_status_map.keys())}'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         # Get DPRs pending for the specified role
         queryset = DailyProgressReport.objects.filter(
             status=role_status_map[role]
         ).order_by('-report_date', '-created_at')
-        
+
         serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data)
+        data = serializer.data
+        cache.set(cache_key, data, 300)  # 5 minutes
+        return Response(data)
 
     @swagger_auto_schema(
         operation_description="Get rejected DPRs for a specific role",
@@ -515,24 +598,31 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
     def rejected(self, request):
         """
         Get all rejected DPRs that need to be reviewed by a specific role.
-        
+
         **Endpoint:** GET /api/dpr/rejected/?role=Team Leader
-        
+
         When a DPR is rejected by a higher role, it's sent back to all lower roles.
         This endpoint returns DPRs that were rejected and need review by the specified role.
         """
-        role = request.query_params.get('role', None)
-        
+        role = request.query_params.get('role', None).strip() if request.query_params.get('role') else None
+
         if not role:
             return Response(
                 {'error': 'Role parameter is required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
+        cache_key = f"dpr_rejected:{role}"
+        data = cache.get(cache_key)
+        if data is not None:
+            return Response(data)
+
         # Get all rejected DPRs
         queryset = DailyProgressReport.objects.filter(
             status=DailyProgressReport.Status.REJECTED
         ).order_by('-report_date', '-created_at')
-        
+
         serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data)
+        data = serializer.data
+        cache.set(cache_key, data, 300)  # 5 minutes
+        return Response(data)

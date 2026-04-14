@@ -4,13 +4,15 @@ Cumulative fields are computed after save via ProjectEquipment.recalculate_cumul
 """
 
 from datetime import date, datetime
+from functools import lru_cache
 
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from rest_framework import serializers
 
 from .models import ProjectEquipment
 
 
+@lru_cache(maxsize=128)
 def parse_month_to_first_day(value) -> date:
     """
     Accept Jan-23, Jan-2023, 2023-01-15, 2023-01 → first day of that month.
@@ -63,29 +65,19 @@ class ProjectEquipmentInputSerializer(serializers.ModelSerializer):
         if not attrs["project_name"]:
             raise serializers.ValidationError({"project_name": "This field may not be blank."})
         attrs["month"] = parse_month_to_first_day(attrs["month"])
-        if ProjectEquipment.objects.filter(
-            project_name=attrs["project_name"], month=attrs["month"]
-        ).exists():
-            raise serializers.ValidationError(
-                {
-                    "month": "This month already exists for this project. "
-                    "Each project may have only one row per month."
-                }
-            )
         return attrs
 
     def create(self, validated_data):
-        validated_data.setdefault("planned_cumulative", 0)
-        validated_data.setdefault("actual_cumulative", 0)
         try:
-            instance = ProjectEquipment.objects.create(**validated_data)
+            with transaction.atomic():
+                instance = ProjectEquipment.objects.create(**validated_data)
+                ProjectEquipment.recalculate_cumulatives(validated_data["project_name"])
+                instance.refresh_from_db()
+                return instance
         except IntegrityError:
             raise serializers.ValidationError(
-                {"month": "This month already exists for this project."}
+                {"month": "This month already exists for this project. Each project may have only one row per month."}
             )
-        ProjectEquipment.recalculate_cumulatives(validated_data["project_name"])
-        instance.refresh_from_db()
-        return instance
 
 
 class ProjectEquipmentSerializer(serializers.ModelSerializer):
