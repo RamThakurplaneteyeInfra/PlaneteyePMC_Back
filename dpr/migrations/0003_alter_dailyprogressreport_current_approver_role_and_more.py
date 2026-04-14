@@ -3,6 +3,25 @@
 import django.core.validators
 from django.conf import settings
 from django.db import migrations, models
+from django.db.models import Count
+
+
+def remove_duplicates(apps, schema_editor):
+    DPR = apps.get_model('dpr', 'DailyProgressReport')
+
+    duplicates = (
+        DPR.objects
+        .values('project_name', 'report_date')
+        .annotate(count=Count('id'))
+        .filter(count__gt=1)
+    )
+
+    for item in duplicates:
+        qs = DPR.objects.filter(
+            project_name=item['project_name'],
+            report_date=item['report_date']
+        )
+        qs.exclude(id=qs.first().id).delete()
 
 
 class Migration(migrations.Migration):
@@ -13,6 +32,10 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        # 🔥 STEP 1: REMOVE DUPLICATES FIRST
+        migrations.RunPython(remove_duplicates),
+
+        # Existing operations
         migrations.AlterField(
             model_name='dailyprogressreport',
             name='current_approver_role',
@@ -26,19 +49,49 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='dailyprogressreport',
             name='status',
-            field=models.CharField(choices=[('draft', 'Draft'), ('pending_team_lead', 'Pending Team Lead Approval'), ('pending_coordinator', 'Pending Coordinator Approval'), ('pending_pmc_head', 'Pending PMC Head Approval'), ('approved', 'Approved'), ('rejected', 'Rejected')], db_index=True, default='draft', help_text='Current approval status of the DPR', max_length=25),
+            field=models.CharField(
+                choices=[
+                    ('draft', 'Draft'),
+                    ('pending_team_lead', 'Pending Team Lead Approval'),
+                    ('pending_coordinator', 'Pending Coordinator Approval'),
+                    ('pending_pmc_head', 'Pending PMC Head Approval'),
+                    ('approved', 'Approved'),
+                    ('rejected', 'Rejected')
+                ],
+                db_index=True,
+                default='draft',
+                help_text='Current approval status of the DPR',
+                max_length=25
+            ),
         ),
         migrations.AlterField(
             model_name='dpractivity',
             name='target_achieved',
-            field=models.DecimalField(decimal_places=2, default=0.0, help_text='Target achieved percentage (0-100)', max_digits=5, validators=[django.core.validators.MinValueValidator(0.0), django.core.validators.MaxValueValidator(100.0)]),
+            field=models.DecimalField(
+                decimal_places=2,
+                default=0.0,
+                help_text='Target achieved percentage (0-100)',
+                max_digits=5,
+                validators=[
+                    django.core.validators.MinValueValidator(0.0),
+                    django.core.validators.MaxValueValidator(100.0)
+                ]
+            ),
         ),
         migrations.AddIndex(
             model_name='dailyprogressreport',
-            index=models.Index(fields=['status', 'current_approver_role'], name='dpr_dailypr_status_ac4a48_idx'),
+            index=models.Index(
+                fields=['status', 'current_approver_role'],
+                name='dpr_dailypr_status_ac4a48_idx'
+            ),
         ),
+
+        # 🔥 STEP 2: ADD CONSTRAINT AFTER CLEANUP
         migrations.AddConstraint(
             model_name='dailyprogressreport',
-            constraint=models.UniqueConstraint(fields=('project_name', 'report_date'), name='unique_project_date_dpr'),
+            constraint=models.UniqueConstraint(
+                fields=('project_name', 'report_date'),
+                name='unique_project_date_dpr'
+            ),
         ),
     ]
