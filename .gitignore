@@ -44,3 +44,10 @@ ENV/
 # OS
 .DS_Store
 Thumbs.db
+
+# Django static files
+static/
+staticfiles/
+
+# Markdown files
+*.md

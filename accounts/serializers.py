@@ -27,7 +27,7 @@ class UserSerializer(serializers.ModelSerializer):
     site_engineer_type = serializers.SerializerMethodField()
     
     # Profile information
-    profile = UserProfileSerializer(read_only=True)
+    profile = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -66,5 +66,13 @@ class UserSerializer(serializers.ModelSerializer):
             if profile.site_engineer_type:
                 return profile.get_site_engineer_type_display()
             return None
+        except UserProfile.DoesNotExist:
+            return None
+
+    def get_profile(self, obj):
+        """Get profile data, or None if no profile"""
+        try:
+            profile = obj.profile
+            return UserProfileSerializer(profile).data
         except UserProfile.DoesNotExist:
             return None

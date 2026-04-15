@@ -133,6 +133,11 @@ services:
          fromDatabase:
            name: pmc-redis
            property: connectionString
+       - key: BASE_URL
+         fromService:
+           type: web
+           name: pmc-backend
+           property: host
 
 databases:
   - name: pmc-db

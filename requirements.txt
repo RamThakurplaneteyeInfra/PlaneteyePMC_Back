@@ -10,6 +10,7 @@ dj-database-url
 whitenoise
 celery>=5.3.0
 redis>=4.5.0
+django-redis>=5.4.0
 channels>=4.0.0
 channels-redis>=4.2.0
 daphne>=4.0.0

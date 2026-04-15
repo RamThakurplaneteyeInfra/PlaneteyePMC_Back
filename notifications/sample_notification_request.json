@@ -1,0 +1,37 @@
+// Project Created Notification
+POST /api/notifications/project-created/
+{
+  "project_id": 456
+}
+
+// Team Lead Assigned Notification
+POST /api/notifications/team-lead-assigned/
+{
+  "project_id": 456,
+  "user_id": 123
+}
+
+// Site Engineer Assigned Notification
+POST /api/notifications/site-engineer-assigned/
+{
+  "project_id": 456,
+  "user_id": 123
+}
+
+// DPR Submitted Notification
+POST /api/notifications/dpr-submitted/
+{
+  "dpr_id": 123
+}
+
+// DPR Approved Notification
+POST /api/notifications/dpr-approved/
+{
+  "dpr_id": 123
+}
+
+// DPR Rejected Notification
+POST /api/notifications/dpr-rejected/
+{
+  "dpr_id": 123
+}

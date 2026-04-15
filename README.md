@@ -10,19 +10,19 @@ http://127.0.0.1:8000
 
 ## Authentication
 
-### JWT Token Endpoints
+### Basic Authentication
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/token/` | POST | Obtain JWT access token |
-| `/api/token/refresh/` | POST | Refresh JWT access token |
+The API uses HTTP Basic Authentication. Include the `Authorization` header with `Basic <base64-encoded-username:password>` in all authenticated requests.
 
-**Obtain Token Request:**
-```json
-{
-  "username": "your_username",
-  "password": "your_password"
-}
+**Example using curl:**
+```bash
+curl -u username:password https://api.example.com/endpoint/
+```
+
+**Example using Python requests:**
+```python
+import requests
+response = requests.get('https://api.example.com/endpoint/', auth=('username', 'password'))
 ```
 
 ---

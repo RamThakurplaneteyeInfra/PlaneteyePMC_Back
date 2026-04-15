@@ -20,14 +20,7 @@ class DPRActivitySerializer(serializers.ModelSerializer):
             'remarks'
         ]
 
-    def validate_target_achieved(self, value):
-        """
-        Validate that target_achieved is between 0 and 100
-        This is also handled at model level, but adding here for API clarity
-        """
-        if value < 0 or value > 100:
-            raise serializers.ValidationError("Target achieved must be between 0 and 100.")
-        return value
+
 
 
 class DailyProgressReportSerializer(serializers.ModelSerializer):
@@ -81,33 +74,9 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
         """
         return validated_data.pop('activities', [])
 
-    def validate_project_name(self, value):
-        """
-        Normalize project_name by stripping whitespace
-        """
-        if value:
-            return value.strip()
-        return value
 
-    def validate(self, attrs):
-        """
-        Additional validation for the entire DPR object
-        """
-        # Validate activities if present
-        if 'activities' in attrs and attrs['activities']:
-            for idx, activity in enumerate(attrs['activities']):
-                # Validate required fields in activities
-                if 'date' not in activity or not activity['date']:
-                    raise serializers.ValidationError({
-                        'activities': {idx: {'date': 'Date is required for each activity.'}}
-                    })
-                if 'activity' not in activity or not activity['activity']:
-                    raise serializers.ValidationError({
-                        'activities': {idx: {'activity': 'Activity description is required.'}}
-                    })
-                # target_achieved is validated by DPRActivitySerializer
-        
-        return attrs
+
+
 
     def create(self, validated_data):
         """

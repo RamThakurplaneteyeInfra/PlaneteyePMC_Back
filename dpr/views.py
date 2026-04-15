@@ -4,14 +4,59 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from rest_framework.pagination import PageNumberPagination
 from django.core.cache import cache
+from django.core.exceptions import ObjectDoesNotExist, MultipleObjectsReturned
+from django.db import transaction
 from django.db.models import Q
 from django.utils.dateparse import parse_date
 from django.utils import timezone
+from django.contrib.auth.models import User, AnonymousUser
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 from .models import DailyProgressReport, DPRActivity
+from projects.models import Project
 from .serializers import DailyProgressReportSerializer, DPRActivitySerializer
-from services.notifications import notify_dpr_submitted, notify_dpr_approved, notify_dpr_rejected
+from services.notifications import notify_dpr_submitted, notify_dpr_approved, notify_dpr_rejected, notify_dpr_approved_by_role, notify_dpr_rejected_by_role
+
+
+def get_user_for_dpr_action(request, action=None, dpr=None):
+    """
+    Helper function to get appropriate user for DPR actions.
+    If authenticated user exists, use it. Otherwise, use appropriate test user for the action.
+    Used for testing purposes when DEFAULT_PERMISSION_CLASSES allows unauthenticated access.
+
+    Args:
+        request: The HTTP request object
+        action: The action being performed (submit, approve_team_lead, etc.)
+        dpr: The DPR object (needed for rejection to determine who should reject)
+    """
+    if request.user and not isinstance(request.user, AnonymousUser):
+        return request.user
+
+    # For unauthenticated requests, use appropriate test users
+    if action == 'reject' and dpr:
+        # For rejection, determine who should reject based on DPR status
+        if dpr.status == DailyProgressReport.Status.PENDING_TEAM_LEAD:
+            username = 'pmc_tl'  # Team Lead rejects
+        elif dpr.status == DailyProgressReport.Status.PENDING_COORDINATOR:
+            username = 'pmc_coordinator'  # Coordinator rejects
+        elif dpr.status == DailyProgressReport.Status.PENDING_PMC_HEAD:
+            username = 'pmc_head'  # PMC Head rejects
+        else:
+            username = 'pmc_head'  # Default
+    else:
+        test_users_map = {
+            'submit': 'pmc_se',      # Site Engineer submits
+            'approve_team_lead': 'pmc_tl',      # Team Lead approves
+            'approve_coordinator': 'pmc_coordinator',  # Coordinator approves
+            'approve_pmc_head': 'pmc_head',    # PMC Head approves
+        }
+        username = test_users_map.get(action, 'pmc_se')  # Default to site engineer
+
+    try:
+        return User.objects.get(username=username)
+    except User.DoesNotExist:
+        # Fallback to first available user
+        return User.objects.first()
 
 
 class DailyProgressReportViewSet(viewsets.ModelViewSet):
@@ -290,53 +335,154 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     @swagger_auto_schema(
-        operation_description="Submit DPR for approval",
+        operation_description="Submit DPR for approval with optional activities",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
             properties={
-                'role': openapi.Schema(type=openapi.TYPE_STRING, description='Role of the user submitting (Site Engineer, Billing Site Engineer, QAQC Site Engineer)')
+                'role': openapi.Schema(type=openapi.TYPE_STRING, description='Role of the submitter (Site Engineer)'),
+                'activities': openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=openapi.Schema(
+                        type=openapi.TYPE_OBJECT,
+                        properties={
+                            'date': openapi.Schema(type=openapi.TYPE_STRING, format='date'),
+                            'activity': openapi.Schema(type=openapi.TYPE_STRING),
+                            'deliverables': openapi.Schema(type=openapi.TYPE_STRING),
+                            'target_achieved': openapi.Schema(type=openapi.TYPE_NUMBER),
+                            'next_day_plan': openapi.Schema(type=openapi.TYPE_STRING),
+                            'remarks': openapi.Schema(type=openapi.TYPE_STRING)
+                        }
+                    ),
+                    description='Optional list of activities to add/update'
+                )
             }
         ),
-        responses={200: DailyProgressReportSerializer}
+        responses={200: DailyProgressReportSerializer, 400: 'Validation Error'}
     )
     @action(detail=True, methods=['post'])
     def submit(self, request, pk=None):
         """
         Submit DPR for approval workflow.
-        
+
         **Endpoint:** POST /api/dpr/{id}/submit/
-        
+
         Submits the DPR to the approval workflow.
         Site Engineer submits -> goes to Team Lead
+
+        Optionally accepts activities to add/update before submission.
         """
         dpr = self.get_object()
+
+        # FIXED: Safe project lookup using ID
+        project_id = request.data.get('project')
+        if project_id is not None:
+            try:
+                # Use pk/id for unique lookup instead of name
+                project = Project.objects.get(pk=project_id)
+                # Use project as needed (e.g., validation, logging, etc.)
+                # For example: validate dpr.project_name matches project.name
+            except ObjectDoesNotExist:
+                return Response(
+                    {'error': f'Project with id {project_id} not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            except MultipleObjectsReturned:
+                # This shouldn't happen with pk lookup, but handle it
+                return Response(
+                    {'error': 'Multiple projects found with the same id (data corruption)'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            except ValueError:
+                return Response(
+                    {'error': 'Invalid project id format'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         role = request.data.get('role', 'Site Engineer')
-        
+        activities_data = request.data.get('activities', [])
+
         # Only allow submission from draft or rejected status
         if dpr.status not in [DailyProgressReport.Status.DRAFT, DailyProgressReport.Status.REJECTED]:
             return Response(
                 {'error': 'DPR can only be submitted from draft or rejected status'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        # Update DPR status and submitter
-        dpr.status = DailyProgressReport.Status.PENDING_TEAM_LEAD
-        dpr.submitted_by = request.user
-        dpr.current_approver_role = 'Team Leader'
-        dpr.rejection_reason = ''  # Clear rejection reason on resubmission
-        dpr.rejected_by = None
-        dpr.save()
 
-        # Send notification
-        notify_dpr_submitted(dpr)
+        try:
+            with transaction.atomic():
+                # Handle activities if provided
+                if activities_data:
+                    # Validate activities data structure
+                    if not isinstance(activities_data, list):
+                        return Response(
+                            {'error': 'activities must be a list'},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
 
-        # Cache invalidation
-        cache.delete_pattern("dpr_list:*")
-        cache.delete_pattern("dpr_pending_approval:*")
-        cache.delete_pattern("dpr_rejected:*")
+                    # Process each activity
+                    activities_to_create = []
+                    validation_errors = []
 
-        serializer = self.get_serializer(dpr)
-        return Response(serializer.data)
+                    for idx, act_data in enumerate(activities_data):
+                        try:
+                            # Validate required fields
+                            if not act_data.get('date'):
+                                validation_errors.append(f'activities[{idx}]: date is required')
+                                continue
+                            if not act_data.get('activity'):
+                                validation_errors.append(f'activities[{idx}]: activity description is required')
+                                continue
+
+                            # Create activity object (will be bulk created)
+                            activity = DPRActivity(
+                                dpr=dpr,
+                                date=act_data['date'],
+                                activity=act_data['activity'],
+                                deliverables=act_data.get('deliverables', ''),
+                                target_achieved=act_data.get('target_achieved', 0.00),
+                                next_day_plan=act_data.get('next_day_plan', ''),
+                                remarks=act_data.get('remarks', '')
+                            )
+                            activities_to_create.append(activity)
+
+                        except Exception as e:
+                            validation_errors.append(f'activities[{idx}]: {str(e)}')
+
+                    # Return validation errors if any
+                    if validation_errors:
+                        return Response(
+                            {'error': 'Validation failed', 'details': validation_errors},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+
+                    # Bulk create activities
+                    if activities_to_create:
+                        DPRActivity.objects.bulk_create(activities_to_create)
+
+                # Update DPR status and submitter
+                dpr.status = DailyProgressReport.Status.PENDING_TEAM_LEAD
+                dpr.submitted_by = get_user_for_dpr_action(request, 'submit')
+                dpr.current_approver_role = 'Team Leader'
+                dpr.rejection_reason = ''  # Clear rejection reason on resubmission
+                dpr.rejected_by = None
+                dpr.save()
+
+                # Send notification
+                notify_dpr_submitted(dpr)
+
+                # Cache invalidation
+                cache.delete_pattern("dpr_list:*")
+                cache.delete_pattern("dpr_pending_approval:*")
+                cache.delete_pattern("dpr_rejected:*")
+
+                serializer = self.get_serializer(dpr)
+                return Response(serializer.data, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response(
+                {'error': f'Submission failed: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     @swagger_auto_schema(
         operation_description="Team Lead approves DPR",
@@ -367,6 +513,12 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         dpr.status = DailyProgressReport.Status.PENDING_COORDINATOR
         dpr.current_approver_role = 'Coordinator'
         dpr.save()
+
+        # Send approval notification to submitter (Site Engineer)
+        notify_dpr_approved_by_role(dpr, 'Team Leader')
+
+        # Send submission notification to next approver (Coordinator)
+        notify_dpr_submitted(dpr)
 
         # Cache invalidation
         cache.delete_pattern("dpr_list:*")
@@ -406,6 +558,12 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         dpr.current_approver_role = 'PMC Head'
         dpr.save()
 
+        # Send approval notification to Team Lead and Site Engineer
+        notify_dpr_approved_by_role(dpr, 'Coordinator')
+
+        # Send submission notification to next approver (PMC Head)
+        notify_dpr_submitted(dpr)
+
         # Cache invalidation
         cache.delete_pattern("dpr_list:*")
         cache.delete_pattern("dpr_pending_approval:*")
@@ -441,13 +599,13 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         
         # Update DPR status to approved
         dpr.status = DailyProgressReport.Status.APPROVED
-        dpr.approved_by = request.user
+        dpr.approved_by = get_user_for_dpr_action(request, 'approve_pmc_head')
         dpr.approved_at = timezone.now()
         dpr.current_approver_role = ''
         dpr.save()
 
-        # Send notification
-        notify_dpr_approved(dpr)
+        # Send final approval notification to Coordinator, Team Lead, and Site Engineer
+        notify_dpr_approved_by_role(dpr, 'PMC Head')
 
         # Cache invalidation
         cache.delete_pattern("dpr_list:*")
@@ -489,31 +647,36 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
             )
         
         # Determine which role is rejecting and set appropriate status
+        rejected_by_role = None
         if dpr.status == DailyProgressReport.Status.PENDING_TEAM_LEAD:
             # Team Lead rejects -> send back to Site Engineer
             dpr.status = DailyProgressReport.Status.REJECTED
             dpr.current_approver_role = ''
+            rejected_by_role = 'Team Leader'
         elif dpr.status == DailyProgressReport.Status.PENDING_COORDINATOR:
             # Coordinator rejects -> send back to Team Lead and Site Engineer
             dpr.status = DailyProgressReport.Status.REJECTED
             dpr.current_approver_role = ''
+            rejected_by_role = 'Coordinator'
         elif dpr.status == DailyProgressReport.Status.PENDING_PMC_HEAD:
             # PMC Head rejects -> send back to Coordinator, Team Lead, and Site Engineer
             dpr.status = DailyProgressReport.Status.REJECTED
             dpr.current_approver_role = ''
+            rejected_by_role = 'PMC Head'
         else:
             return Response(
                 {'error': 'DPR is not in a rejectable status'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         # Update rejection details
         dpr.rejection_reason = rejection_reason
-        dpr.rejected_by = request.user
+        dpr.rejected_by = get_user_for_dpr_action(request, 'reject', dpr)
         dpr.save()
 
-        # Send notification
-        notify_dpr_rejected(dpr)
+        # Send rejection notification to appropriate recipients
+        if rejected_by_role:
+            notify_dpr_rejected_by_role(dpr, rejected_by_role)
 
         # Cache invalidation
         cache.delete_pattern("dpr_list:*")

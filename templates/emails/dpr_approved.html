@@ -14,23 +14,30 @@
 <body>
     <div class="container">
         <div class="header">
+            <!-- <img src="{{ base_url|default:'http://localhost:8000' }}/static/images/logo.png" alt="Company Logo" style="max-width: 200px; height: auto; margin-bottom: 10px;"> -->
             <h1>DPR Approved</h1>
         </div>
         <div class="content">
-            <p>Dear {{ submitter.get_full_name|default:submitter.username }},</p>
+            <p>Dear User,</p>
 
-            <p>Your Daily Progress Report has been approved:</p>
+            <p>Your Daily Progress Report has been approved by the {{ approved_by_role }}:</p>
 
             <ul>
                 <li><strong>Project Name:</strong> {{ dpr.project_name }}</li>
                 <li><strong>Report Date:</strong> {{ dpr.report_date|date:"F j, Y" }}</li>
                 <li><strong>Job No:</strong> {{ dpr.job_no }}</li>
-                <li><strong>Status:</strong> Approved</li>
-                <li><strong>Approved By:</strong> {{ dpr.approved_by.get_full_name|default:dpr.approved_by.username }}</li>
+                <li><strong>Status:</strong> Approved by {{ approved_by_role }}</li>
+                <li><strong>Approved By:</strong> {% if dpr.approved_by %}{{ dpr.approved_by.get_full_name|default:dpr.approved_by.username }}{% else %}Unknown User{% endif %}</li>
                 <li><strong>Approved At:</strong> {{ dpr.approved_at|date:"F j, Y H:i" }}</li>
             </ul>
 
-            <p>The DPR is now finalized and archived.</p>
+            {% if approved_by_role == 'Team Leader' %}
+                <p>Your DPR has been approved by the Team Lead and is now being reviewed by the Coordinator.</p>
+            {% elif approved_by_role == 'Coordinator' %}
+                <p>Your DPR has been approved by the Coordinator and is now being reviewed by the PMC Head.</p>
+            {% elif approved_by_role == 'PMC Head' %}
+                <p>Your DPR has been finally approved by the PMC Head. The approval process is now complete.</p>
+            {% endif %}
 
             <p>Best regards,<br>
             PMC System</p>

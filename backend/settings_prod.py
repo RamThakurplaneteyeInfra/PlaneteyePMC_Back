@@ -12,13 +12,26 @@ DEBUG = False
 ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '*').split(',')
 
 # DATABASE (Render PostgreSQL)
-DATABASES = {
-    'default': dj_database_url.parse(
-        os.environ.get('DATABASE_URL'),
-        conn_max_age=600,
-        ssl_require=True
-    )
-}
+if os.environ.get('DATABASE_URL'):
+    DATABASES = {
+        'default': dj_database_url.parse(
+            os.environ.get('DATABASE_URL'),
+            conn_max_age=600,
+            ssl_require=True
+        )
+    }
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('DB_NAME'),
+            'USER': os.environ.get('DB_USER'),
+            'PASSWORD': os.environ.get('DB_PASSWORD'),
+            'HOST': os.environ.get('DB_HOST'),
+            'PORT': os.environ.get('DB_PORT'),
+            'OPTIONS': {'sslmode': 'require'} if os.environ.get('DB_SSL', 'true').lower() == 'true' else {},
+        }
+    }
 
 # ================= STATIC FILES (FIXED FOR RENDER) =================
 STATIC_URL = '/static/'
@@ -46,7 +59,7 @@ SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = 'DENY'
 
 # ================= CORS =================
-CORS_ALLOW_ALL_ORIGINS = True   # allow frontend temporarily
+CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
 
 # ================= LOGGING =================

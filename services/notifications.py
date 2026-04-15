@@ -1,8 +1,9 @@
 from django.utils import timezone
-from backend.tasks import send_notification_email
+from backend.tasks import send_notification_email, send_html_email
 from notifications.utils import send_websocket_notification, create_notification_message
 from projects.models import Project
 from accounts.models import UserProfile
+from django.conf import settings
 import logging
 
 logger = logging.getLogger(__name__)
@@ -107,6 +108,73 @@ def notify_project_assigned(project, assigned_user):
     send_websocket_notification(assigned_user.id, ws_message)
 
 
+def notify_site_engineer_assigned(project, assigned_user):
+    """
+    Send notification to all site engineers when any site engineer is assigned to a project.
+
+    Args:
+        project (Project): The project instance
+        assigned_user (User): The site engineer who was assigned
+    """
+    # Collect all site engineers for the project
+    site_engineers = []
+
+    # Add specific site engineer types if assigned
+    if project.billing_site_engineer and project.billing_site_engineer.email:
+        site_engineers.append(project.billing_site_engineer)
+    if project.qaqc_site_engineer and project.qaqc_site_engineer.email:
+        site_engineers.append(project.qaqc_site_engineer)
+
+    # Add general site engineers (excluding the specific ones to avoid duplicates)
+    specific_ids = {se.id for se in site_engineers}
+    for se in project.site_engineers.all():
+        if se.email and se.id not in specific_ids:
+            site_engineers.append(se)
+
+    if not site_engineers:
+        logger.warning(f"No site engineers with email addresses found for project '{project.name}'")
+        return
+
+    recipient_emails = [se.email for se in site_engineers]
+
+    context = {
+        'assigned_user': {
+            'username': assigned_user.username,
+            'get_full_name': assigned_user.get_full_name(),
+        },
+        'project': {
+            'name': project.name,
+            'client_name': project.client_name,
+            'location': project.location,
+            'description': project.description,
+        },
+        'assignment_date': timezone.now().isoformat(),
+        'all_site_engineers': [{
+            'username': se.username,
+            'get_full_name': se.get_full_name(),
+        } for se in site_engineers]
+    }
+
+    send_notification_email.delay(
+        subject=f"Site Engineer Assigned: {project.name}",
+        template_name='site_engineer_assigned',
+        context=context,
+        recipient_list=recipient_emails
+    )
+
+    # Send WebSocket notifications to all site engineers
+    for se in site_engineers:
+        ws_message = create_notification_message(
+            'site_engineer_assigned',
+            f'Site Engineer Assigned: {project.name}',
+            f'{assigned_user.get_full_name()} has been assigned as a site engineer to project "{project.name}".',
+            {'project_id': project.id, 'project_name': project.name, 'assigned_user': assigned_user.username}
+        )
+        send_websocket_notification(se.id, ws_message)
+
+    logger.info(f"Site engineer assignment notification sent to {len(site_engineers)} site engineers for project '{project.name}': {recipient_emails}")
+
+
 def _get_project_approvers(project, approver_role):
     """
     Get users who should approve based on the role and project.
@@ -133,15 +201,15 @@ def _get_project_approvers(project, approver_role):
 
 def notify_dpr_submitted(dpr):
     """
-    Send notification when a DPR is submitted for approval.
+    Send notification when a DPR is submitted for approval to the next approver.
 
     Args:
         dpr (DailyProgressReport): The DPR instance
     """
     # Find the project by name (since DPR uses project_name as string)
-    try:
-        project = Project.objects.get(name=dpr.project_name)
-    except Project.DoesNotExist:
+    # Use filter().first() to handle multiple projects gracefully
+    project = Project.objects.filter(name=dpr.project_name).first()
+    if not project:
         logger.error(f"Project '{dpr.project_name}' not found for DPR {dpr.id}")
         return
 
@@ -162,9 +230,9 @@ def notify_dpr_submitted(dpr):
             'issued_by': dpr.issued_by,
             'designation': dpr.designation,
             'submitted_by': {
-                'username': dpr.submitted_by.username,
-                'get_full_name': dpr.submitted_by.get_full_name(),
-            }
+                'username': dpr.submitted_by.username if dpr.submitted_by else 'Unknown',
+                'get_full_name': dpr.submitted_by.get_full_name() if dpr.submitted_by else 'Unknown User',
+            } if dpr.submitted_by else None,
         },
         'project': {
             'name': project.name,
@@ -195,6 +263,182 @@ def notify_dpr_submitted(dpr):
         send_websocket_notification(approver.id, ws_message)
 
 
+def notify_dpr_approved_by_role(dpr, approved_by_role):
+    """
+    Send approval notification to appropriate recipients based on who approved it.
+
+    Args:
+        dpr (DailyProgressReport): The DPR instance
+        approved_by_role (str): The role that approved ('Team Leader', 'Coordinator', 'PMC Head')
+    """
+    # Find the project
+    project = Project.objects.filter(name=dpr.project_name).first()
+    if not project:
+        logger.error(f"Project '{dpr.project_name}' not found for DPR {dpr.id}")
+        return
+
+    recipients = []
+
+    if approved_by_role == 'Team Leader':
+        # Team Lead approved → Send to Site Engineer (submitter)
+        if dpr.submitted_by and dpr.submitted_by.email:
+            recipients.append(dpr.submitted_by)
+
+    elif approved_by_role == 'Coordinator':
+        # Coordinator approved → Send to Team Lead and Site Engineer
+        team_leads = _get_project_approvers(project, 'Team Leader')
+        recipients.extend(team_leads)
+        if dpr.submitted_by and dpr.submitted_by.email:
+            recipients.append(dpr.submitted_by)
+
+    elif approved_by_role == 'PMC Head':
+        # PMC Head approved → Send to Coordinator, Team Lead, and Site Engineer
+        coordinators = _get_project_approvers(project, 'Coordinator')
+        team_leads = _get_project_approvers(project, 'Team Leader')
+        recipients.extend(coordinators)
+        recipients.extend(team_leads)
+        if dpr.submitted_by and dpr.submitted_by.email:
+            recipients.append(dpr.submitted_by)
+
+    # Remove duplicates
+    recipients = list(set(recipients))
+    recipient_emails = [user.email for user in recipients if user.email]
+
+    if not recipient_emails:
+        logger.warning(f"No recipients found for DPR approval notification (approved by {approved_by_role})")
+        return
+
+    context = {
+        'dpr': {
+            'project_name': dpr.project_name,
+            'report_date': dpr.report_date.isoformat(),
+            'job_no': dpr.job_no,
+            'status': 'Approved',
+            'approved_at': dpr.approved_at.isoformat() if dpr.approved_at else None,
+            'approved_by': {
+                'username': dpr.approved_by.username if dpr.approved_by else 'Unknown',
+                'get_full_name': dpr.approved_by.get_full_name() if dpr.approved_by else 'Unknown User',
+            } if dpr.approved_by else None,
+        },
+        'project': {
+            'name': project.name,
+        },
+        'submitter': {
+            'username': dpr.submitted_by.username if dpr.submitted_by else 'Unknown',
+            'get_full_name': dpr.submitted_by.get_full_name() if dpr.submitted_by else 'Unknown User',
+        },
+        'approved_by_role': approved_by_role,
+    }
+
+    send_notification_email.delay(
+        subject=f"DPR Approved by {approved_by_role}: {dpr.project_name} - {dpr.report_date}",
+        template_name='dpr_approved',
+        context=context,
+        recipient_list=recipient_emails
+    )
+
+    # Send WebSocket notifications
+    for recipient in recipients:
+        if recipient.email in recipient_emails:
+            ws_message = create_notification_message(
+                'dpr_approved',
+                f'DPR Approved: {dpr.project_name}',
+                f'DPR has been approved by {approved_by_role}.',
+                {'dpr_id': dpr.id, 'project_name': dpr.project_name, 'approved_by': approved_by_role}
+            )
+            send_websocket_notification(recipient.id, ws_message)
+
+    logger.info(f"DPR approval notification sent to {len(recipients)} recipients (approved by {approved_by_role})")
+
+
+def notify_dpr_rejected_by_role(dpr, rejected_by_role):
+    """
+    Send rejection notification to appropriate recipients based on who rejected it.
+
+    Args:
+        dpr (DailyProgressReport): The DPR instance
+        rejected_by_role (str): The role that rejected ('Team Leader', 'Coordinator', 'PMC Head')
+    """
+    # Find the project
+    project = Project.objects.filter(name=dpr.project_name).first()
+    if not project:
+        logger.error(f"Project '{dpr.project_name}' not found for DPR {dpr.id}")
+        return
+
+    recipients = []
+
+    if rejected_by_role == 'Team Leader':
+        # Team Lead rejected → Send to Site Engineer (submitter)
+        if dpr.submitted_by and dpr.submitted_by.email:
+            recipients.append(dpr.submitted_by)
+
+    elif rejected_by_role == 'Coordinator':
+        # Coordinator rejected → Send to Team Lead and Site Engineer
+        team_leads = _get_project_approvers(project, 'Team Leader')
+        recipients.extend(team_leads)
+        if dpr.submitted_by and dpr.submitted_by.email:
+            recipients.append(dpr.submitted_by)
+
+    elif rejected_by_role == 'PMC Head':
+        # PMC Head rejected → Send to Coordinator, Team Lead, and Site Engineer
+        coordinators = _get_project_approvers(project, 'Coordinator')
+        team_leads = _get_project_approvers(project, 'Team Leader')
+        recipients.extend(coordinators)
+        recipients.extend(team_leads)
+        if dpr.submitted_by and dpr.submitted_by.email:
+            recipients.append(dpr.submitted_by)
+
+    # Remove duplicates
+    recipients = list(set(recipients))
+    recipient_emails = [user.email for user in recipients if user.email]
+
+    if not recipient_emails:
+        logger.warning(f"No recipients found for DPR rejection notification (rejected by {rejected_by_role})")
+        return
+
+    context = {
+        'dpr': {
+            'project_name': dpr.project_name,
+            'report_date': dpr.report_date.isoformat(),
+            'job_no': dpr.job_no,
+            'status': 'Rejected',
+            'rejection_reason': dpr.rejection_reason,
+            'rejected_by': {
+                'username': dpr.rejected_by.username if dpr.rejected_by else 'Unknown',
+                'get_full_name': dpr.rejected_by.get_full_name() if dpr.rejected_by else 'Unknown User',
+            } if dpr.rejected_by else None,
+        },
+        'project': {
+            'name': project.name,
+        },
+        'submitter': {
+            'username': dpr.submitted_by.username if dpr.submitted_by else 'Unknown',
+            'get_full_name': dpr.submitted_by.get_full_name() if dpr.submitted_by else 'Unknown User',
+        },
+        'rejected_by_role': rejected_by_role,
+    }
+
+    send_notification_email.delay(
+        subject=f"DPR Rejected by {rejected_by_role}: {dpr.project_name} - {dpr.report_date}",
+        template_name='dpr_rejected',
+        context=context,
+        recipient_list=recipient_emails
+    )
+
+    # Send WebSocket notifications
+    for recipient in recipients:
+        if recipient.email in recipient_emails:
+            ws_message = create_notification_message(
+                'dpr_rejected',
+                f'DPR Rejected: {dpr.project_name}',
+                f'DPR has been rejected by {rejected_by_role}. Please review the feedback.',
+                {'dpr_id': dpr.id, 'project_name': dpr.project_name, 'rejected_by': rejected_by_role, 'reason': dpr.rejection_reason}
+            )
+            send_websocket_notification(recipient.id, ws_message)
+
+    logger.info(f"DPR rejection notification sent to {len(recipients)} recipients (rejected by {rejected_by_role})")
+
+
 def notify_dpr_approved(dpr):
     """
     Send notification when a DPR is approved.
@@ -207,9 +451,8 @@ def notify_dpr_approved(dpr):
         return
 
     # Find the project
-    try:
-        project = Project.objects.get(name=dpr.project_name)
-    except Project.DoesNotExist:
+    project = Project.objects.filter(name=dpr.project_name).first()
+    if not project:
         logger.error(f"Project '{dpr.project_name}' not found for DPR {dpr.id}")
         return
 
@@ -219,18 +462,18 @@ def notify_dpr_approved(dpr):
             'report_date': dpr.report_date.isoformat(),
             'job_no': dpr.job_no,
             'status': 'Approved',
-            'approved_by': {
-                'username': dpr.approved_by.username,
-                'get_full_name': dpr.approved_by.get_full_name(),
-            },
             'approved_at': dpr.approved_at.isoformat() if dpr.approved_at else None,
+            'approved_by': {
+                'username': dpr.approved_by.username if dpr.approved_by else 'Unknown',
+                'get_full_name': dpr.approved_by.get_full_name() if dpr.approved_by else 'Unknown User',
+            } if dpr.approved_by else None,
         },
         'project': {
             'name': project.name,
         },
         'submitter': {
-            'username': dpr.submitted_by.username,
-            'get_full_name': dpr.submitted_by.get_full_name(),
+            'username': dpr.submitted_by.username if dpr.submitted_by else 'Unknown',
+            'get_full_name': dpr.submitted_by.get_full_name() if dpr.submitted_by else 'Unknown User',
         },
     }
 
@@ -263,9 +506,8 @@ def notify_dpr_rejected(dpr):
         return
 
     # Find the project
-    try:
-        project = Project.objects.get(name=dpr.project_name)
-    except Project.DoesNotExist:
+    project = Project.objects.filter(name=dpr.project_name).first()
+    if not project:
         logger.error(f"Project '{dpr.project_name}' not found for DPR {dpr.id}")
         return
 
@@ -275,18 +517,18 @@ def notify_dpr_rejected(dpr):
             'report_date': dpr.report_date.isoformat(),
             'job_no': dpr.job_no,
             'status': 'Rejected',
-            'rejected_by': {
-                'username': dpr.rejected_by.username,
-                'get_full_name': dpr.rejected_by.get_full_name(),
-            },
             'rejection_reason': dpr.rejection_reason,
+            'rejected_by': {
+                'username': dpr.rejected_by.username if dpr.rejected_by else 'Unknown',
+                'get_full_name': dpr.rejected_by.get_full_name() if dpr.rejected_by else 'Unknown User',
+            } if dpr.rejected_by else None,
         },
         'project': {
             'name': project.name,
         },
         'submitter': {
-            'username': dpr.submitted_by.username,
-            'get_full_name': dpr.submitted_by.get_full_name(),
+            'username': dpr.submitted_by.username if dpr.submitted_by else 'Unknown',
+            'get_full_name': dpr.submitted_by.get_full_name() if dpr.submitted_by else 'Unknown User',
         },
     }
 

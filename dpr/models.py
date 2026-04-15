@@ -89,9 +89,7 @@ class DailyProgressReport(models.Model):
             models.Index(fields=['-report_date']),
             models.Index(fields=['status', 'current_approver_role']),
         ]
-        constraints = [
-            models.UniqueConstraint(fields=['project_name', 'report_date'], name='unique_project_date_dpr'),
-        ]
+        constraints = []
 
     def save(self, *args, **kwargs):
         # Normalize project_name by stripping whitespace
@@ -121,8 +119,7 @@ class DPRActivity(models.Model):
         max_digits=5,
         decimal_places=2,
         default=0.00,
-        validators=[MinValueValidator(0.0), MaxValueValidator(100.0)],
-        help_text="Target achieved percentage (0-100)"
+        help_text="Target achieved percentage"
     )
     next_day_plan = models.TextField(blank=True, help_text="Plan for the next day")
     remarks = models.TextField(blank=True, help_text="Additional remarks")

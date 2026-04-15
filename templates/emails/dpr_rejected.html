@@ -15,19 +15,20 @@
 <body>
     <div class="container">
         <div class="header">
+            <!-- <img src="{{ base_url|default:'http://localhost:8000' }}/static/images/logo.png" alt="Company Logo" style="max-width: 200px; height: auto; margin-bottom: 10px;"> -->
             <h1>DPR Rejected</h1>
         </div>
         <div class="content">
-            <p>Dear {{ submitter.get_full_name|default:submitter.username }},</p>
+            <p>Dear User,</p>
 
-            <p>Your Daily Progress Report has been rejected:</p>
+            <p>Your Daily Progress Report has been rejected by the {{ rejected_by_role }}:</p>
 
             <ul>
                 <li><strong>Project Name:</strong> {{ dpr.project_name }}</li>
                 <li><strong>Report Date:</strong> {{ dpr.report_date|date:"F j, Y" }}</li>
                 <li><strong>Job No:</strong> {{ dpr.job_no }}</li>
-                <li><strong>Status:</strong> Rejected</li>
-                <li><strong>Rejected By:</strong> {{ dpr.rejected_by.get_full_name|default:dpr.rejected_by.username }}</li>
+                <li><strong>Status:</strong> Rejected by {{ rejected_by_role }}</li>
+                <li><strong>Rejected By:</strong> {% if dpr.rejected_by %}{{ dpr.rejected_by.get_full_name|default:dpr.rejected_by.username }}{% else %}Unknown User{% endif %}</li>
             </ul>
 
             <div class="rejection-reason">
@@ -35,7 +36,15 @@
                 <p>{{ dpr.rejection_reason|default:"No reason provided" }}</p>
             </div>
 
-            <p>Please review the feedback and resubmit the DPR with the necessary corrections.</p>
+            {% if rejected_by_role == 'Team Leader' %}
+                <p>Your DPR has been rejected by the Team Lead. Please review the feedback and resubmit the DPR for re-approval.</p>
+            {% elif rejected_by_role == 'Coordinator' %}
+                <p>Your DPR has been rejected by the Coordinator. It has been sent back to the Team Lead for review as well.</p>
+            {% elif rejected_by_role == 'PMC Head' %}
+                <p>Your DPR has been rejected by the PMC Head. It has been sent back to the Coordinator and Team Lead for review as well.</p>
+            {% endif %}
+
+            <p>Please make the necessary corrections and resubmit the DPR.</p>
 
             <p>Best regards,<br>
             PMC System</p>

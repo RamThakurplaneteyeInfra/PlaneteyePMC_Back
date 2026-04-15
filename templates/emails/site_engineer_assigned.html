@@ -2,11 +2,11 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Project Created Notification</title>
+    <title>Site Engineer Assignment Notification</title>
     <style>
         body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
         .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-        .header { background-color: #4CAF50; color: white; padding: 20px; text-align: center; }
+        .header { background-color: #2196F3; color: white; padding: 20px; text-align: center; }
         .content { padding: 20px; background-color: #f9f9f9; }
         .footer { background-color: #333; color: white; padding: 10px; text-align: center; font-size: 12px; }
     </style>
@@ -14,25 +14,29 @@
 <body>
     <div class="container">
         <div class="header">
-            <!-- <img src="{{ base_url|default:'http://localhost:8000' }}/static/images/logo.png" alt="Company Logo" style="max-width: 200px; height: auto; margin-bottom: 10px;"> -->
-            <h1>New Project Created</h1>
+            <h1>Site Engineer Assignment Notification</h1>
         </div>
         <div class="content">
-            <p>Dear User,</p>
+            <p>Dear Site Engineer,</p>
 
-            <p>A new project has been created in the PMC system:</p>
+            <p>A new site engineer has been assigned to the following project:</p>
 
             <ul>
                 <li><strong>Project Name:</strong> {{ project.name }}</li>
                 <li><strong>Client:</strong> {{ project.client_name|default:"N/A" }}</li>
                 <li><strong>Location:</strong> {{ project.location|default:"N/A" }}</li>
-                <li><strong>Description:</strong> {{ project.description|default:"N/A" }}</li>
-                <li><strong>Budget:</strong> ${{ project.budget|floatformat:2 }}</li>
-                <li><strong>Created By:</strong> {{ project.created_by.get_full_name|default:project.created_by.username }}</li>
-                <li><strong>Created At:</strong> {{ project.created_at|date:"F j, Y H:i" }}</li>
+                <li><strong>Assigned Engineer:</strong> {{ assigned_user.get_full_name|default:assigned_user.username }}</li>
+                <li><strong>Assignment Date:</strong> {{ assignment_date|date:"F j, Y" }}</li>
             </ul>
 
-            <p>You can now assign team members and start working on this project.</p>
+            <p>Please coordinate with the assigned engineer and ensure smooth project execution.</p>
+
+            <h3>All Site Engineers on this Project:</h3>
+            <ul>
+                {% for se in all_site_engineers %}
+                <li>{{ se.get_full_name|default:se.username }}</li>
+                {% endfor %}
+            </ul>
 
             <p>Best regards,<br>
             PMC System</p>

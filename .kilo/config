@@ -1,0 +1,10 @@
+# Kilo Configuration
+
+# Disable automatic triggering for DPR operations
+KILO_DISABLE_AUTO_TRIGGER=true
+
+# Skip image processing
+KILO_SKIP_IMAGES=true
+
+# Exclude DPR-related files from analysis
+KILO_EXCLUDE_PATTERNS=*.png,*.jpg,*.jpeg,*.gif,dpr_*,*approval*,*rejection*

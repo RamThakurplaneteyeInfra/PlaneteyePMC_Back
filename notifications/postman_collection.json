@@ -1,0 +1,145 @@
+// Postman Collection for Email Notification Testing
+// Import this JSON into Postman to test all notification endpoints
+
+{
+  "info": {
+    "name": "Email Notification System Testing",
+    "description": "Complete test collection for email notification endpoints",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000/api",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Project Created Notification",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"project_id\": 20\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/notifications/project-created/",
+          "host": ["{{base_url}}"],
+          "path": ["notifications", "project-created", ""]
+        }
+      }
+    },
+    {
+      "name": "Team Lead Assigned Notification",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"project_id\": 20,\n  \"user_id\": 3\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/notifications/team-lead-assigned/",
+          "host": ["{{base_url}}"],
+          "path": ["notifications", "team-lead-assigned", ""]
+        }
+      }
+    },
+    {
+      "name": "Site Engineer Assigned Notification",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"project_id\": 20,\n  \"user_id\": 4\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/notifications/site-engineer-assigned/",
+          "host": ["{{base_url}}"],
+          "path": ["notifications", "site-engineer-assigned", ""]
+        }
+      }
+    },
+    {
+      "name": "DPR Submitted Notification",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"dpr_id\": 85\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/notifications/dpr-submitted/",
+          "host": ["{{base_url}}"],
+          "path": ["notifications", "dpr-submitted", ""]
+        }
+      }
+    },
+    {
+      "name": "DPR Approved Notification",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"dpr_id\": 85\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/notifications/dpr-approved/",
+          "host": ["{{base_url}}"],
+          "path": ["notifications", "dpr-approved", ""]
+        }
+      }
+    },
+    {
+      "name": "DPR Rejected Notification",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"dpr_id\": 85\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/notifications/dpr-rejected/",
+          "host": ["{{base_url}}"],
+          "path": ["notifications", "dpr-rejected", ""]
+        }
+      }
+    }
+  ]
+}

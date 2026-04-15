@@ -6,6 +6,14 @@ import json
 from datetime import datetime
 from django.core.mail import send_mail
 from django.conf import settings
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from rest_framework import status
+from services.notifications import notify_dpr_submitted, notify_dpr_approved, notify_dpr_rejected, notify_project_created, notify_project_assigned, notify_site_engineer_assigned
+from dpr.models import DailyProgressReport
+from projects.models import Project
+from django.contrib.auth.models import User
 
 
 def notifications_test(request):
@@ -62,3 +70,375 @@ def send_test_email(request):
             return JsonResponse({'error': str(e)}, status=500)
 
     return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def test_sync_email(request):
+    """
+    Test email sending synchronously (without Celery)
+    """
+    try:
+        from backend.tasks import send_html_email
+
+        context = {
+            'test_message': 'This is a synchronous test email',
+            'timestamp': datetime.now().isoformat(),
+            'base_url': settings.BASE_URL
+        }
+
+        success = send_html_email(
+            subject="[PMC] Sync Test Email",
+            template_name='project_created',
+            context=context,
+            recipient_list=['sandeshahire840@gmail.com'],  # Test recipient
+            from_email=settings.DEFAULT_FROM_EMAIL
+        )
+
+        if success:
+            return JsonResponse({'status': 'Sync email sent successfully'})
+        else:
+            return JsonResponse({'error': 'Failed to send sync email'}, status=500)
+
+    except Exception as e:
+        return JsonResponse({'error': f'Sync email failed: {str(e)}'}, status=500)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def notify_project_created_endpoint(request):
+    """
+    Send email notification when a project is created.
+
+    Expected request body:
+    {
+        "project_id": 456
+    }
+    """
+    try:
+        project_id = request.data.get('project_id')
+
+        if not project_id:
+            return Response(
+                {'error': 'project_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            project = Project.objects.get(id=project_id)
+        except Project.DoesNotExist:
+            return Response(
+                {'error': 'Project not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Temporarily make notification synchronous for testing
+        from backend.tasks import send_html_email
+        from django.conf import settings
+
+        coordinators = list(project.coordinators.all())
+        if coordinators:
+            recipient_emails = [coord.email for coord in coordinators if coord.email]
+            if recipient_emails:
+                context = {
+                    'project': {
+                        'name': project.name,
+                        'client_name': project.client_name,
+                        'location': project.location,
+                        'description': project.description,
+                        'budget': float(project.budget),
+                        'created_by': {
+                            'username': project.created_by.username,
+                            'get_full_name': project.created_by.get_full_name(),
+                        },
+                        'created_at': project.created_at.isoformat(),
+                    },
+                    'base_url': settings.BASE_URL
+                }
+
+                success = send_html_email(
+                    subject=f"New Project Created: {project.name}",
+                    template_name='project_created',
+                    context=context,
+                    recipient_list=recipient_emails,
+                    from_email=settings.DEFAULT_FROM_EMAIL
+                )
+
+                if success:
+                    return Response(
+                        {'status': 'Project creation notification sent successfully'},
+                        status=status.HTTP_200_OK
+                    )
+                else:
+                    return Response(
+                        {'error': 'Failed to send project creation notification'},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
+
+        return Response(
+            {'status': 'Project creation notification sent successfully (no coordinators with email)'},
+            status=status.HTTP_200_OK
+        )
+
+    except Exception as e:
+        return Response(
+            {'error': f'Failed to send notification: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def notify_dpr_submitted_endpoint(request):
+    """
+    Send email notification when a DPR is submitted.
+
+    Expected request body:
+    {
+        "dpr_id": 123
+    }
+    """
+    try:
+        dpr_id = request.data.get('dpr_id')
+
+        if not dpr_id:
+            return Response(
+                {'error': 'dpr_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            dpr = DailyProgressReport.objects.get(id=dpr_id)
+        except DailyProgressReport.DoesNotExist:
+            return Response(
+                {'error': 'DPR not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        notify_dpr_submitted(dpr)
+
+        return Response(
+            {'status': 'DPR submission notification sent successfully'},
+            status=status.HTTP_200_OK
+        )
+
+    except Exception as e:
+        return Response(
+            {'error': f'Failed to send notification: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def notify_dpr_approved_endpoint(request):
+    """
+    Send email notification when a DPR is approved.
+
+    Expected request body:
+    {
+        "dpr_id": 123
+    }
+    """
+    try:
+        dpr_id = request.data.get('dpr_id')
+
+        if not dpr_id:
+            return Response(
+                {'error': 'dpr_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            dpr = DailyProgressReport.objects.get(id=dpr_id)
+        except DailyProgressReport.DoesNotExist:
+            return Response(
+                {'error': 'DPR not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        notify_dpr_approved(dpr)
+
+        return Response(
+            {'status': 'DPR approval notification sent successfully'},
+            status=status.HTTP_200_OK
+        )
+
+    except Exception as e:
+        return Response(
+            {'error': f'Failed to send notification: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def notify_dpr_rejected_endpoint(request):
+    """
+    Send email notification when a DPR is rejected.
+
+    Expected request body:
+    {
+        "dpr_id": 123
+    }
+    """
+    try:
+        dpr_id = request.data.get('dpr_id')
+
+        if not dpr_id:
+            return Response(
+                {'error': 'dpr_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            dpr = DailyProgressReport.objects.get(id=dpr_id)
+        except DailyProgressReport.DoesNotExist:
+            return Response(
+                {'error': 'DPR not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        notify_dpr_rejected(dpr)
+
+        return Response(
+            {'status': 'DPR rejection notification sent successfully'},
+            status=status.HTTP_200_OK
+        )
+
+    except Exception as e:
+        return Response(
+            {'error': f'Failed to send notification: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def notify_team_lead_assigned_endpoint(request):
+    """
+    Send email notification when a Team Leader is assigned to a project.
+
+    Expected request body:
+    {
+        "project_id": 456,
+        "user_id": 123
+    }
+    """
+    try:
+        project_id = request.data.get('project_id')
+        user_id = request.data.get('user_id')
+
+        if not project_id:
+            return Response(
+                {'error': 'project_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not user_id:
+            return Response(
+                {'error': 'user_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            project = Project.objects.get(id=project_id)
+        except Project.DoesNotExist:
+            return Response(
+                {'error': 'Project not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+            assigned_user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response(
+                {'error': 'User not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Check if user is actually a Team Leader
+        if not assigned_user.groups.filter(name='Team Leader').exists():
+            return Response(
+                {'error': 'Assigned user is not a Team Leader'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        notify_project_assigned(project, assigned_user)
+
+        return Response(
+            {'status': 'Team Leader assignment notification sent successfully'},
+            status=status.HTTP_200_OK
+        )
+
+    except Exception as e:
+        return Response(
+            {'error': f'Failed to send notification: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def notify_site_engineer_assigned_endpoint(request):
+    """
+    Send email notification when a Site Engineer is assigned to a project.
+
+    Expected request body:
+    {
+        "project_id": 456,
+        "user_id": 123
+    }
+    """
+    try:
+        project_id = request.data.get('project_id')
+        user_id = request.data.get('user_id')
+
+        if not project_id:
+            return Response(
+                {'error': 'project_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not user_id:
+            return Response(
+                {'error': 'user_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            project = Project.objects.get(id=project_id)
+        except Project.DoesNotExist:
+            return Response(
+                {'error': 'Project not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+            assigned_user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response(
+                {'error': 'User not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Check if user is a Site Engineer type
+        site_engineer_groups = ['Site Engineer', 'Billing Site Engineer', 'QAQC Site Engineer']
+        if not any(assigned_user.groups.filter(name=group).exists() for group in site_engineer_groups):
+            return Response(
+                {'error': 'Assigned user is not a Site Engineer type'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        notify_site_engineer_assigned(project, assigned_user)
+
+        return Response(
+            {'status': 'Site Engineer assignment notification sent successfully'},
+            status=status.HTTP_200_OK
+        )
+
+    except Exception as e:
+        return Response(
+            {'error': f'Failed to send notification: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

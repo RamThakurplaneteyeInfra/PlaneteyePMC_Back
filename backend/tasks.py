@@ -64,6 +64,10 @@ def send_notification_email(subject, template_name, context, recipient_list, fro
     try:
         logger.info(f"Sending email to {recipient_list} with template {template_name}")
 
+        # Add base_url to context for absolute URLs in emails
+        context = context.copy()
+        context['base_url'] = settings.BASE_URL
+
         success = send_html_email(
             subject=subject,
             template_name=template_name,

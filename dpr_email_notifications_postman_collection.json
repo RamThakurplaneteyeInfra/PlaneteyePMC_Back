@@ -1,0 +1,214 @@
+{
+  "info": {
+    "name": "DPR Email Notification Testing",
+    "description": "Test collection for all DPR email notification endpoints",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "DPR Submitted Notification - Complete Workflow Test Project",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"dpr_id\": 85\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/notifications/dpr-submitted/",
+          "host": ["{{base_url}}"],
+          "path": ["notifications", "dpr-submitted", ""]
+        },
+        "description": "Test DPR submission notification for DPR ID 85 (Complete Workflow Test Project - Final)"
+      }
+    },
+    {
+      "name": "DPR Submitted Notification - White Bliss Project",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"dpr_id\": 81\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/notifications/dpr-submitted/",
+          "host": ["{{base_url}}"],
+          "path": ["notifications", "dpr-submitted", ""]
+        },
+        "description": "Test DPR submission notification for DPR ID 81 (White Bliss Project)"
+      }
+    },
+    {
+      "name": "DPR Submitted Notification - Democracy Project",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"dpr_id\": 80\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/notifications/dpr-submitted/",
+          "host": ["{{base_url}}"],
+          "path": ["notifications", "dpr-submitted", ""]
+        },
+        "description": "Test DPR submission notification for DPR ID 80 (Democracy Project)"
+      }
+    },
+    {
+      "name": "DPR Approved Notification - Complete Workflow Test Project",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"dpr_id\": 85\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/notifications/dpr-approved/",
+          "host": ["{{base_url}}"],
+          "path": ["notifications", "dpr-approved", ""]
+        },
+        "description": "Test DPR approval notification for DPR ID 85 (Complete Workflow Test Project - Final)"
+      }
+    },
+    {
+      "name": "DPR Approved Notification - White Bliss Project",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"dpr_id\": 81\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/notifications/dpr-approved/",
+          "host": ["{{base_url}}"],
+          "path": ["notifications", "dpr-approved", ""]
+        },
+        "description": "Test DPR approval notification for DPR ID 81 (White Bliss Project)"
+      }
+    },
+    {
+      "name": "DPR Rejected Notification - Complete Workflow Test Project",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"dpr_id\": 85\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/notifications/dpr-rejected/",
+          "host": ["{{base_url}}"],
+          "path": ["notifications", "dpr-rejected", ""]
+        },
+        "description": "Test DPR rejection notification for DPR ID 85 (Complete Workflow Test Project - Final)"
+      }
+    },
+    {
+      "name": "DPR Rejected Notification - White Bliss Project",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"dpr_id\": 81\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/notifications/dpr-rejected/",
+          "host": ["{{base_url}}"],
+          "path": ["notifications", "dpr-rejected", ""]
+        },
+        "description": "Test DPR rejection notification for DPR ID 81 (White Bliss Project)"
+      }
+    },
+    {
+      "name": "DPR Error Test - Invalid DPR ID",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"dpr_id\": 9999\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/notifications/dpr-submitted/",
+          "host": ["{{base_url}}"],
+          "path": ["notifications", "dpr-submitted", ""]
+        },
+        "description": "Test error handling with invalid DPR ID"
+      }
+    },
+    {
+      "name": "DPR Error Test - Missing DPR ID",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{}"
+        },
+        "url": {
+          "raw": "{{base_url}}/notifications/dpr-submitted/",
+          "host": ["{{base_url}}"],
+          "path": ["notifications", "dpr-submitted", ""]
+        },
+        "description": "Test error handling with missing dpr_id parameter"
+      }
+    }
+  ]
+}

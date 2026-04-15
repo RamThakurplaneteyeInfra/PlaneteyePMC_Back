@@ -25,7 +25,7 @@ def remove_duplicates(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-    
+
     atomic = False
 
     dependencies = [

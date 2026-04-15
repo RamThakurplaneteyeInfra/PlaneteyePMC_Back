@@ -3,16 +3,38 @@
 ## Overview
 The backend includes an email notification system that automatically sends emails for various events in the application. Emails are sent asynchronously using Celery to avoid blocking the main application.
 
+### DPR Approval Workflow
+The DPR (Daily Progress Report) follows a specific approval workflow with targeted email notifications:
+
+1. **Site Engineer** submits DPR → Email sent to **Team Lead**
+2. **Team Lead** approves → Email sent to **Site Engineer** + DPR sent to **Coordinator**
+3. **Coordinator** approves → Email sent to **Team Lead** + **Site Engineer** + DPR sent to **PMC Head**
+4. **PMC Head** approves → Email sent to **Coordinator** + **Team Lead** + **Site Engineer**
+
+Rejections work similarly but send emails to all relevant parties in the reverse direction with rejection reasons.
+
 ## Email Notification Types
 
 ### Project Notifications
 - **Project Created**: Sent to coordinators when a new project is created
 - **Project Assigned**: Sent to users when they are assigned to a project
+- **Team Lead Assigned**: Sent to team lead when assigned to a project
+- **Site Engineer Assigned**: Sent to all site engineers when any site engineer is assigned to a project
 
 ### DPR (Daily Progress Report) Notifications
-- **DPR Submitted**: Sent to approvers when a DPR is submitted for review
-- **DPR Approved**: Sent to submitter when their DPR is approved
-- **DPR Rejected**: Sent to submitter when their DPR is rejected with reasons
+- **DPR Submitted**: Sent to the next approver in the workflow (Team Lead → Coordinator → PMC Head)
+- **DPR Approved**: Sent to appropriate recipients based on approval stage:
+  - Team Lead approval → Site Engineer (submitter)
+  - Coordinator approval → Team Lead + Site Engineer
+  - PMC Head approval → Coordinator + Team Lead + Site Engineer
+- **DPR Rejected**: Sent to appropriate recipients based on rejection stage:
+  - Team Lead rejection → Site Engineer (submitter)
+  - Coordinator rejection → Team Lead + Site Engineer
+  - PMC Head rejection → Coordinator + Team Lead + Site Engineer
+
+### Test Notifications
+- **Test Email**: Manual test emails for development and debugging
+- **Synchronous Test Email**: Immediate email sending without Celery queue
 
 ## Backend Email Implementation
 
@@ -86,6 +108,301 @@ For testing purposes, a test endpoint is available:
   "status": "Email sent successfully"
 }
 ```
+
+### Notification API Endpoints
+For triggering email notifications manually, use these specific endpoints. All endpoints are located under `/notifications/` and accept JSON POST requests.
+
+#### 1. Test Email Endpoint
+**Endpoint**: `POST /notifications/send-test-email/`
+
+**Request Body**:
+```json
+{
+  "email": "test@example.com",
+  "type": "test"
+}
+```
+
+**Response** (Success):
+```json
+{
+  "status": "Email sent successfully"
+}
+```
+
+**Response** (Error):
+```json
+{
+  "error": "Method not allowed"
+}
+```
+
+#### 2. Synchronous Test Email Endpoint
+**Endpoint**: `POST /notifications/test-sync-email/`
+
+**Request Body**: None required
+
+**Response** (Success):
+```json
+{
+  "status": "Sync email sent successfully"
+}
+```
+
+**Response** (Error):
+```json
+{
+  "error": "Failed to send sync email"
+}
+```
+
+#### 3. Project Created Notification
+**Endpoint**: `POST /notifications/project-created/`
+
+**Request Body**:
+```json
+{
+  "project_id": 456
+}
+```
+
+**Response** (Success):
+```json
+{
+  "status": "Project creation notification sent successfully"
+}
+```
+
+**Response** (Error):
+```json
+{
+  "error": "project_id is required"
+}
+```
+```json
+{
+  "error": "Project not found"
+}
+```
+
+#### 4. Team Lead Assigned Notification
+**Endpoint**: `POST /notifications/team-lead-assigned/`
+
+**Request Body**:
+```json
+{
+  "project_id": 456,
+  "user_id": 123
+}
+```
+
+**Response** (Success):
+```json
+{
+  "status": "Team Leader assignment notification sent successfully"
+}
+```
+
+**Response** (Error):
+```json
+{
+  "error": "project_id is required"
+}
+```
+```json
+{
+  "error": "user_id is required"
+}
+```
+```json
+{
+  "error": "Assigned user is not a Team Leader"
+}
+```
+
+#### 5. Site Engineer Assigned Notification
+**Endpoint**: `POST /notifications/site-engineer-assigned/`
+
+**Request Body**:
+```json
+{
+  "project_id": 456,
+  "user_id": 123
+}
+```
+
+**Response** (Success):
+```json
+{
+  "status": "Site Engineer assignment notification sent successfully"
+}
+```
+
+**Response** (Error):
+```json
+{
+  "error": "project_id is required"
+}
+```
+```json
+{
+  "error": "user_id is required"
+}
+```
+```json
+{
+  "error": "Assigned user is not a Site Engineer type"
+}
+```
+
+#### 6. DPR Submitted Notification
+**Endpoint**: `POST /notifications/dpr-submitted/`
+
+**Request Body**:
+```json
+{
+  "dpr_id": 123
+}
+```
+
+**Response** (Success):
+```json
+{
+  "status": "DPR submission notification sent successfully"
+}
+```
+
+**Response** (Error):
+```json
+{
+  "error": "dpr_id is required"
+}
+```
+```json
+{
+  "error": "DPR not found"
+}
+```
+
+#### 7. DPR Approved Notification
+**Endpoint**: `POST /notifications/dpr-approved/`
+
+**Request Body**:
+```json
+{
+  "dpr_id": 123
+}
+```
+
+**Response** (Success):
+```json
+{
+  "status": "DPR approval notification sent successfully"
+}
+```
+
+**Response** (Error):
+```json
+{
+  "error": "dpr_id is required"
+}
+```
+```json
+{
+  "error": "DPR not found"
+}
+```
+
+#### 8. DPR Rejected Notification
+**Endpoint**: `POST /notifications/dpr-rejected/`
+
+**Request Body**:
+```json
+{
+  "dpr_id": 123
+}
+```
+
+**Response** (Success):
+```json
+{
+  "status": "DPR rejection notification sent successfully"
+}
+```
+
+**Response** (Error):
+```json
+{
+  "error": "dpr_id is required"
+}
+```
+```json
+{
+  "error": "DPR not found"
+}
+```
+
+### Frontend Integration
+Call the appropriate endpoint from the frontend after successful actions:
+
+```javascript
+// Test email sending
+fetch('/notifications/send-test-email/', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ email: 'test@example.com', type: 'test' })
+});
+
+// Synchronous test email (without Celery)
+fetch('/notifications/test-sync-email/', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' }
+});
+
+// After project creation
+fetch('/notifications/project-created/', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ project_id: projectId })
+});
+
+// After team lead assignment
+fetch('/notifications/team-lead-assigned/', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ project_id: projectId, user_id: userId })
+});
+
+// After site engineer assignment
+fetch('/notifications/site-engineer-assigned/', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ project_id: projectId, user_id: userId })
+});
+
+// After DPR submission
+fetch('/notifications/dpr-submitted/', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ dpr_id: dprId })
+});
+
+// After DPR approval
+fetch('/notifications/dpr-approved/', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ dpr_id: dprId })
+});
+
+// After DPR rejection
+fetch('/notifications/dpr-rejected/', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ dpr_id: dprId })
+});
+```
+
+These endpoints ensure emails are sent to the respective authorities when specific actions occur.
 
 ### Frontend Considerations
 
@@ -162,6 +479,53 @@ Report Details:
 Please update and resubmit your report.
 ```
 
+#### Team Lead Assigned
+```
+Subject: [PMC] Project Assignment: {project_name}
+
+You have been assigned as the Team Leader for the following project:
+
+Project Details:
+- Name: {project_name}
+- Client: {project_client}
+- Location: {project_location}
+- Assigned Date: {assignment_date}
+
+Please review the project details and coordinate with your team.
+```
+
+#### Site Engineer Assigned
+```
+Subject: [PMC] Site Engineer Assigned: {project_name}
+
+A new site engineer has been assigned to the following project:
+
+Project Details:
+- Name: {project_name}
+- Client: {project_client}
+- Location: {project_location}
+- Assigned Engineer: {assigned_user_name}
+- Assignment Date: {assignment_date}
+
+All Site Engineers on this Project:
+{list_of_all_site_engineers}
+
+Please coordinate with the assigned engineer and ensure smooth project execution.
+```
+
+#### Test Email
+```
+Subject: [PMC] Test Email - {email_type}
+
+This is a test email notification.
+
+Details:
+- Type: {email_type}
+- Timestamp: {timestamp}
+
+This email confirms that the notification system is working correctly.
+```
+
 ## Technical Details
 
 ### Dependencies
@@ -206,11 +570,56 @@ DEFAULT_FROM_EMAIL = 'your-email@gmail.com'
 
 ## Testing the Email System
 
+### Test Users
+The following test users have been created for email notification testing:
+
+**Team Lead:**
+- Username: `test_team_lead`
+- Password: `Project@123`
+- Email: `ahiresandesh4@gmail.com`
+- Role: Team Leader
+
+**Site Engineer:**
+- Username: `test_site_engineer`
+- Password: `Project@123`
+- Email: `sanchitahire191@gmail.com`
+- Role: Site Engineer
+
+### System Users with Email
+**Production Users:**
+- Username: `pmc_tl`
+- Password: Not set (use admin panel)
+- Email: `rudrajoshi072004@gmail.com`
+- Role: Team Leader
+
+- Username: `pmc_coordinator`
+- Email: `sandeshahire1630@gmail.com`
+- Role: Coordinator
+
+**Site Engineer Users:**
+- Username: `pmc_bse`
+- Email: `sandeshahire146@gmail.com`
+- Role: Billing Site Engineer
+
+- Username: `pmc_qaqc`
+- Email: `sandeshtravels2004@gmail.com`
+- Role: QAQC Site Engineer
+
+- Username: `pmc_se`
+- Email: `sanchitahire191@gmail.com`
+- Role: Site Engineer
+
 ### Manual Testing
-1. Use the test endpoint to send emails to verified addresses
+1. Use the test endpoints (`/notifications/send-test-email/` or `/notifications/test-sync-email/`) to send emails to verified addresses
 2. Trigger actual workflows (create project, submit DPR) to test automatic emails
 3. Check email delivery in recipient inboxes
 4. Verify email content formatting
+
+### Postman Collection
+Import `notifications/postman_collection.json` into Postman for comprehensive testing of all notification endpoints. The collection includes:
+- Pre-configured requests for all notification endpoints
+- Sample data for testing
+- Proper headers and request formats
 
 ### Integration Testing
 1. Test with different email providers (Gmail, Outlook, etc.)
