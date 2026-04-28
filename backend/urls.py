@@ -3,10 +3,14 @@ from django.http import HttpResponse
 from django.urls import path, include, re_path
 from django.conf import settings
 from django.conf.urls.static import static
-
+from django.http import JsonResponse
 from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
 from rest_framework import permissions
+
+# Health check endpoint
+def health_check(request):
+    return JsonResponse({'status': 'healthy', 'service': 'PMC Backend'})
 
 # Swagger/OpenAPI Schema View
 schema_view = get_schema_view(
@@ -81,6 +85,11 @@ urlpatterns = [
     path('api/', include('cost_performance.urls')),
     # Health & Safety API
     path('api/health-safety/', include('health_safety.urls')),
+    # Health Check
+    path('api/health/', health_check, name='health-check'),
+    # Notifications API
+    path('api/notifications/', include('notifications.urls')),
+
     # Notifications Test Page
     path('notifications/', include('notifications.urls')),
 ]

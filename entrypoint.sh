@@ -15,9 +15,15 @@ python manage.py collectstatic --noinput
 
 # Step 4: Superuser already created, skipping
 
-# Step 5: Start server
-echo "Starting Daphne..."
-exec daphne backend.asgi:application \
+# Step 5: Start services
+echo "Starting Daphne (Web Server)..."
+daphne backend.asgi:application \
     --bind 0.0.0.0 \
     --port ${PORT:-8000} \
-    --proxy-headers
+    --proxy-headers &
+
+echo "Starting Celery Worker..."
+celery -A backend worker --pool=solo --loglevel=info --without-gossip --without-mingle --without-heartbeat &
+
+# Wait for all background processes
+wait

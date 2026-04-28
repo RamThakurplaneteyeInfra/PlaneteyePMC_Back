@@ -262,6 +262,16 @@ def notify_dpr_submitted(dpr):
         )
         send_websocket_notification(approver.id, ws_message)
 
+    # Also notify the submitter that their DPR was successfully submitted
+    if dpr.submitted_by and dpr.submitted_by.email:
+        submitter_ws_message = create_notification_message(
+            'dpr_submitted',
+            f'DPR Submitted: {dpr.project_name}',
+            f'Your DPR has been submitted for approval.',
+            {'dpr_id': dpr.id, 'project_name': dpr.project_name, 'status': 'submitted'}
+        )
+        send_websocket_notification(dpr.submitted_by.id, submitter_ws_message)
+
 
 def notify_dpr_approved_by_role(dpr, approved_by_role):
     """

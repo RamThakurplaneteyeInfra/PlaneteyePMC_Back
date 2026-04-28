@@ -15,14 +15,16 @@ def send_websocket_notification(user_id, notification_data):
     try:
         channel_layer = get_channel_layer()
         async_to_sync(channel_layer.group_send)(
-            f'notifications_{user_id}',
+            'notifications',
             {
-                'type': 'notification_message',
-                'message': notification_data
+                'type': 'send_notification',
+                'user_id': user_id,
+                'notification_data': notification_data
             }
         )
+        print(f"WebSocket notification sent to user {user_id}: {notification_data.get('type', 'unknown')}")
     except Exception as e:
-        print(f"Failed to send WebSocket notification: {e}")
+        print(f"Failed to send WebSocket notification to user {user_id}: {e}")
 
 
 def create_notification_message(notification_type, title, message, data=None):

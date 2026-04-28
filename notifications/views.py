@@ -442,3 +442,226 @@ def notify_site_engineer_assigned_endpoint(request):
             {'error': f'Failed to send notification: {str(e)}'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def chrome_notification_endpoint(request):
+    """
+    Unified Chrome notification endpoint for all notification types.
+
+    Expected request body:
+    {
+        "type": "project_created" | "project_assigned" | "site_engineer_assigned" | "dpr_submitted" | "dpr_approved" | "dpr_rejected",
+        "project_id": 456,  // Required for project-related notifications
+        "user_id": 123,     // Required for assignment notifications
+        "dpr_id": 789       // Required for DPR notifications
+    }
+
+    Notification Logic:
+    - project_created: PMC Head creates project → Notify PMC Coordinators
+    - project_assigned: PMC Coordinator assigns to Team Leader → Notify that Team Leader only
+    - site_engineer_assigned: Team Leader assigns to Site Engineers → Notify specific site engineer types
+    - dpr_submitted: Site Engineer submits DPR → Notify current approver role
+    - dpr_approved: DPR approved → Notify relevant users based on approver role
+    - dpr_rejected: DPR rejected → Notify relevant users based on approver role
+    """
+    try:
+        notification_type = request.data.get('type')
+        project_id = request.data.get('project_id')
+        user_id = request.data.get('user_id')
+        dpr_id = request.data.get('dpr_id')
+
+        if not notification_type:
+            return Response(
+                {'error': 'type is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Handle project creation notification
+        if notification_type == 'project_created':
+            if not project_id:
+                return Response(
+                    {'error': 'project_id is required for project_created notifications'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            try:
+                project = Project.objects.get(id=project_id)
+            except Project.DoesNotExist:
+                return Response(
+                    {'error': 'Project not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            notify_project_created(project)
+            return Response(
+                {'status': 'Project creation Chrome notification sent successfully'},
+                status=status.HTTP_200_OK
+            )
+
+        # Handle project assignment notifications
+        elif notification_type == 'project_assigned':
+            if not project_id or not user_id:
+                return Response(
+                    {'error': 'project_id and user_id are required for project_assigned notifications'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            try:
+                project = Project.objects.get(id=project_id)
+            except Project.DoesNotExist:
+                return Response(
+                    {'error': 'Project not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            try:
+                assigned_user = User.objects.get(id=user_id)
+            except User.DoesNotExist:
+                return Response(
+                    {'error': 'User not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # Check user role and call appropriate notification function
+            if assigned_user.groups.filter(name='Team Leader').exists():
+                notify_project_assigned(project, assigned_user)
+                return Response(
+                    {'status': 'Team Leader assignment Chrome notification sent successfully'},
+                    status=status.HTTP_200_OK
+                )
+            else:
+                return Response(
+                    {'error': 'Assigned user is not a Team Leader'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        # Handle site engineer assignment notifications
+        elif notification_type == 'site_engineer_assigned':
+            if not project_id or not user_id:
+                return Response(
+                    {'error': 'project_id and user_id are required for site_engineer_assigned notifications'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            try:
+                project = Project.objects.get(id=project_id)
+            except Project.DoesNotExist:
+                return Response(
+                    {'error': 'Project not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            try:
+                assigned_user = User.objects.get(id=user_id)
+            except User.DoesNotExist:
+                return Response(
+                    {'error': 'User not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # Check if user is a site engineer type
+            site_engineer_groups = ['Site Engineer', 'Billing Site Engineer', 'QAQC Site Engineer']
+            if any(assigned_user.groups.filter(name=group).exists() for group in site_engineer_groups):
+                notify_site_engineer_assigned(project, assigned_user)
+                return Response(
+                    {'status': 'Site Engineer assignment Chrome notification sent successfully'},
+                    status=status.HTTP_200_OK
+                )
+            else:
+                return Response(
+                    {'error': 'Assigned user is not a Site Engineer type'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        # Handle DPR submission notification
+        elif notification_type == 'dpr_submitted':
+            if not dpr_id:
+                return Response(
+                    {'error': 'dpr_id is required for dpr_submitted notifications'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            try:
+                dpr = DailyProgressReport.objects.get(id=dpr_id)
+            except DailyProgressReport.DoesNotExist:
+                return Response(
+                    {'error': 'DPR not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            notify_dpr_submitted(dpr)
+            return Response(
+                {'status': 'DPR submission Chrome notification sent successfully'},
+                status=status.HTTP_200_OK
+            )
+
+        # Handle DPR approval notification
+        elif notification_type == 'dpr_approved':
+            if not dpr_id:
+                return Response(
+                    {'error': 'dpr_id is required for dpr_approved notifications'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            try:
+                dpr = DailyProgressReport.objects.get(id=dpr_id)
+            except DailyProgressReport.DoesNotExist:
+                return Response(
+                    {'error': 'DPR not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # Determine who approved it based on the current approver role
+            # This assumes the DPR status has been updated before calling this endpoint
+            approved_by_role = dpr.current_approver_role or 'Unknown'
+
+            # Import the role-based approval notification
+            from services.notifications import notify_dpr_approved_by_role
+            notify_dpr_approved_by_role(dpr, approved_by_role)
+
+            return Response(
+                {'status': f'DPR approval Chrome notification sent successfully (approved by {approved_by_role})'},
+                status=status.HTTP_200_OK
+            )
+
+        # Handle DPR rejection notification
+        elif notification_type == 'dpr_rejected':
+            if not dpr_id:
+                return Response(
+                    {'error': 'dpr_id is required for dpr_rejected notifications'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            try:
+                dpr = DailyProgressReport.objects.get(id=dpr_id)
+            except DailyProgressReport.DoesNotExist:
+                return Response(
+                    {'error': 'DPR not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # Determine who rejected it based on the current approver role
+            rejected_by_role = dpr.current_approver_role or 'Unknown'
+
+            # Import the role-based rejection notification
+            from services.notifications import notify_dpr_rejected_by_role
+            notify_dpr_rejected_by_role(dpr, rejected_by_role)
+
+            return Response(
+                {'status': f'DPR rejection Chrome notification sent successfully (rejected by {rejected_by_role})'},
+                status=status.HTTP_200_OK
+            )
+
+        else:
+            return Response(
+                {'error': f'Unknown notification type: {notification_type}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+    except Exception as e:
+        return Response(
+            {'error': f'Failed to send Chrome notification: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

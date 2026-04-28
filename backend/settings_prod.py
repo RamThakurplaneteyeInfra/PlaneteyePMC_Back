@@ -9,7 +9,7 @@ import os
 SECRET_KEY = os.environ.get('SECRET_KEY')
 DEBUG = False
 
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '*').split(',')
+ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '').split(',')
 
 # DATABASE (Render PostgreSQL)
 if os.environ.get('DATABASE_URL'):
@@ -47,13 +47,16 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 # ================= MIDDLEWARE FIX =================
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware',   # IMPORTANT (Swagger fix)
-] + MIDDLEWARE
+    'whitenoise.middleware.WhiteNoiseMiddleware',
+] + [m for m in MIDDLEWARE if m != 'django.middleware.security.SecurityMiddleware']
 
 # ================= SECURITY SETTINGS =================
 SECURE_SSL_REDIRECT = False   # avoid redirect loop on Render
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
+CSRF_TRUSTED_ORIGINS += [
+    "https://*.onrender.com"
+]
 SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = 'DENY'
@@ -61,6 +64,16 @@ X_FRAME_OPTIONS = 'DENY'
 # ================= CORS =================
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
+
+# ================= CHANNELS CONFIGURATION (WebSocket Support) =================
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            'hosts': [os.environ.get('REDIS_URL')],
+        },
+    },
+}
 
 # ================= LOGGING =================
 LOGGING = {

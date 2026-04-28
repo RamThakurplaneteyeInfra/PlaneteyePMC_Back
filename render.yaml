@@ -4,6 +4,8 @@ services:
     runtime: docker
     buildCommand: docker build -t pmc-backend .
     startCommand: /entrypoint.sh
+    # WebSocket support configuration
+    websocketSupport: true
     envVars:
       - key: SECRET_KEY
         generateValue: true
@@ -70,7 +72,7 @@ services:
     name: pmc-worker
     runtime: docker
     buildCommand: docker build -t pmc-backend .
-    startCommand: celery -A backend worker --loglevel=info
+    startCommand: celery -A backend worker --pool=solo --loglevel=info --without-gossip --without-mingle --without-heartbeat
     envVars:
        - key: SECRET_KEY
          generateValue: true

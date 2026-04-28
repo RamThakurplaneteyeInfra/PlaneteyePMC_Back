@@ -14,4 +14,7 @@ urlpatterns = [
     path('dpr-submitted/', views.notify_dpr_submitted_endpoint, name='notify_dpr_submitted'),
     path('dpr-approved/', views.notify_dpr_approved_endpoint, name='notify_dpr_approved'),
     path('dpr-rejected/', views.notify_dpr_rejected_endpoint, name='notify_dpr_rejected'),
+
+    # Unified Chrome notification endpoint
+    path('ch-notification/', views.chrome_notification_endpoint, name='chrome_notification'),
 ]
