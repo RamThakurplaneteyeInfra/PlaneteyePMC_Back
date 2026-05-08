@@ -1,6 +1,7 @@
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.conf import settings
+from monthly_scope.models import MonthlyScopeWork
 
 
 class DailyProgressReport(models.Model):
@@ -77,6 +78,14 @@ class DailyProgressReport(models.Model):
         blank=True,
         help_text="Timestamp when DPR was finally approved"
     )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_dprs',
+        help_text="User who created this DPR"
+    )
     created_at = models.DateTimeField(auto_now_add=True, help_text="Timestamp when report was created")
     updated_at = models.DateTimeField(auto_now=True, help_text="Timestamp when report was last updated")
 
@@ -104,7 +113,7 @@ class DailyProgressReport(models.Model):
 class DPRActivity(models.Model):
     """
     Activity details within a Daily Progress Report
-    Each report can have multiple activities
+    Each report can have multiple scope-based activities
     """
     dpr = models.ForeignKey(
         DailyProgressReport,
@@ -112,22 +121,63 @@ class DPRActivity(models.Model):
         related_name='activities',
         help_text="Parent Daily Progress Report"
     )
-    date = models.DateField(help_text="Date of the activity")
-    activity = models.TextField(help_text="Description of the activity")
-    deliverables = models.TextField(blank=True, help_text="Deliverables for this activity")
-    target_achieved = models.DecimalField(
+
+    # Monthly Scope Integration - REQUIRED
+    scope = models.ForeignKey(
+        MonthlyScopeWork,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='dpr_activities',
+        help_text="Linked Monthly Scope Work"
+    )
+
+    # Progress Tracking Fields - REQUIRED
+    executed_quantity = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        validators=[MinValueValidator(0.01)],  # Must be > 0
+        help_text="Quantity executed today"
+    )
+
+    # Calculated fields (auto-updated)
+    cumulative_quantity = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0.00,
+        help_text="Cumulative executed quantity for this scope"
+    )
+
+    remaining_quantity = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0.00,
+        help_text="Remaining quantity to complete the scope"
+    )
+
+    progress_percentage = models.DecimalField(
         max_digits=5,
         decimal_places=2,
         default=0.00,
-        help_text="Target achieved percentage"
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        help_text="Progress percentage (0-100)"
     )
-    next_day_plan = models.TextField(blank=True, help_text="Plan for the next day")
+
+    # Activity-specific fields
+    next_day_planned_work = models.TextField(blank=True, help_text="Planned work for next day")
     remarks = models.TextField(blank=True, help_text="Additional remarks")
 
     class Meta:
-        ordering = ['date', 'id']
+        ordering = ['id']
         verbose_name = "DPR Activity"
         verbose_name_plural = "DPR Activities"
+        # Prevent duplicate scope entries in same DPR
+        unique_together = [['dpr', 'scope']]
+        indexes = [
+            models.Index(fields=['dpr', 'scope']),
+            models.Index(fields=['scope', 'dpr']),
+        ]
 
     def __str__(self):
-        return f"Activity - {self.activity[:50]} ({self.date})"
+        scope_info = f"{self.scope.get_category_display_name()} - {self.scope.get_subcategory_display_name()}" if self.scope else "No Scope"
+        return f"DPR Activity - {scope_info} ({self.executed_quantity})"

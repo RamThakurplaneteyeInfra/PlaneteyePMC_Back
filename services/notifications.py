@@ -1,5 +1,5 @@
 from django.utils import timezone
-from backend.tasks import send_notification_email, send_html_email
+from .email_utils import send_html_email
 from notifications.utils import send_websocket_notification, create_notification_message
 from projects.models import Project
 from accounts.models import UserProfile
@@ -39,7 +39,7 @@ def notify_project_created(project):
                 }
             }
 
-            send_notification_email.delay(
+            send_html_email(
                 subject=f"New Project Created: {project.name}",
                 template_name='project_created',
                 context=context,
@@ -91,7 +91,7 @@ def notify_project_assigned(project, assigned_user):
         'assignment_date': timezone.now().isoformat(),
     }
 
-    send_notification_email.delay(
+    send_html_email(
         subject=f"Project Assignment: {project.name}",
         template_name='project_assigned',
         context=context,
@@ -155,7 +155,7 @@ def notify_site_engineer_assigned(project, assigned_user):
         } for se in site_engineers]
     }
 
-    send_notification_email.delay(
+    send_html_email(
         subject=f"Site Engineer Assigned: {project.name}",
         template_name='site_engineer_assigned',
         context=context,
@@ -245,7 +245,7 @@ def notify_dpr_submitted(dpr):
         } if approvers else None,
     }
 
-    send_notification_email.delay(
+    send_html_email(
         subject=f"DPR Submitted for Approval: {dpr.project_name} - {dpr.report_date}",
         template_name='dpr_submitted',
         context=context,
@@ -340,7 +340,7 @@ def notify_dpr_approved_by_role(dpr, approved_by_role):
         'approved_by_role': approved_by_role,
     }
 
-    send_notification_email.delay(
+    send_html_email(
         subject=f"DPR Approved by {approved_by_role}: {dpr.project_name} - {dpr.report_date}",
         template_name='dpr_approved',
         context=context,
@@ -428,7 +428,7 @@ def notify_dpr_rejected_by_role(dpr, rejected_by_role):
         'rejected_by_role': rejected_by_role,
     }
 
-    send_notification_email.delay(
+    send_html_email(
         subject=f"DPR Rejected by {rejected_by_role}: {dpr.project_name} - {dpr.report_date}",
         template_name='dpr_rejected',
         context=context,
@@ -487,7 +487,7 @@ def notify_dpr_approved(dpr):
         },
     }
 
-    send_notification_email.delay(
+    send_html_email(
         subject=f"DPR Approved: {dpr.project_name} - {dpr.report_date}",
         template_name='dpr_approved',
         context=context,
@@ -542,7 +542,7 @@ def notify_dpr_rejected(dpr):
         },
     }
 
-    send_notification_email.delay(
+    send_html_email(
         subject=f"DPR Rejected: {dpr.project_name} - {dpr.report_date}",
         template_name='dpr_rejected',
         context=context,

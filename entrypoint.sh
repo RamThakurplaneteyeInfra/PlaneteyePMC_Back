@@ -20,10 +20,4 @@ echo "Starting Daphne (Web Server)..."
 daphne backend.asgi:application \
     --bind 0.0.0.0 \
     --port ${PORT:-8000} \
-    --proxy-headers &
-
-echo "Starting Celery Worker..."
-celery -A backend worker --pool=solo --loglevel=info --without-gossip --without-mingle --without-heartbeat &
-
-# Wait for all background processes
-wait
+    --proxy-headers

@@ -182,48 +182,54 @@ def calculate_trend(current_progress: float, previous_progress: float) -> str:
 
 def aggregate_tasks(activities: List[DPRActivity]) -> Dict[str, Any]:
     """
-    Aggregate activities by tasks and calculate metrics.
-    
+    Aggregate activities by scope and calculate metrics.
+
     Args:
         activities: List of DPRActivity objects
-        
+
     Returns:
-        Dictionary containing aggregated task data
+        Dictionary containing aggregated scope data
     """
     tasks = {}
-    
+
     for activity in activities:
-        task_id = normalize_task_identifier(activity.activity, activity.deliverables)
-        
+        if not activity.scope:
+            continue
+
+        task_id = f"scope_{activity.scope.id}"
+
         # Initialize task if not exists
         if task_id not in tasks:
             tasks[task_id] = {
-                'activity': activity.activity,
-                'deliverable': activity.deliverables,
+                'scope': activity.scope,
+                'scope_name': f"{activity.scope.get_category_display_name()} - {activity.scope.get_subcategory_display_name()}",
                 'max_progress': 0,
                 'status': 'Pending',
-                'start_date': activity.date,
-                'end_date': activity.date,
+                'start_date': activity.dpr.report_date,
+                'end_date': activity.dpr.report_date,
                 'completion_date': None,
-                'dates_seen': [activity.date],
-                'latest_entry': activity
+                'dates_seen': [activity.dpr.report_date],
+                'latest_entry': activity,
+                'total_executed': 0,
+                'planned_quantity': activity.scope.planned_quantity or 0
             }
-        
+
         # Update task progress and dates
         task = tasks[task_id]
-        task['max_progress'] = max(task['max_progress'], activity.target_achieved)
+        task['total_executed'] += activity.executed_quantity
+        task['max_progress'] = max(task['max_progress'], activity.progress_percentage)
         task['status'] = calculate_status(task['max_progress'])
-        task['start_date'] = min(task['start_date'], activity.date)
-        task['end_date'] = max(task['end_date'], activity.date)
-        task['dates_seen'].append(activity.date)
-        
-        # Keep the latest entry (by date)
-        if activity.date >= task['latest_entry'].date:
+        task['start_date'] = min(task['start_date'], activity.dpr.report_date)
+        task['end_date'] = max(task['end_date'], activity.dpr.report_date)
+        task['dates_seen'].append(activity.dpr.report_date)
+
+        # Keep the latest entry (by DPR date)
+        if activity.dpr.report_date >= task['latest_entry'].dpr.report_date:
             task['latest_entry'] = activity
-        
+
         # Set completion date if task reached 100%
         if task['max_progress'] >= 100 and task['completion_date'] is None:
-            task['completion_date'] = activity.date
+            task['completion_date'] = activity.dpr.report_date
     
     # Calculate duration for each task
     for task in tasks.values():
@@ -240,27 +246,30 @@ def aggregate_tasks(activities: List[DPRActivity]) -> Dict[str, Any]:
 
 def extract_pending_work(tasks: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    Extract pending work from incomplete tasks.
-    
+    Extract pending work from incomplete scopes.
+
     Args:
         tasks: Dictionary of aggregated tasks
-        
+
     Returns:
         List of pending work items with structured format
     """
     pending_work = []
-    
+
     for task_id, task in tasks.items():
         if task['status'] != 'Completed':
             latest_activity = task['latest_entry']
             pending_work.append({
-                'activity': task['activity'],
-                'deliverable': task['deliverable'],
+                'scope': task['scope_name'],
+                'scope_id': task['scope'].id,
                 'progress': task['max_progress'],
-                'last_updated': latest_activity.date.isoformat(),
-                'next_plan': latest_activity.next_day_plan or ''
+                'planned_quantity': task['planned_quantity'],
+                'executed_quantity': task['total_executed'],
+                'remaining_quantity': task['planned_quantity'] - task['total_executed'],
+                'last_updated': latest_activity.dpr.report_date.isoformat(),
+                'next_plan': latest_activity.next_day_planned_work or ''
             })
-    
+
     return pending_work
 
 
@@ -395,16 +404,16 @@ def aggregate_dpr_activities_by_week(
     # Get all activities for the filtered DPRs
     activities = DPRActivity.objects.filter(
         dpr__in=dpr_queryset,
-        date__year=year,
-        date__month=month
-    ).select_related('dpr').order_by('date')
+        dpr__report_date__year=year,
+        dpr__report_date__month=month
+    ).select_related('dpr').order_by('dpr__report_date')
     
     # Group activities by week
     weeks_data = {}
     
     # Process each activity
     for activity in activities:
-        week_num = get_week_number(activity.date.day)
+        week_num = get_week_number(activity.dpr.report_date.day)
         
         # Skip if specific week requested and this doesn't match
         if week and week_num != week:

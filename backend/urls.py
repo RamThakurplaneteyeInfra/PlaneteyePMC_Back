@@ -87,6 +87,8 @@ urlpatterns = [
     path('api/health-safety/', include('health_safety.urls')),
     # Health Check
     path('api/health/', health_check, name='health-check'),
+    # Monthly Scope API
+    path('api/monthly-scope/', include('monthly_scope.urls')),
     # Notifications API
     path('api/notifications/', include('notifications.urls')),
 

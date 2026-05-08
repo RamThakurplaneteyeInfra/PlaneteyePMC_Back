@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from rest_framework.pagination import PageNumberPagination
 from django.core.cache import cache
+from django.core.cache.backends.locmem import LocMemCache
 from django.core.exceptions import ObjectDoesNotExist, MultipleObjectsReturned
 from django.db import transaction
 from django.db.models import Q
@@ -18,45 +19,18 @@ from .serializers import DailyProgressReportSerializer, DPRActivitySerializer
 from services.notifications import notify_dpr_submitted, notify_dpr_approved, notify_dpr_rejected, notify_dpr_approved_by_role, notify_dpr_rejected_by_role
 
 
-def get_user_for_dpr_action(request, action=None, dpr=None):
+def safe_cache_delete_pattern(pattern):
     """
-    Helper function to get appropriate user for DPR actions.
-    If authenticated user exists, use it. Otherwise, use appropriate test user for the action.
-    Used for testing purposes when DEFAULT_PERMISSION_CLASSES allows unauthenticated access.
-
-    Args:
-        request: The HTTP request object
-        action: The action being performed (submit, approve_team_lead, etc.)
-        dpr: The DPR object (needed for rejection to determine who should reject)
+    Safely delete cache patterns, handling backends that don't support delete_pattern
     """
-    if request.user and not isinstance(request.user, AnonymousUser):
-        return request.user
-
-    # For unauthenticated requests, use appropriate test users
-    if action == 'reject' and dpr:
-        # For rejection, determine who should reject based on DPR status
-        if dpr.status == DailyProgressReport.Status.PENDING_TEAM_LEAD:
-            username = 'pmc_tl'  # Team Lead rejects
-        elif dpr.status == DailyProgressReport.Status.PENDING_COORDINATOR:
-            username = 'pmc_coordinator'  # Coordinator rejects
-        elif dpr.status == DailyProgressReport.Status.PENDING_PMC_HEAD:
-            username = 'pmc_head'  # PMC Head rejects
-        else:
-            username = 'pmc_head'  # Default
-    else:
-        test_users_map = {
-            'submit': 'pmc_se',      # Site Engineer submits
-            'approve_team_lead': 'pmc_tl',      # Team Lead approves
-            'approve_coordinator': 'pmc_coordinator',  # Coordinator approves
-            'approve_pmc_head': 'pmc_head',    # PMC Head approves
-        }
-        username = test_users_map.get(action, 'pmc_se')  # Default to site engineer
-
     try:
-        return User.objects.get(username=username)
-    except User.DoesNotExist:
-        # Fallback to first available user
-        return User.objects.first()
+        if isinstance(cache, LocMemCache):
+            # For LocMemCache, we can't delete patterns, so we'll skip
+            return
+        cache.delete_pattern(pattern)
+    except AttributeError:
+        # If delete_pattern is not supported, skip silently
+        pass
 
 
 class DailyProgressReportViewSet(viewsets.ModelViewSet):
@@ -143,7 +117,11 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         """
         queryset = DailyProgressReport.objects.select_related(
             "submitted_by", "approved_by", "rejected_by"
-        ).prefetch_related("activities").only(
+        ).prefetch_related(
+            "activities__scope",
+            "activities__scope__category",
+            "activities__scope__subcategory"
+        ).only(
             "id", "project_name", "job_no", "report_date", "unresolved_issues", "pending_letters",
             "quality_status", "next_day_incident", "bill_status", "gfc_status", "issued_by",
             "designation", "status", "submitted_by__username", "current_approver_role",
@@ -203,9 +181,9 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         super().perform_create(serializer)
         # Cache invalidation
-        cache.delete_pattern("dpr_list:*")
-        cache.delete_pattern("dpr_pending_approval:*")
-        cache.delete_pattern("dpr_rejected:*")
+        safe_cache_delete_pattern("dpr_list:*")
+        safe_cache_delete_pattern("dpr_pending_approval:*")
+        safe_cache_delete_pattern("dpr_rejected:*")
 
     def create(self, request, *args, **kwargs):
         """
@@ -214,16 +192,23 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         **Example Request:**
         ```json
         {
-            "project_name": "Highway Construction Project",
-            "job_no": "JOB-2024-001",
-            "report_date": "2024-01-15",
-            "issued_by": "John Doe",
-            "designation": "Site Engineer",
+            "project_name": "Thane Project",
+            "job_no": "JP001",
+            "report_date": "2026-05-10",
+            "issued_by": "Site Engineer",
+            "designation": "Engineer",
             "activities": [
                 {
-                    "date": "2024-01-15",
-                    "activity": "Foundation excavation",
-                    "target_achieved": 85.5
+                    "scope": 3,
+                    "executed_quantity": 5.00,
+                    "next_day_planned_work": "Continue foundation work",
+                    "remarks": "Foundation work completed successfully"
+                },
+                {
+                    "scope": 5,
+                    "executed_quantity": 3.00,
+                    "next_day_planned_work": "Start pier work",
+                    "remarks": "Pier preparation done"
                 }
             ]
         }
@@ -239,13 +224,23 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                     },
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            self.perform_create(serializer)
+            instance = serializer.save()
             headers = self.get_success_headers(serializer.data)
-            return Response(
-                serializer.data,
-                status=status.HTTP_201_CREATED,
-                headers=headers
-            )
+
+            # Check if this was appending to existing DPR
+            activities_added = getattr(instance, '_activities_added', None)
+            if activities_added is not None:
+                # This was an append operation
+                response_data = {
+                    'message': 'Activities added to existing DPR',
+                    'dpr_id': instance.id,
+                    'activities_added': activities_added,
+                    'dpr': serializer.data
+                }
+                return Response(response_data, status=status.HTTP_200_OK, headers=headers)
+            else:
+                # This was a new DPR creation
+                return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
         except Exception as e:
             return Response(
                 {
@@ -264,9 +259,9 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         super().perform_update(serializer)
         # Cache invalidation
-        cache.delete_pattern("dpr_list:*")
-        cache.delete_pattern("dpr_pending_approval:*")
-        cache.delete_pattern("dpr_rejected:*")
+        safe_cache_delete_pattern("dpr_list:*")
+        safe_cache_delete_pattern("dpr_pending_approval:*")
+        safe_cache_delete_pattern("dpr_rejected:*")
 
     def update(self, request, *args, **kwargs):
         """
@@ -298,9 +293,9 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         super().perform_destroy(instance)
         # Cache invalidation
-        cache.delete_pattern("dpr_list:*")
-        cache.delete_pattern("dpr_pending_approval:*")
-        cache.delete_pattern("dpr_rejected:*")
+        safe_cache_delete_pattern("dpr_list:*")
+        safe_cache_delete_pattern("dpr_pending_approval:*")
+        safe_cache_delete_pattern("dpr_rejected:*")
 
     def destroy(self, request, *args, **kwargs):
         """
@@ -328,8 +323,10 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         Returns a list of all activities associated with the DPR.
         """
         dpr = self.get_object()
-        activities = dpr.activities.only(
-            "id", "date", "activity", "deliverables", "target_achieved", "next_day_plan", "remarks"
+        activities = dpr.activities.select_related(
+            'scope',
+            'scope__category',
+            'scope__subcategory'
         ).all()
         serializer = DPRActivitySerializer(activities, many=True)
         return Response(serializer.data)
@@ -461,7 +458,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
 
                 # Update DPR status and submitter
                 dpr.status = DailyProgressReport.Status.PENDING_TEAM_LEAD
-                dpr.submitted_by = get_user_for_dpr_action(request, 'submit')
+                dpr.submitted_by = request.user
                 dpr.current_approver_role = 'Team Leader'
                 dpr.rejection_reason = ''  # Clear rejection reason on resubmission
                 dpr.rejected_by = None
@@ -471,9 +468,9 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                 notify_dpr_submitted(dpr)
 
                 # Cache invalidation
-                cache.delete_pattern("dpr_list:*")
-                cache.delete_pattern("dpr_pending_approval:*")
-                cache.delete_pattern("dpr_rejected:*")
+                safe_cache_delete_pattern("dpr_list:*")
+                safe_cache_delete_pattern("dpr_pending_approval:*")
+                safe_cache_delete_pattern("dpr_rejected:*")
 
                 serializer = self.get_serializer(dpr)
                 return Response(serializer.data, status=status.HTTP_200_OK)
@@ -521,9 +518,9 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         notify_dpr_submitted(dpr)
 
         # Cache invalidation
-        cache.delete_pattern("dpr_list:*")
-        cache.delete_pattern("dpr_pending_approval:*")
-        cache.delete_pattern("dpr_rejected:*")
+        safe_cache_delete_pattern("dpr_list:*")
+        safe_cache_delete_pattern("dpr_pending_approval:*")
+        safe_cache_delete_pattern("dpr_rejected:*")
 
         serializer = self.get_serializer(dpr)
         return Response(serializer.data)
@@ -565,9 +562,9 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         notify_dpr_submitted(dpr)
 
         # Cache invalidation
-        cache.delete_pattern("dpr_list:*")
-        cache.delete_pattern("dpr_pending_approval:*")
-        cache.delete_pattern("dpr_rejected:*")
+        safe_cache_delete_pattern("dpr_list:*")
+        safe_cache_delete_pattern("dpr_pending_approval:*")
+        safe_cache_delete_pattern("dpr_rejected:*")
 
         serializer = self.get_serializer(dpr)
         return Response(serializer.data)
@@ -599,7 +596,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         
         # Update DPR status to approved
         dpr.status = DailyProgressReport.Status.APPROVED
-        dpr.approved_by = get_user_for_dpr_action(request, 'approve_pmc_head')
+        dpr.approved_by = request.user
         dpr.approved_at = timezone.now()
         dpr.current_approver_role = ''
         dpr.save()
@@ -608,9 +605,9 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         notify_dpr_approved_by_role(dpr, 'PMC Head')
 
         # Cache invalidation
-        cache.delete_pattern("dpr_list:*")
-        cache.delete_pattern("dpr_pending_approval:*")
-        cache.delete_pattern("dpr_rejected:*")
+        safe_cache_delete_pattern("dpr_list:*")
+        safe_cache_delete_pattern("dpr_pending_approval:*")
+        safe_cache_delete_pattern("dpr_rejected:*")
 
         serializer = self.get_serializer(dpr)
         return Response(serializer.data)
@@ -671,7 +668,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
 
         # Update rejection details
         dpr.rejection_reason = rejection_reason
-        dpr.rejected_by = get_user_for_dpr_action(request, 'reject', dpr)
+        dpr.rejected_by = request.user
         dpr.save()
 
         # Send rejection notification to appropriate recipients
@@ -679,9 +676,9 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
             notify_dpr_rejected_by_role(dpr, rejected_by_role)
 
         # Cache invalidation
-        cache.delete_pattern("dpr_list:*")
-        cache.delete_pattern("dpr_pending_approval:*")
-        cache.delete_pattern("dpr_rejected:*")
+        safe_cache_delete_pattern("dpr_list:*")
+        safe_cache_delete_pattern("dpr_pending_approval:*")
+        safe_cache_delete_pattern("dpr_rejected:*")
 
         serializer = self.get_serializer(dpr)
         return Response(serializer.data)
@@ -737,6 +734,10 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         # Get DPRs pending for the specified role
         queryset = DailyProgressReport.objects.filter(
             status=role_status_map[role]
+        ).prefetch_related(
+            'activities__scope',
+            'activities__scope__category',
+            'activities__scope__subcategory'
         ).order_by('-report_date', '-created_at')
 
         serializer = self.get_serializer(queryset, many=True)
@@ -783,6 +784,10 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         # Get all rejected DPRs
         queryset = DailyProgressReport.objects.filter(
             status=DailyProgressReport.Status.REJECTED
+        ).prefetch_related(
+            'activities__scope',
+            'activities__scope__category',
+            'activities__scope__subcategory'
         ).order_by('-report_date', '-created_at')
 
         serializer = self.get_serializer(queryset, many=True)

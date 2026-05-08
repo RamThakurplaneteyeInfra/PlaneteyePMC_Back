@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     'notifications',
     'projects',
     'dpr',
+    'monthly_scope',
     'accounts',
     'operations',
     'contracts',
@@ -113,17 +114,18 @@ _DEFAULT_DB_PASSWORD = os.environ.get('DB_PASSWORD', 'root')
 
 if USE_POSTGRESQL:
     DATABASES = {
-        'default': {
+                'default': {
             'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.environ.get('DB_NAME', 'pmc_db'),
-            'USER': os.environ.get('DB_USER', 'postgres'),
-            'PASSWORD': os.environ.get('DB_PASSWORD', _DEFAULT_DB_PASSWORD),
-            'HOST': os.environ.get('DB_HOST', 'localhost'),
-            'PORT': os.environ.get('DB_PORT', '5432'),
+            'NAME': os.environ.get('DB_NAME'),
+            'USER': os.environ.get('DB_USER'),
+            'PASSWORD': os.environ.get('DB_PASSWORD'),
+            'HOST': os.environ.get('DB_HOST'),
+            'PORT': os.environ.get('DB_PORT'),
             'OPTIONS': {
+                'sslmode': os.environ.get('DB_SSLMODE', 'require'),
                 'connect_timeout': 10,
             },
-            'CONN_MAX_AGE': 600,  # Connection pooling
+            'CONN_MAX_AGE': 600,
         }
     }
 else:
@@ -173,7 +175,7 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_DIRS = [
-    BASE_DIR / 'static',
+    
 ]
 
 MEDIA_URL = '/media/'
@@ -267,12 +269,8 @@ REST_FRAMEWORK = {
 # Caching Configuration
 # Uses Redis cache backend which supports delete_pattern
 CACHES = {
-    'default': {
-        'BACKEND': 'django_redis.cache.RedisCache',
-        'LOCATION': os.environ.get('REDIS_URL'),
-        'OPTIONS': {
-            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
-        }
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
     }
 }
 
@@ -280,15 +278,7 @@ CACHES = {
 CACHE_MIDDLEWARE_ALIAS = 'default'
 CACHE_MIDDLEWARE_SECONDS = 300  # 5 minutes default
 
-# ==============================
-# CELERY CONFIGURATION
-# ==============================
-CELERY_BROKER_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
-CELERY_RESULT_BACKEND = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
-CELERY_ACCEPT_CONTENT = ['json']
-CELERY_TASK_SERIALIZER = 'json'
-CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = TIME_ZONE
+
 
 # ==============================
 # CHANNELS CONFIGURATION
@@ -297,10 +287,7 @@ import os
 
 CHANNEL_LAYERS = {
     "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {
-            "hosts": [os.environ.get("REDIS_URL")],
-        },
+        "BACKEND": "channels.layers.InMemoryChannelLayer",
     },
 }
 
@@ -315,25 +302,8 @@ EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER)
 
-# ==============================
-# AUTO CREATE SUPERUSER (RENDER)
-# ==============================
-import os
-from django.contrib.auth import get_user_model
 
-try:
-    if os.environ.get("CREATE_SUPERUSER") == "True":
-        User = get_user_model()
-
-        username = os.environ.get("DJANGO_SUPERUSER_USERNAME")
-        email = os.environ.get("DJANGO_SUPERUSER_EMAIL")
-        password = os.environ.get("DJANGO_SUPERUSER_PASSWORD")
-
-        if username and password:
-            if not User.objects.filter(username=username).exists():
-                print("🚀 Creating superuser...")
-                User.objects.create_superuser(username, email, password)
-            else:
-                print("✅ Superuser already exists")
-except Exception as e:
-    print(f"Superuser creation error: {e}")
+    
+    
+    
+print("Settings loaded successfully")

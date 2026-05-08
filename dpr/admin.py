@@ -10,12 +10,15 @@ class DPRActivityInline(admin.TabularInline):
     model = DPRActivity
     extra = 1
     fields = [
-        'date',
-        'activity',
-        'deliverables',
-        'target_achieved',
-        'next_day_plan',
+        'scope',
+        'executed_quantity',
+        'next_day_planned_work',
         'remarks'
+    ]
+    readonly_fields = [
+        'cumulative_quantity',
+        'remaining_quantity',
+        'progress_percentage'
     ]
 
 
@@ -80,21 +83,28 @@ class DPRActivityAdmin(admin.ModelAdmin):
     list_display = [
         'id',
         'dpr',
-        'date',
-        'activity',
-        'target_achieved',
+        'scope',
+        'executed_quantity',
+        'cumulative_quantity',
+        'progress_percentage',
         'remarks'
     ]
     list_filter = [
-        'date',
         'dpr__project_name',
-        'dpr__report_date'
+        'dpr__report_date',
+        'scope__category',
+        'scope__subcategory'
     ]
     search_fields = [
-        'activity',
-        'deliverables',
         'remarks',
-        'dpr__project_name'
+        'next_day_planned_work',
+        'dpr__project_name',
+        'scope__description'
     ]
-    date_hierarchy = 'date'
-    raw_id_fields = ['dpr']
+    date_hierarchy = 'dpr__report_date'
+    raw_id_fields = ['dpr', 'scope']
+    readonly_fields = [
+        'cumulative_quantity',
+        'remaining_quantity',
+        'progress_percentage'
+    ]
