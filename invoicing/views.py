@@ -110,27 +110,46 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
     
     def _check_billing_engineer_permission(self, action_name="perform this action"):
         """
-        Check if user has Billing Site Engineer role.
-        Returns (is_allowed, error_response) tuple.
+        Check if user has Billing Site Engineer or Team Leader role.
+        Team Leader now has full access to all financial data.
         """
-        if self.request_role != "billing site engineer":
+        allowed_roles = ["billing site engineer", "team leader"]
+        if self.request_role not in allowed_roles:
             return False, Response(
-                {"detail": f"Only Billing Site Engineer can {action_name} (role='Billing Site Engineer')."},
+                {"detail": f"Only Billing Site Engineer or Team Leader can {action_name} (role='Billing Site Engineer' or 'Team Leader')."},
                 status=status.HTTP_403_FORBIDDEN,
             )
         return True, None
 
     def _check_view_invoicing_permission(self):
-        """List/retrieve: Billing Site Engineer, PMC Head, CEO, or Coordinator (read-only for the latter)."""
-        if self.request_role in ("billing site engineer", "pmc head", "ceo", "coordinator"):
+        """List/retrieve: Billing Site Engineer, Team Leader, PMC Head, CEO, or Coordinator."""
+        allowed_view_roles = ("billing site engineer", "team leader", "pmc head", "ceo", "coordinator")
+        if self.request_role in allowed_view_roles:
             return True, None
         return False, Response(
             {
-                "detail": "Only Billing Site Engineer, PMC Head, CEO, or Coordinator can view invoicing information "
+                "detail": "Only Billing Site Engineer, Team Leader, PMC Head, CEO, or Coordinator can view invoicing information "
                 "(pass role as query param or X-Role header)."
             },
             status=status.HTTP_403_FORBIDDEN,
         )
+
+    def _invalidate_invoicing_cache(self):
+        """
+        Safely invalidate invoicing-related cache.
+        Works with LocMemCache (development) and Redis (production).
+        """
+        try:
+            if hasattr(cache, 'delete_pattern'):
+                cache.delete_pattern("invoicing_list:*")
+                cache.delete_pattern("invoicing_retrieve:*")
+            else:
+                cache.clear()
+        except Exception:
+            try:
+                cache.clear()
+            except Exception:
+                pass
 
     @swagger_auto_schema(
         operation_description="List all Invoicing Information records. Filter by project_name and date.",
@@ -140,14 +159,14 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
             openapi.Parameter(
                 'role',
                 openapi.IN_QUERY,
-                description="User role: Billing Site Engineer | PMC Head | CEO | Coordinator",
+                description="User role: Billing Site Engineer | Team Leader | PMC Head | CEO | Coordinator",
                 type=openapi.TYPE_STRING,
                 required=False
             ),
             openapi.Parameter(
                 'X-Role',
                 openapi.IN_HEADER,
-                description="User role header: Billing Site Engineer | PMC Head | CEO | Coordinator",
+                description="User role header: Billing Site Engineer | Team Leader | PMC Head | CEO | Coordinator",
                 type=openapi.TYPE_STRING,
                 required=False
             ),
@@ -176,9 +195,8 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
     )
     def perform_create(self, serializer):
         super().perform_create(serializer)
-        # Cache invalidation
-        cache.delete_pattern("invoicing_list:*")
-        cache.delete_pattern("invoicing_retrieve:*")
+        # Cache invalidation (safe for LocMemCache)
+        self._invalidate_invoicing_cache()
 
     def create(self, request, *args, **kwargs):
         """Create invoicing record (Billing Site Engineer only)"""
@@ -202,14 +220,14 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
             openapi.Parameter(
                 'role',
                 openapi.IN_QUERY,
-                description="User role: Billing Site Engineer | PMC Head | CEO | Coordinator",
+                description="User role: Billing Site Engineer | Team Leader | PMC Head | CEO | Coordinator",
                 type=openapi.TYPE_STRING,
                 required=False
             ),
             openapi.Parameter(
                 'X-Role',
                 openapi.IN_HEADER,
-                description="User role header: Billing Site Engineer | PMC Head | CEO | Coordinator",
+                description="User role header: Billing Site Engineer | Team Leader | PMC Head | CEO | Coordinator",
                 type=openapi.TYPE_STRING,
                 required=False
             ),
@@ -238,9 +256,8 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
     )
     def perform_update(self, serializer):
         super().perform_update(serializer)
-        # Cache invalidation
-        cache.delete_pattern("invoicing_list:*")
-        cache.delete_pattern("invoicing_retrieve:*")
+        # Cache invalidation (safe for LocMemCache)
+        self._invalidate_invoicing_cache()
 
     def update(self, request, *args, **kwargs):
         """Update invoicing record (Billing Site Engineer only)"""
@@ -275,9 +292,8 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
     )
     def perform_destroy(self, instance):
         super().perform_destroy(instance)
-        # Cache invalidation
-        cache.delete_pattern("invoicing_list:*")
-        cache.delete_pattern("invoicing_retrieve:*")
+        # Cache invalidation (safe for LocMemCache)
+        self._invalidate_invoicing_cache()
 
     def destroy(self, request, *args, **kwargs):
         """Delete invoicing record (Billing Site Engineer only)"""

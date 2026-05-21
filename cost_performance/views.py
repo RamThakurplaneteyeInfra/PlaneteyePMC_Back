@@ -74,7 +74,7 @@ _POST_SCHEMA = openapi.Schema(
 class ProjectCostPerformanceViewSet(viewsets.ModelViewSet):
     queryset = ProjectCostPerformance.objects.all()
     serializer_class = ProjectCostPerformanceSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [AllowAny]  # Team Leader has full access (role checks updated)
     http_method_names = ["get", "post", "head", "options"]
     pagination_class = PageNumberPagination
 

@@ -278,20 +278,36 @@ class HealthSafetyReportViewSet(viewsets.ModelViewSet):
         cache.set(cache_key, response.data, 300)  # 5 minutes
         return response
 
+    def _invalidate_health_safety_cache(self):
+        """
+        Safely invalidate health & safety cache.
+        Works with LocMemCache (development) and Redis (production).
+        """
+        try:
+            if hasattr(cache, 'delete_pattern'):
+                cache.delete_pattern("health_safety_reports:*")
+            else:
+                cache.clear()
+        except Exception:
+            try:
+                cache.clear()
+            except Exception:
+                pass
+
     def perform_create(self, serializer):
         super().perform_create(serializer)
-        # Cache invalidation
-        cache.delete_pattern("health_safety_reports:*")
+        # Cache invalidation (safe for LocMemCache)
+        self._invalidate_health_safety_cache()
 
     def perform_update(self, serializer):
         super().perform_update(serializer)
-        # Cache invalidation
-        cache.delete_pattern("health_safety_reports:*")
+        # Cache invalidation (safe for LocMemCache)
+        self._invalidate_health_safety_cache()
 
     def perform_destroy(self, instance):
         super().perform_destroy(instance)
-        # Cache invalidation
-        cache.delete_pattern("health_safety_reports:*")
+        # Cache invalidation (safe for LocMemCache)
+        self._invalidate_health_safety_cache()
 
     def create(self, request, *args, **kwargs):
         """Create a new Health & Safety Report"""

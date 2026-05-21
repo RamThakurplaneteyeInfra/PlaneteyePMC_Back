@@ -38,6 +38,7 @@ class ContractPerformancePagination(PageNumberPagination):
 # Role normalization mapping for case-insensitive input
 ROLE_NORMALIZATION_MAP = {
     "billing site engineer": "Billing Site Engineer",
+    "team leader": "Team Leader",
     "pmc head": "PMC Head",
     "ceo": "CEO",
     "coordinator": "Coordinator",
@@ -199,9 +200,9 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
         Returns (is_allowed, error_response) tuple.
         """
         role = self._get_role_from_cache()
-        if role != "Billing Site Engineer":
+        if role not in ["Billing Site Engineer", "Team Leader"]:
             return False, Response(
-                {"detail": f"Only Billing Site Engineer can {action_name} (role='Billing Site Engineer')."},
+                {"detail": f"Only Billing Site Engineer or Team Leader can {action_name} (role='Billing Site Engineer' or 'Team Leader')."},
                 status=status.HTTP_403_FORBIDDEN,
             )
         return True, None
@@ -209,15 +210,31 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
     def _check_view_contract_performance_permission(self, request):
         """List/retrieve: Billing Site Engineer, PMC Head, CEO, or Coordinator using cached role."""
         role = self._get_role_from_cache()
-        if role in ("Billing Site Engineer", "PMC Head", "CEO", "Coordinator"):
+        if role in ("Billing Site Engineer", "Team Leader", "PMC Head", "CEO", "Coordinator"):
             return True, None
         return False, Response(
             {
-                "detail": "Only Billing Site Engineer, PMC Head, CEO, or Coordinator can view contract performance "
+                "detail": "Only Billing Site Engineer, Team Leader, PMC Head, CEO, or Coordinator can view contract performance "
                 "(pass role as query param or X-Role header)."
             },
             status=status.HTTP_403_FORBIDDEN,
         )
+
+    def _invalidate_contract_performance_cache(self):
+        """
+        Safely invalidate contract performance cache.
+        Works with LocMemCache (development) and Redis (production).
+        """
+        try:
+            if hasattr(cache, 'delete_pattern'):
+                cache.delete_pattern("contract_performance_list:*")
+            else:
+                cache.clear()
+        except Exception:
+            try:
+                cache.clear()
+            except Exception:
+                pass
 
     @swagger_auto_schema(
         operation_description="List all Contract Performance records. Filter by project_name, date, and performance_status.",
@@ -230,7 +247,7 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
             openapi.Parameter(
                 'role',
                 openapi.IN_QUERY,
-                description="User role: billing site engineer | pmc head | ceo | coordinator (case-insensitive)",
+                description="User role: billing site engineer | team leader | pmc head | ceo | coordinator (case-insensitive)",
                 type=openapi.TYPE_STRING,
                 required=False
             ),
@@ -261,8 +278,8 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         performance = serializer.save()
 
-        # Cache invalidation: clear relevant cache keys after creation
-        cache.delete_pattern("contract_performance_list:*")
+        # Cache invalidation (safe for LocMemCache)
+        self._invalidate_contract_performance_cache()
 
         headers = self.get_success_headers(serializer.data)
         return Response(
@@ -277,7 +294,7 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
             openapi.Parameter(
                 'role',
                 openapi.IN_QUERY,
-                description="User role: billing site engineer | pmc head | ceo | coordinator (case-insensitive)",
+                description="User role: billing site engineer | team leader | pmc head | ceo | coordinator (case-insensitive)",
                 type=openapi.TYPE_STRING,
                 required=False
             ),
@@ -309,8 +326,8 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
 
-        # Cache invalidation: clear relevant cache keys after update
-        cache.delete_pattern("contract_performance_list:*")
+        # Cache invalidation (safe for LocMemCache)
+        self._invalidate_contract_performance_cache()
 
         return Response(serializer.data)
 
@@ -341,7 +358,7 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
 
         result = super().destroy(request, *args, **kwargs)
 
-        # Cache invalidation: clear relevant cache keys after deletion
-        cache.delete_pattern("contract_performance_list:*")
+        # Cache invalidation (safe for LocMemCache)
+        self._invalidate_contract_performance_cache()
 
         return result

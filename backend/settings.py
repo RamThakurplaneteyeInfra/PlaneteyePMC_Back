@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'drf_yasg',
+    'django_filters',
     'channels',
     'notifications',
     'projects',
@@ -65,6 +66,8 @@ INSTALLED_APPS = [
     'cashflow',
     'cost_performance',
     'health_safety',
+    'plant_machinery',
+    'manpower_management',
 ]
 
 MIDDLEWARE = [
@@ -170,7 +173,7 @@ BASE_URL = os.environ.get('RENDER_EXTERNAL_URL', os.environ.get('BASE_URL', 'htt
 # Using regex echoes the request Origin so Access-Control-Allow-Credentials works.
 # (CORS_ALLOW_ALL_ORIGINS=True sends * which breaks credentialed cross-origin calls.)
 # -----------------------------------------------------------------------------
-CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^.+$",  # match any non-empty Origin (http/https, any host/port)
 ]
@@ -220,6 +223,7 @@ CSRF_TRUSTED_ORIGINS = [
     'http://127.0.0.1:3000',
     'https://fv5k8l3m-8000.inc1.devtunnels.ms',
     'http://fv5k8l3m-8000.inc1.devtunnels.ms',
+    "http://localhost:5174",
 ]
 
 # Disable CSRF for API endpoints (using JWT authentication)
@@ -243,6 +247,11 @@ REST_FRAMEWORK = {
     ),
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
+    'DEFAULT_FILTER_BACKENDS': [
+        'django_filters.rest_framework.DjangoFilterBackend',
+        'rest_framework.filters.SearchFilter',
+        'rest_framework.filters.OrderingFilter',
+    ],
 }
 
 

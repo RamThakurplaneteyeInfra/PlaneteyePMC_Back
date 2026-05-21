@@ -13,3 +13,4 @@ daphne>=4.0.0
 daphne>=4.0.0
 gunicorn>=21.2.0
 asgiref>=3.7.2
+django-filter>=24.1

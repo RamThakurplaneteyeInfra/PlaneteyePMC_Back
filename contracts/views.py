@@ -20,6 +20,7 @@ from .serializers import ContractSerializer
 # Role normalization mapping for case-insensitive input
 ROLE_NORMALIZATION_MAP = {
     "billing site engineer": "Billing Site Engineer",
+    "team leader": "Team Leader",
     "pmc head": "PMC Head",
     "ceo": "CEO",
     "coordinator": "Coordinator",
@@ -127,10 +128,24 @@ class ContractViewSet(viewsets.ModelViewSet):
         ).order_by("-created_at").first()
 
     def _invalidate_contract_cache(self):
-        """Invalidate all contract-related cache keys."""
-        # Clear all contract cache patterns
-        cache.delete_pattern("contracts_list:*")
-        cache.delete_pattern("contracts_summary:*")
+        """
+        Safely invalidate contract-related cache.
+        Works with LocMemCache (development) and Redis (production).
+        """
+        try:
+            if hasattr(cache, 'delete_pattern'):
+                # Redis / django-redis backend
+                cache.delete_pattern("contracts_list:*")
+                cache.delete_pattern("contracts_summary:*")
+            else:
+                # LocMemCache (current development setup) - clear entire cache
+                cache.clear()
+        except Exception:
+            # Last resort: clear everything
+            try:
+                cache.clear()
+            except Exception:
+                pass  # Avoid crashing on cache issues
 
     # ---- Swagger schemas (fix DecimalField showing as string in Swagger UI) ----
     # drf-yasg (Swagger 2.0) often models Decimal as "string". Swagger UI then
@@ -221,7 +236,7 @@ class ContractViewSet(viewsets.ModelViewSet):
             openapi.Parameter(
                 'role',
                 openapi.IN_QUERY,
-                description="User role: billing site engineer | pmc head | ceo | coordinator (case-insensitive)",
+                description="User role: billing site engineer | team leader | pmc head | ceo | coordinator (case-insensitive)",
                 type=openapi.TYPE_STRING,
                 required=False
             ),
@@ -255,7 +270,7 @@ class ContractViewSet(viewsets.ModelViewSet):
             openapi.Parameter(
                 'role',
                 openapi.IN_QUERY,
-                description="User role: billing site engineer | pmc head | ceo | coordinator (case-insensitive)",
+                description="User role: billing site engineer | team leader | pmc head | ceo | coordinator (case-insensitive)",
                 type=openapi.TYPE_STRING,
                 required=False
             ),
@@ -301,9 +316,9 @@ class ContractViewSet(viewsets.ModelViewSet):
         Permission (simple): request.data['role'] must be 'Billing Site Engineer'
         """
         role = _get_role_from_request(request)
-        if role != "Billing Site Engineer":
+        if role not in ["Billing Site Engineer", "Team Leader"]:
             return Response(
-                {"detail": "Only Billing Site Engineer can create contracts (role='Billing Site Engineer')."},
+                {"detail": "Only Billing Site Engineer or Team Leader can create contracts (role='Billing Site Engineer' or 'Team Leader')."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -329,9 +344,9 @@ class ContractViewSet(viewsets.ModelViewSet):
         (Simple version) role check using request.data['role'].
         """
         role = _get_role_from_request(request)
-        if role != "Billing Site Engineer":
+        if role not in ["Billing Site Engineer", "Team Leader"]:
             return Response(
-                {"detail": "Only Billing Site Engineer can update contracts."},
+                {"detail": "Only Billing Site Engineer or Team Leader can update contracts."},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -355,7 +370,7 @@ class ContractViewSet(viewsets.ModelViewSet):
             openapi.Parameter(
                 'role',
                 openapi.IN_QUERY,
-                description="User role: billing site engineer | pmc head | ceo | coordinator (case-insensitive)",
+                description="User role: billing site engineer | team leader | pmc head | ceo | coordinator (case-insensitive)",
                 type=openapi.TYPE_STRING,
                 required=False
             ),
@@ -369,7 +384,7 @@ class ContractViewSet(viewsets.ModelViewSet):
         Permission: PMC Head, Coordinator, Billing Site Engineer.
         """
         role = self._get_role_from_cache()
-        allowed_roles = ["Billing Site Engineer", "PMC Head", "CEO", "Coordinator"]
+        allowed_roles = ["Billing Site Engineer", "Team Leader", "PMC Head", "CEO", "Coordinator"]
         if role not in allowed_roles:
             return Response(
                 {"detail": f"Access denied. Allowed roles: {', '.join(allowed_roles)}."},

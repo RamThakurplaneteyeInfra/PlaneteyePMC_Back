@@ -5,10 +5,20 @@ class WPRActivitySerializer(serializers.Serializer):
     """
     Serializer for individual activity in WPR
     """
-    activity = serializers.CharField()
-    deliverable = serializers.CharField()
-    max_progress = serializers.FloatField()
+    scope_name = serializers.CharField()
+    scope_description = serializers.CharField()
+    category_name = serializers.CharField()
+    subcategory_name = serializers.CharField()
+    unit = serializers.CharField()
+    planned_quantity = serializers.DecimalField(max_digits=12, decimal_places=2)
+    executed_quantity = serializers.DecimalField(max_digits=12, decimal_places=2)
+    remaining_quantity = serializers.DecimalField(max_digits=12, decimal_places=2)
+    progress_percentage = serializers.DecimalField(max_digits=5, decimal_places=2)
+    section = serializers.CharField()
+    location = serializers.CharField()
     status = serializers.CharField()
+    next_day_planned_work = serializers.CharField()
+    remarks = serializers.CharField()
     start_date = serializers.DateField()
     end_date = serializers.DateField()
     completion_date = serializers.DateField(allow_null=True)
@@ -34,10 +44,13 @@ class WPRPendingWorkSerializer(serializers.Serializer):
     """
     Serializer for pending work items
     """
-    activity = serializers.CharField()
-    deliverable = serializers.CharField()
-    progress = serializers.FloatField()
-    last_updated = serializers.DateField()
+    scope = serializers.CharField()
+    scope_id = serializers.IntegerField()
+    progress = serializers.DecimalField(max_digits=5, decimal_places=2)
+    planned_quantity = serializers.DecimalField(max_digits=12, decimal_places=2)
+    executed_quantity = serializers.DecimalField(max_digits=12, decimal_places=2)
+    remaining_quantity = serializers.DecimalField(max_digits=12, decimal_places=2)
+    last_updated = serializers.CharField()  # ISO format string
     next_plan = serializers.CharField()
 
 

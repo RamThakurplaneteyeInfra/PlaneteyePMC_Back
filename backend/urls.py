@@ -83,6 +83,10 @@ urlpatterns = [
     path('api/', include('manpower.urls')),
     path('api/', include('cashflow.urls')),
     path('api/', include('cost_performance.urls')),
+    # Plant & Machinery Site Asset Inventory Management API
+    path('api/', include('plant_machinery.urls')),
+    # Manpower Management System API
+    path('api/', include('manpower_management.urls')),
     # Health & Safety API
     path('api/health-safety/', include('health_safety.urls')),
     # Health Check

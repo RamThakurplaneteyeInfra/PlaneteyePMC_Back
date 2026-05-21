@@ -147,15 +147,11 @@ def generate_deliverables(tasks: Dict[str, Any]) -> List[str]:
     
     for task in tasks.values():
         if task['status'] == 'Completed':
-            # Generate meaningful deliverable from activity and deliverable
-            activity = task['activity'].strip()
-            deliverable = task['deliverable'].strip()
-            
-            if deliverable and deliverable.lower() != 'done':
-                deliverables_set.add(deliverable)
-            elif activity:
-                # Create meaningful deliverable from activity
-                deliverables_set.add(f"{activity} completed")
+            # Generate meaningful deliverable from scope
+            scope_name = task['scope_name'].strip()
+
+            if scope_name:
+                deliverables_set.add(f"{scope_name} completed")
     
     # Return list or default message if no completed deliverables
     return list(deliverables_set) if deliverables_set else ["No completed deliverables"]
@@ -202,23 +198,33 @@ def aggregate_tasks(activities: List[DPRActivity]) -> Dict[str, Any]:
         if task_id not in tasks:
             tasks[task_id] = {
                 'scope': activity.scope,
-                'scope_name': f"{activity.scope.get_category_display_name()} - {activity.scope.get_subcategory_display_name()}",
-                'max_progress': 0,
+                'scope_name': activity.scope.description or f"{activity.scope.get_category_display_name()} - {activity.scope.get_subcategory_display_name()}",
+                'scope_description': activity.scope.description or '',
+                'category_name': activity.scope.get_category_display_name(),
+                'subcategory_name': activity.scope.get_subcategory_display_name(),
+                'unit': activity.scope.unit or '',
+                'planned_quantity': activity.scope.planned_quantity or 0,
+                'executed_quantity': 0,
+                'remaining_quantity': activity.scope.planned_quantity or 0,
+                'progress_percentage': 0,
+                'section': activity.scope.section or '',
+                'location': activity.scope.location or '',
                 'status': 'Pending',
+                'next_day_planned_work': '',
+                'remarks': '',
                 'start_date': activity.dpr.report_date,
                 'end_date': activity.dpr.report_date,
                 'completion_date': None,
                 'dates_seen': [activity.dpr.report_date],
-                'latest_entry': activity,
-                'total_executed': 0,
-                'planned_quantity': activity.scope.planned_quantity or 0
+                'latest_entry': activity
             }
 
         # Update task progress and dates
         task = tasks[task_id]
-        task['total_executed'] += activity.executed_quantity
-        task['max_progress'] = max(task['max_progress'], activity.progress_percentage)
-        task['status'] = calculate_status(task['max_progress'])
+        task['executed_quantity'] += activity.executed_quantity
+        task['progress_percentage'] = max(task['progress_percentage'], activity.progress_percentage)
+        task['remaining_quantity'] = task['planned_quantity'] - task['executed_quantity']
+        task['status'] = calculate_status(task['progress_percentage'])
         task['start_date'] = min(task['start_date'], activity.dpr.report_date)
         task['end_date'] = max(task['end_date'], activity.dpr.report_date)
         task['dates_seen'].append(activity.dpr.report_date)
@@ -226,9 +232,11 @@ def aggregate_tasks(activities: List[DPRActivity]) -> Dict[str, Any]:
         # Keep the latest entry (by DPR date)
         if activity.dpr.report_date >= task['latest_entry'].dpr.report_date:
             task['latest_entry'] = activity
+            task['next_day_planned_work'] = activity.next_day_planned_work or ''
+            task['remarks'] = activity.remarks or ''
 
         # Set completion date if task reached 100%
-        if task['max_progress'] >= 100 and task['completion_date'] is None:
+        if task['progress_percentage'] >= 100 and task['completion_date'] is None:
             task['completion_date'] = activity.dpr.report_date
     
     # Calculate duration for each task
@@ -262,10 +270,10 @@ def extract_pending_work(tasks: Dict[str, Any]) -> List[Dict[str, Any]]:
             pending_work.append({
                 'scope': task['scope_name'],
                 'scope_id': task['scope'].id,
-                'progress': task['max_progress'],
+                'progress': task['progress_percentage'],
                 'planned_quantity': task['planned_quantity'],
-                'executed_quantity': task['total_executed'],
-                'remaining_quantity': task['planned_quantity'] - task['total_executed'],
+                'executed_quantity': task['executed_quantity'],
+                'remaining_quantity': task['remaining_quantity'],
                 'last_updated': latest_activity.dpr.report_date.isoformat(),
                 'next_plan': latest_activity.next_day_planned_work or ''
             })
@@ -326,8 +334,8 @@ def calculate_week_summary(tasks: Dict[str, Any]) -> Dict[str, Any]:
     pending = sum(1 for task in activities_list if task['status'] == 'Pending')
     
     completion_rate = (completed / total_activities) * 100
-    overall_progress = sum(task['max_progress'] for task in activities_list) / total_activities
-    total_work_done = sum(task['max_progress'] for task in activities_list)
+    overall_progress = sum(task['progress_percentage'] for task in activities_list) / total_activities
+    total_work_done = sum(task['progress_percentage'] for task in activities_list)
     performance = calculate_performance(overall_progress)
     
     # Determine week-level status
@@ -406,7 +414,12 @@ def aggregate_dpr_activities_by_week(
         dpr__in=dpr_queryset,
         dpr__report_date__year=year,
         dpr__report_date__month=month
-    ).select_related('dpr').order_by('dpr__report_date')
+    ).select_related(
+        'dpr',
+        'scope',
+        'scope__category',
+        'scope__subcategory'
+    ).order_by('dpr__report_date')
     
     # Group activities by week
     weeks_data = {}
