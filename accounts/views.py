@@ -9,5 +9,7 @@ class UserProfileView(APIView):
     authentication_classes = [BasicAuthentication]  # Force basic auth only
 
     def get(self, request):
+        print(f"DEBUG HEADERS: {request.headers}")
+        print(f"DEBUG AUTH: {request.META.get('HTTP_AUTHORIZATION')}")
         serializer = UserSerializer(request.user)
         return Response(serializer.data)

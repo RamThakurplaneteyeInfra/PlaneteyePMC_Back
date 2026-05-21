@@ -13,6 +13,11 @@ class ProjectProgressStatusSerializer(serializers.ModelSerializer):
     """
     
     progress_month_display = serializers.SerializerMethodField()
+    monthly_plan = serializers.FloatField(required=False, default=0.0)
+    cumulative_plan = serializers.FloatField(required=False, default=0.0)
+    monthly_actual = serializers.FloatField(required=False, default=0.0)
+    cumulative_actual = serializers.FloatField(required=False, default=0.0)
+    created_by = serializers.CharField(required=False, default="Dashboard")
     
     class Meta:
         model = ProjectProgressStatus
@@ -86,7 +91,27 @@ class ProjectProgressStatusSerializer(serializers.ModelSerializer):
                 from datetime import date
                 attrs["progress_month"] = date(progress_month.year, progress_month.month, 1)
         
+        # Set defaults for required fields if missing
+        attrs.setdefault("cumulative_plan", attrs.get("monthly_plan", 0.0))
+        attrs.setdefault("cumulative_actual", attrs.get("monthly_actual", 0.0))
+        attrs.setdefault("created_by", "Dashboard")
+        
         return attrs
+    
+    def create(self, validated_data):
+        project_name = validated_data.pop("project_name")
+        progress_month = validated_data.pop("progress_month")
+        try:
+            instance, created = ProjectProgressStatus.objects.update_or_create(
+                project_name=project_name,
+                progress_month=progress_month,
+                defaults=validated_data
+            )
+            validated_data["project_name"] = project_name
+            validated_data["progress_month"] = progress_month
+            return instance
+        except Exception as e:
+            raise serializers.ValidationError({"detail": str(e)})
     
     def update(self, instance, validated_data):
         """

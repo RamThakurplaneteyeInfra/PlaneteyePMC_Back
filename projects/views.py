@@ -323,6 +323,46 @@ class ProjectViewSet(viewsets.ModelViewSet):
         serializer = ProjectDashboardDataSerializer(dashboard_data)
         return Response(serializer.data)
 
+    @action(detail=True, methods=['patch', 'put'], url_path='update-dashboard-data')
+    def update_dashboard_data(self, request, pk=None):
+        """
+        Update dashboard data for a project (partial update).
+        API: PATCH /api/projects-data/projects/{id}/update-dashboard-data/
+        """
+        project = self.get_object()
+        user = request.user
+        
+        # Check permissions (Team Leader/Lead, PMC Head, CEO, or directly assigned)
+        if not (user.groups.filter(name__in=['Team Leader', 'Team Lead', 'PMC Head', 'CEO']).exists() or 
+                user.is_superuser or
+                project.team_lead == user or
+                project.pmc_head == user):
+            return Response({'error': 'You do not have permission to update dashboard data'}, status=403)
+            
+        try:
+            dashboard_data = project.dashboard_data
+        except ProjectDashboardData.DoesNotExist:
+            dashboard_data = ProjectDashboardData(project=project)
+            
+        serializer = ProjectDashboardDataSerializer(
+            dashboard_data, 
+            data=request.data, 
+            partial=True
+        )
+        
+        if serializer.is_valid():
+            serializer.save()
+            return Response({
+                'success': True,
+                'message': 'Dashboard data updated successfully',
+                'data': serializer.data
+            })
+            
+        return Response({
+            'success': False,
+            'errors': serializer.errors
+        }, status=400)
+
     @action(detail=True, methods=['post'], url_path='assign-team-lead')
     def assign_team_lead(self, request, pk=None):
         """

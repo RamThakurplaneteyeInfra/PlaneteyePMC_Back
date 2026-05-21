@@ -98,9 +98,13 @@ class ProjectManpowerViewSet(viewsets.ModelViewSet):
     )
     def perform_create(self, serializer):
         super().perform_create(serializer)
-        # Cache invalidation
-        cache.delete_pattern("manpower_list:*")
-        cache.delete_pattern("manpower_dashboard:*")
+        # Cache invalidation (safe for both LocMemCache and Redis backends)
+        try:
+            cache.delete_pattern("manpower_list:*")
+            cache.delete_pattern("manpower_dashboard:*")
+        except AttributeError:
+            # LocMemCache doesn't support delete_pattern; clear all cache
+            cache.clear()
 
     def create(self, request, *args, **kwargs):
         ser = ProjectManpowerInputSerializer(data=request.data)

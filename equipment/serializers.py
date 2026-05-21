@@ -68,15 +68,23 @@ class ProjectEquipmentInputSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
+        project_name = validated_data.pop("project_name")
+        month = validated_data.pop("month")
         try:
             with transaction.atomic():
-                instance = ProjectEquipment.objects.create(**validated_data)
-                ProjectEquipment.recalculate_cumulatives(validated_data["project_name"])
+                instance, created = ProjectEquipment.objects.update_or_create(
+                    project_name=project_name,
+                    month=month,
+                    defaults=validated_data
+                )
+                validated_data["project_name"] = project_name
+                validated_data["month"] = month
+                ProjectEquipment.recalculate_cumulatives(project_name)
                 instance.refresh_from_db()
                 return instance
-        except IntegrityError:
+        except Exception as e:
             raise serializers.ValidationError(
-                {"month": "This month already exists for this project. Each project may have only one row per month."}
+                {"detail": f"Failed to save equipment data: {str(e)}"}
             )
 
 

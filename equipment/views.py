@@ -50,9 +50,13 @@ class ProjectEquipmentViewSet(viewsets.ModelViewSet):
     )
     def perform_create(self, serializer):
         super().perform_create(serializer)
-        # Cache invalidation
-        cache.delete_pattern("equipment_list:*")
-        cache.delete_pattern("equipment_dashboard:*")
+        # Cache invalidation (safe for both LocMemCache and Redis backends)
+        try:
+            cache.delete_pattern("equipment_list:*")
+            cache.delete_pattern("equipment_dashboard:*")
+        except AttributeError:
+            # LocMemCache doesn't support delete_pattern; clear all cache
+            cache.clear()
 
     def create(self, request, *args, **kwargs):
         ser = self.get_serializer(data=request.data)

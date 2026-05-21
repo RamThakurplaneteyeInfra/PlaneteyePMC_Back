@@ -111,15 +111,23 @@ class ProjectManpowerInputSerializer(serializers.ModelSerializer):
         validated_data["planned_mh"] = planned_mh
         validated_data["actual_mh"] = actual_mh
 
+        project_name = validated_data.pop("project_name")
+        month_year = validated_data.pop("month_year")
         try:
             with transaction.atomic():
-                instance = ProjectManpower.objects.create(**validated_data)
-                ProjectManpower.recalculate_cumulatives(validated_data["project_name"])
+                instance, created = ProjectManpower.objects.update_or_create(
+                    project_name=project_name,
+                    month_year=month_year,
+                    defaults=validated_data
+                )
+                validated_data["project_name"] = project_name
+                validated_data["month_year"] = month_year
+                ProjectManpower.recalculate_cumulatives(project_name)
                 instance.refresh_from_db()
                 return instance
-        except IntegrityError:
+        except Exception as e:
             raise serializers.ValidationError(
-                {"month_year": "This month_year already exists for this project."}
+                {"detail": f"Failed to save manpower data: {str(e)}"}
             )
 
 

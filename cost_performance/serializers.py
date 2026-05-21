@@ -142,11 +142,20 @@ class ProjectCostPerformanceInputSerializer(serializers.ModelSerializer):
         validated_data.pop("cpi", None)
         validated_data.pop("vac", None)
 
+        project = validated_data.pop("project")
+        month_year = validated_data.pop("month_year")
         try:
-            return ProjectCostPerformance.objects.create(**validated_data)
-        except IntegrityError:
+            instance, created = ProjectCostPerformance.objects.update_or_create(
+                project=project,
+                month_year=month_year,
+                defaults=validated_data
+            )
+            validated_data["project"] = project
+            validated_data["month_year"] = month_year
+            return instance
+        except Exception as e:
             raise serializers.ValidationError(
-                {"month_year": "Already exists for this project."}
+                {"detail": f"Failed to save cost performance data: {str(e)}"}
             )
 
 

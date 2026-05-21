@@ -105,11 +105,19 @@ class CashFlowInputSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         # Remove unnecessary defaults since model provides them
+        project_name = validated_data.pop("project_name")
+        month_year = validated_data.pop("month_year")
         try:
-            instance = CashFlow.objects.create(**validated_data)
-        except IntegrityError:
+            instance, created = CashFlow.objects.update_or_create(
+                project_name=project_name,
+                month_year=month_year,
+                defaults=validated_data
+            )
+            validated_data["project_name"] = project_name
+            validated_data["month_year"] = month_year
+        except Exception as e:
             raise serializers.ValidationError(
-                {"month_year": "This month_year already exists for this project."}
+                {"detail": f"Failed to save cash flow data: {str(e)}"}
             )
 
         # Use transaction.on_commit to defer recalculation until after DB commit
