@@ -15,25 +15,20 @@ def send_html_email(subject, template_name, context, recipient_list, from_email=
             from_email = settings.DEFAULT_FROM_EMAIL
 
         template_path = f'emails/{template_name}.html'
-        logger.info(f"Loading template: {template_path}")
+        logger.debug(f"Rendering email template: {template_path}")
 
-        # Render the HTML content
         html_content = render_to_string(template_path, context)
 
-        # Log first 200 chars of content for debugging
-        logger.info(f"Email content preview: {html_content[:200]}...")
-
-        # Send the email
         result = send_mail(
             subject=subject,
-            message='',  # Plain text message (empty for HTML-only)
+            message='',
             html_message=html_content,
             from_email=from_email,
             recipient_list=recipient_list,
             fail_silently=False,
         )
 
-        if result == 1:  # send_mail returns number of successfully sent emails
+        if result == 1:
             logger.info(f"Email sent successfully to {recipient_list}")
             return True
         else:
@@ -41,5 +36,5 @@ def send_html_email(subject, template_name, context, recipient_list, from_email=
             return False
 
     except Exception as e:
-        logger.error(f"Error sending email: {str(e)}")
+        logger.error(f"Error sending email to {recipient_list}: {str(e)}")
         return False

@@ -10,12 +10,13 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from .models import Project, ProjectDashboardData, Site
+from .models import Project, ProjectDashboardData, Site, ProjectLog, ProjectLogEntry
 from .serializers import (
     ProjectDashboardDataSerializer,
     ProjectInitSerializer,
     ProjectSerializer,
     SiteSerializer,
+    ProjectLogSerializer,
 )
 
 class ProjectViewSet(viewsets.ModelViewSet):
@@ -723,3 +724,59 @@ class SiteViewSet(viewsets.ModelViewSet):
         if project_id:
             return Site.objects.filter(project_id=project_id)
         return Site.objects.all()
+
+
+class ProjectLogViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing Project Logs (Issues & Concerns + Risks & Actions).
+    
+    Endpoints:
+    - GET    /api/project-logs/<project_id>/     → Get logs for a project (creates if not exists)
+    - PATCH  /api/project-logs/<project_id>/     → Update logs (replaces entries)
+    - PUT    /api/project-logs/<project_id>/     → Full update
+    """
+    serializer_class = ProjectLogSerializer
+    permission_classes = [IsAuthenticated]
+    lookup_field = 'project_id'
+
+    def get_queryset(self):
+        project_id = self.kwargs.get('project_id')
+        if project_id:
+            return ProjectLog.objects.filter(project_id=project_id).prefetch_related('entries')
+        return ProjectLog.objects.none()
+
+    def get_object(self):
+        """
+        Get or create ProjectLog for the given project.
+        """
+        project_id = self.kwargs.get('project_id')
+        
+        try:
+            project = Project.objects.get(id=project_id)
+        except Project.DoesNotExist:
+            from rest_framework.exceptions import NotFound
+            raise NotFound("Project not found")
+
+        project_log, created = ProjectLog.objects.get_or_create(
+            project=project,
+            defaults={
+                'created_by': self.request.user if self.request.user.is_authenticated else None
+            }
+        )
+        
+        if created:
+            project_log.updated_by = self.request.user
+            project_log.save()
+            
+        return project_log
+
+    def perform_update(self, serializer):
+        serializer.save(updated_by=self.request.user)
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response(serializer.data)

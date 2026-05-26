@@ -193,10 +193,58 @@ def _get_project_approvers(project, approver_role):
     elif approver_role == 'PMC Head' and project.pmc_head:
         approvers.append(project.pmc_head)
     elif approver_role == 'Coordinator':
-        # Send to all coordinators
         approvers.extend(list(project.coordinators.all()))
 
-    return [user for user in approvers if user.email]
+    # Filter to only those with email, log warning if role user has no email
+    filtered = []
+    for user in approvers:
+        if user.email:
+            filtered.append(user)
+        else:
+            logger.warning(
+                f"User '{user.username}' is assigned as {approver_role} but has no email configured."
+            )
+
+    return filtered
+
+
+def _get_dpr_notification_recipients(project, approver_role):
+    """
+    Get email recipients for DPR submission notifications.
+
+    Prefers the specific approver role (Team Leader / Coordinator / PMC Head).
+    Falls back to ANY assigned project leadership (team_lead + pmc_head + coordinators)
+    so that emails are always sent to at least one role when a DPR is submitted,
+    even if the exact workflow slot is not yet assigned on the project.
+    """
+    # Try exact role first
+    specific = _get_project_approvers(project, approver_role)
+    if specific:
+        return specific
+
+    # Fallback: any leadership on the project
+    fallback = []
+    if project.team_lead:
+        fallback.append(project.team_lead)
+    if project.pmc_head:
+        fallback.append(project.pmc_head)
+    fallback.extend(list(project.coordinators.all()))
+
+    # Dedup + require email
+    seen = set()
+    recipients = []
+    for user in fallback:
+        if user.id not in seen and user.email:
+            seen.add(user.id)
+            recipients.append(user)
+
+    if recipients:
+        logger.info(
+            f"No exact approver for role '{approver_role}' on '{project.name}'. "
+            f"Falling back to {len(recipients)} leadership user(s)."
+        )
+
+    return recipients
 
 
 def notify_dpr_submitted(dpr):
@@ -206,21 +254,40 @@ def notify_dpr_submitted(dpr):
     Args:
         dpr (DailyProgressReport): The DPR instance
     """
-    # Find the project by name (since DPR uses project_name as string)
-    # Use filter().first() to handle multiple projects gracefully
-    project = Project.objects.filter(name=dpr.project_name).first()
+    # Find the project by name
+    project_name_clean = (dpr.project_name or '').strip()
+    project = Project.objects.filter(name__iexact=project_name_clean).first()
+    if not project and project_name_clean:
+        project = Project.objects.filter(name__icontains=project_name_clean).first()
+
     if not project:
         logger.error(f"Project '{dpr.project_name}' not found for DPR {dpr.id}")
         return
 
-    # Get approvers based on current_approver_role
-    approvers = _get_project_approvers(project, dpr.current_approver_role)
+    # Get approvers (with fallback logic)
+    approvers = _get_dpr_notification_recipients(project, dpr.current_approver_role)
 
     if not approvers:
-        logger.warning(f"No approvers found for role '{dpr.current_approver_role}' on project '{project.name}'")
+        # Log detailed diagnostic information when no recipients can be found
+        tl = project.team_lead
+        pmc = project.pmc_head
+        coords = list(project.coordinators.all())
+
+        logger.warning(
+            f"No recipients found for DPR submission notification. "
+            f"Project: {project.name} | Role: {dpr.current_approver_role} | "
+            f"team_lead={tl.username if tl else None} (email={tl.email if tl else None}) | "
+            f"pmc_head={pmc.username if pmc else None} (email={pmc.email if pmc else None}) | "
+            f"coordinators={[c.username for c in coords]}"
+        )
         return
 
     recipient_emails = [user.email for user in approvers]
+
+    logger.info(
+        f"DPR submitted notification for project '{dpr.project_name}' (ID: {dpr.id}). "
+        f"Role: {dpr.current_approver_role} | Recipients: {recipient_emails}"
+    )
 
     context = {
         'dpr': {
@@ -252,7 +319,7 @@ def notify_dpr_submitted(dpr):
         recipient_list=recipient_emails
     )
 
-    # Send WebSocket notifications to approvers
+    # WebSocket notifications
     for approver in approvers:
         ws_message = create_notification_message(
             'dpr_submitted',
@@ -262,7 +329,7 @@ def notify_dpr_submitted(dpr):
         )
         send_websocket_notification(approver.id, ws_message)
 
-    # Also notify the submitter that their DPR was successfully submitted
+    # Notify submitter
     if dpr.submitted_by and dpr.submitted_by.email:
         submitter_ws_message = create_notification_message(
             'dpr_submitted',

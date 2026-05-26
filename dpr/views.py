@@ -18,6 +18,9 @@ from projects.models import Project
 from .serializers import DailyProgressReportSerializer, DPRActivitySerializer
 from services.notifications import notify_dpr_submitted, notify_dpr_approved, notify_dpr_rejected, notify_dpr_approved_by_role, notify_dpr_rejected_by_role
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 def safe_cache_delete_pattern(pattern):
     """
@@ -226,6 +229,21 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                 )
             instance = serializer.save()
             headers = self.get_success_headers(serializer.data)
+
+            # Trigger notification if DPR was created directly in a pending state
+            # (some frontends may bypass the separate /submit/ endpoint)
+            pending_statuses = [
+                DailyProgressReport.Status.PENDING_TEAM_LEAD,
+                DailyProgressReport.Status.PENDING_COORDINATOR,
+                DailyProgressReport.Status.PENDING_PMC_HEAD,
+            ]
+
+            if instance.status in pending_statuses:
+                logger.info(f"DPR created directly in pending state ({instance.status}). Triggering notification.")
+                try:
+                    notify_dpr_submitted(instance)
+                except Exception as notify_err:
+                    logger.error(f"Failed to send notification after direct DPR create: {notify_err}")
 
             # Check if this was appending to existing DPR
             activities_added = getattr(instance, '_activities_added', None)
@@ -465,6 +483,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                 dpr.save()
 
                 # Send notification
+                logger.info(f"Submitting DPR ID={dpr.id} for project '{dpr.project_name}'")
                 notify_dpr_submitted(dpr)
 
                 # Cache invalidation

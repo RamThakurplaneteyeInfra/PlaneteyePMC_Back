@@ -3,13 +3,22 @@ from rest_framework import serializers
 from .models import DailyProgressReport, DPRActivity
 from django.contrib.auth import get_user_model
 from monthly_scope.services import ScopeProgressService
+from monthly_scope.models import MonthlyScopeWork
+from decimal import Decimal
 
 
 class DPRActivitySerializer(serializers.ModelSerializer):
     """
     Serializer for DPR Activity (nested) with Monthly Scope integration
     """
-    # Scope-related fields
+    # Writable scope field - accepts PK from frontend (e.g. "scope": 8)
+    scope = serializers.PrimaryKeyRelatedField(
+        queryset=MonthlyScopeWork.objects.all(),
+        write_only=True,
+        required=True
+    )
+
+    # Read-only display fields (kept for API responses)
     scope_id = serializers.SerializerMethodField(read_only=True)
     scope_name = serializers.SerializerMethodField(read_only=True)
     scope_description = serializers.SerializerMethodField(read_only=True)
@@ -25,6 +34,7 @@ class DPRActivitySerializer(serializers.ModelSerializer):
         model = DPRActivity
         fields = [
             'id',
+            'scope',                    # Writable input field (must come before read-only scope_* fields)
             'scope_id',
             'scope_name',
             'scope_description',

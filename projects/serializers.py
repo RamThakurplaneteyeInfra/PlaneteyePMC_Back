@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Project, Site, ProjectDashboardData
+from .models import Project, Site, ProjectDashboardData, ProjectLog, ProjectLogEntry
 
 class SiteSerializer(serializers.ModelSerializer):
     class Meta:
@@ -302,3 +302,81 @@ class ProjectInitSerializer(serializers.ModelSerializer):
         # Trigger recalculation in case instance was modified
         instance.save()
         return super().to_representation(instance)
+
+
+# ======================================================
+# Project Logs Serializers
+# ======================================================
+
+class ProjectLogEntrySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProjectLogEntry
+        fields = ['id', 'entry_type', 'left_text', 'right_text', 'row_order']
+
+
+class ProjectLogSerializer(serializers.ModelSerializer):
+    """
+    Serializer for Project Logs with nested entries.
+    Supports both Issues/Concerns and Risks/Actions.
+    """
+    entries = ProjectLogEntrySerializer(many=True, required=False)
+
+    class Meta:
+        model = ProjectLog
+        fields = ['id', 'project', 'entries', 'created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at', 'project']
+
+    def validate(self, data):
+        entries_data = self.initial_data.get('entries', [])
+        
+        # Validate row_order is unique per entry_type
+        seen_orders = {'issue_concern': set(), 'risk_action': set()}
+        
+        for entry in entries_data:
+            entry_type = entry.get('entry_type')
+            row_order = entry.get('row_order', 0)
+            
+            if entry_type in seen_orders:
+                if row_order in seen_orders[entry_type]:
+                    raise serializers.ValidationError(
+                        f"Duplicate row_order {row_order} for entry_type {entry_type}"
+                    )
+                seen_orders[entry_type].add(row_order)
+        
+        return data
+
+    def create(self, validated_data):
+        # This is usually handled via the ViewSet
+        project_log = ProjectLog.objects.create(**validated_data)
+        return project_log
+
+    def update(self, instance, validated_data):
+        entries_data = self.initial_data.get('entries', [])
+        
+        # Delete existing entries and recreate (simple & reliable for this UI pattern)
+        instance.entries.all().delete()
+        
+        for entry_data in entries_data:
+            ProjectLogEntry.objects.create(
+                project_log=instance,
+                entry_type=entry_data.get('entry_type'),
+                left_text=entry_data.get('left_text', ''),
+                right_text=entry_data.get('right_text', ''),
+                row_order=entry_data.get('row_order', 0)
+            )
+        
+        instance.save()
+        return instance
+
+    def to_representation(self, instance):
+        """Ensure entries are properly ordered in response."""
+        representation = super().to_representation(instance)
+        entries = representation.get('entries', [])
+        
+        # Sort by entry_type then row_order
+        sorted_entries = sorted(
+            entries, 
+            key=lambda x: (x.get('entry_type', ''), x.get('row_order', 0))
+        )
+        representation['entries'] = sorted_entries
+        return representation

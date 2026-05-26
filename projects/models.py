@@ -2,6 +2,7 @@ from django.db import models
 from django.contrib.auth.models import User
 from django.core.validators import MinValueValidator
 from decimal import Decimal
+from django.conf import settings
 
 # Constants
 ZERO = Decimal('0.00')
@@ -249,4 +250,72 @@ class ProjectDashboardData(models.Model):
     
     def __str__(self):
         return f"Dashboard Data for {self.project.name}"
+
+
+class ProjectLog(models.Model):
+    """
+    Stores Issues & Concerns and Risks & Actions for a project.
+    One ProjectLog per Project.
+    """
+    project = models.OneToOneField(
+        Project, 
+        on_delete=models.CASCADE, 
+        related_name='project_log'
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        null=True, 
+        blank=True, 
+        on_delete=models.SET_NULL, 
+        related_name='created_project_logs'
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        null=True, 
+        blank=True, 
+        on_delete=models.SET_NULL, 
+        related_name='updated_project_logs'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Project Log"
+        verbose_name_plural = "Project Logs"
+
+    def __str__(self):
+        return f"Project Logs - {self.project.name}"
+
+
+class ProjectLogEntry(models.Model):
+    """
+    Individual row in Project Logs.
+    Can be either Issue/Concern or Risk/Action.
+    """
+
+    class EntryType(models.TextChoices):
+        ISSUE_CONCERN = 'issue_concern', 'Issue / Concern'
+        RISK_ACTION = 'risk_action', 'Risk / Action'
+
+    project_log = models.ForeignKey(
+        ProjectLog, 
+        on_delete=models.CASCADE, 
+        related_name='entries'
+    )
+    entry_type = models.CharField(
+        max_length=20, 
+        choices=EntryType.choices,
+        db_index=True
+    )
+    left_text = models.TextField(blank=True, help_text="Issue or Risk")
+    right_text = models.TextField(blank=True, help_text="Concern or Action")
+    row_order = models.PositiveIntegerField(default=0, db_index=True)
+
+    class Meta:
+        ordering = ['entry_type', 'row_order']
+        verbose_name = "Project Log Entry"
+        verbose_name_plural = "Project Log Entries"
+
+    def __str__(self):
+        return f"{self.get_entry_type_display()} - {self.left_text[:50]}"
 
