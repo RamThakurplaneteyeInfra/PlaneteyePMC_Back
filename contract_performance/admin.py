@@ -1,48 +1,67 @@
+"""
+Django admin registration for the Contract Performance app.
+"""
+
 from django.contrib import admin
-from .models import ContractPerformance
+
+from .models.contract_performance import ContractPerformance
 
 
 @admin.register(ContractPerformance)
 class ContractPerformanceAdmin(admin.ModelAdmin):
-    list_display = (
-        "project_name",
-        "contract_value",
-        "earned_value",
-        "earned_value_percentage",
-        "actual_billed",
-        "actual_billed_percentage",
+    """Admin view for Contract Performance records."""
+
+    list_display = [
+        "projectName",
+        "billedValue",
+        "actualReceiptValue",
         "variance",
-        "variance_percentage",
-        "performance_status",
-        "created_by",
-        "updated_by",
-        "created_at",
-    )
-    list_filter = ("performance_status", "created_by", "updated_by", "created_at")
-    search_fields = ("project_name", "created_by", "updated_by")
-    readonly_fields = (
-        "earned_value_percentage",
-        "actual_billed_percentage",
-        "variance",
-        "variance_percentage",
-        "performance_status",
+        "variancePercentage",
+        "performancePercentage",
         "created_at",
         "updated_at",
-    )
+    ]
+    list_filter = ["created_at"]
+    search_fields = ["projectName"]
+    readonly_fields = [
+        "variance",
+        "variancePercentage",
+        "performancePercentage",
+        "created_at",
+        "updated_at",
+    ]
+    ordering = ["projectName"]
+
     fieldsets = (
-        (None, {
-            "fields": ("project_name", "contract_value")
-        }),
-        ("Performance Metrics", {
-            "fields": ("earned_value", "earned_value_percentage", "actual_billed", "actual_billed_percentage")
-        }),
-        ("Calculated Values", {
-            "fields": ("variance", "variance_percentage", "performance_status")
-        }),
-        ("Tracking", {
-            "fields": ("created_by", "updated_by")
-        }),
-        ("Timestamps", {
-            "fields": ("created_at", "updated_at")
-        }),
+        ("Project", {"fields": ("projectName",)}),
+        (
+            "Input Values",
+            {
+                "fields": ("billedValue", "actualReceiptValue"),
+                "description": (
+                    "Enter Billed Value and Actual Receipt Value. "
+                    "Calculated fields update automatically on save."
+                ),
+            },
+        ),
+        (
+            "Auto-Calculated KPIs",
+            {
+                "fields": (
+                    "variance",
+                    "variancePercentage",
+                    "performancePercentage",
+                ),
+                "description": (
+                    "These fields are calculated automatically and cannot be edited directly."
+                ),
+            },
+        ),
+        (
+            "Timestamps",
+            {
+                "fields": ("created_at", "updated_at"),
+                "classes": ("collapse",),
+            },
+        ),
     )

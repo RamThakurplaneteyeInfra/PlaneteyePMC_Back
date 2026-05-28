@@ -7,9 +7,16 @@ import os
 
 # SECURITY
 SECRET_KEY = os.environ.get('SECRET_KEY')
+if not SECRET_KEY:
+    raise Exception('SECRET_KEY environment variable must be set in production.')
 DEBUG = False
 
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '').split(',')
+ALLOWED_HOSTS = [
+    h.strip() for h in os.environ.get('ALLOWED_HOSTS', '').split(',') if h.strip()
+]
+# Always allow Render's internal health-check host
+if not ALLOWED_HOSTS:
+    ALLOWED_HOSTS = ['*']  # fallback — set ALLOWED_HOSTS env var in production
 
 # DATABASE (Render PostgreSQL)
 if os.environ.get('DATABASE_URL'):
@@ -64,6 +71,14 @@ X_FRAME_OPTIONS = 'DENY'
 # ================= CORS =================
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
+# Build allowed origins from env var: CORS_ALLOWED_ORIGINS=https://app.example.com,https://other.example.com
+# Falls back to allowing all *.onrender.com subdomains so the frontend on Render works out of the box.
+_cors_env = os.environ.get('CORS_ALLOWED_ORIGINS', '')
+CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_env.split(',') if o.strip()]
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://.*\.onrender\.com$",
+    r"^https://.*\.devtunnels\.ms$",
+]
 
 # ================= CHANNELS CONFIGURATION (WebSocket Support) =================
 CHANNEL_LAYERS = {

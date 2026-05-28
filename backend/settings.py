@@ -68,6 +68,13 @@ INSTALLED_APPS = [
     'health_safety',
     'plant_machinery',
     'manpower_management',
+    'drawings',
+    'correspondence',
+    'planned_earned_value',
+    'contract_values',
+    'project_quality_status',
+    'construction_progress',
+    'project_equipment',
 ]
 
 MIDDLEWARE = [
@@ -293,7 +300,4 @@ EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER)
 
 
-    
-    
-    
-print("Settings loaded successfully")
+

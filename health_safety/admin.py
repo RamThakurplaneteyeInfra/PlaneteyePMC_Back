@@ -33,3 +33,55 @@ class HealthSafetyReportAdmin(admin.ModelAdmin):
         }),
     )
     readonly_fields = ['created_at', 'updated_at']
+
+
+# =============================================================================
+# HSE RECORD ADMIN
+# =============================================================================
+
+from .models import HSERecord
+
+
+@admin.register(HSERecord)
+class HSERecordAdmin(admin.ModelAdmin):
+    """Admin interface for project-level HSE Records."""
+
+    list_display = [
+        "projectName",
+        "fatalities",
+        "significant",
+        "major",
+        "minor",
+        "nearMiss",
+        "totalManhours",
+        "lossOfManhours",
+        "created_at",
+        "updated_at",
+    ]
+    list_filter = ["created_at"]
+    search_fields = ["projectName"]
+    ordering = ["projectName"]
+    readonly_fields = ["created_at", "updated_at"]
+
+    fieldsets = (
+        ("Project", {"fields": ("projectName",)}),
+        (
+            "Incident Counts",
+            {
+                "fields": ("fatalities", "significant", "major", "minor", "nearMiss"),
+            },
+        ),
+        (
+            "Manhours",
+            {
+                "fields": ("totalManhours", "lossOfManhours"),
+            },
+        ),
+        (
+            "Timestamps",
+            {
+                "fields": ("created_at", "updated_at"),
+                "classes": ("collapse",),
+            },
+        ),
+    )

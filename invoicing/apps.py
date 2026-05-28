@@ -1,5 +1,11 @@
+"""
+Invoicing app configuration.
+"""
+
 from django.apps import AppConfig
 
 
 class InvoicingConfig(AppConfig):
-    name = 'invoicing'
+    default_auto_field = "django.db.models.BigAutoField"
+    name = "invoicing"
+    verbose_name = "Invoicing Information"

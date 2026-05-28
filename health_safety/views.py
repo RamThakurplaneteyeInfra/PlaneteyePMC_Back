@@ -2,7 +2,7 @@
 import logging
 from django.core.cache import cache
 from rest_framework import viewsets, status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from rest_framework.pagination import PageNumberPagination
@@ -319,3 +319,492 @@ class HealthSafetyReportViewSet(viewsets.ModelViewSet):
             )
         self.perform_create(serializer)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+# =============================================================================
+# HSE RECORD VIEWSET
+# Project-wise HSE CRUD — one record per project.
+# Endpoints (mounted at /api/hse/ in backend/urls.py):
+#   POST   /api/hse/                          -> create HSE record
+#   GET    /api/hse/                          -> list all records (paginated)
+#   GET    /api/hse/{id}/                     -> retrieve by ID
+#   PUT    /api/hse/{id}/                     -> full update
+#   PATCH  /api/hse/{id}/                     -> partial update
+#   DELETE /api/hse/{id}/                     -> delete
+#   GET    /api/hse/project/{projectName}/    -> lookup by project name
+# =============================================================================
+
+from .models import HSERecord
+from .serializers import HSERecordSerializer
+
+_HSE_CACHE_KEY_LIST = "hse_records_list"
+_HSE_CACHE_TIMEOUT = 300  # 5 minutes
+
+
+# ---------------------------------------------------------------------------
+# Swagger schema helpers
+# ---------------------------------------------------------------------------
+
+_HSE_POST_SCHEMA = openapi.Schema(
+    type=openapi.TYPE_OBJECT,
+    required=["projectName"],
+    properties={
+        "projectName": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            description="Unique project name",
+            example="Atlas Tower",
+        ),
+        "fatalities": openapi.Schema(
+            type=openapi.TYPE_INTEGER, description="Fatality count (≥ 0)", example=0
+        ),
+        "significant": openapi.Schema(
+            type=openapi.TYPE_INTEGER, description="Significant incident count (≥ 0)", example=1
+        ),
+        "major": openapi.Schema(
+            type=openapi.TYPE_INTEGER, description="Major incident count (≥ 0)", example=2
+        ),
+        "minor": openapi.Schema(
+            type=openapi.TYPE_INTEGER, description="Minor incident count (≥ 0)", example=5
+        ),
+        "nearMiss": openapi.Schema(
+            type=openapi.TYPE_INTEGER, description="Near-miss count (≥ 0)", example=10
+        ),
+        "totalManhours": openapi.Schema(
+            type=openapi.TYPE_NUMBER,
+            description="Total manhours worked (≥ 0)",
+            example=500000,
+        ),
+        "lossOfManhours": openapi.Schema(
+            type=openapi.TYPE_NUMBER,
+            description="Manhours lost due to incidents (≥ 0, ≤ totalManhours)",
+            example=120,
+        ),
+    },
+)
+
+_HSE_RESPONSE_SCHEMA = openapi.Schema(
+    type=openapi.TYPE_OBJECT,
+    properties={
+        "success": openapi.Schema(type=openapi.TYPE_BOOLEAN, example=True),
+        "message": openapi.Schema(
+            type=openapi.TYPE_STRING, example="HSE record created successfully"
+        ),
+        "data": openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                "id": openapi.Schema(type=openapi.TYPE_INTEGER, example=1),
+                "projectName": openapi.Schema(type=openapi.TYPE_STRING, example="Atlas Tower"),
+                "fatalities": openapi.Schema(type=openapi.TYPE_INTEGER, example=0),
+                "significant": openapi.Schema(type=openapi.TYPE_INTEGER, example=1),
+                "major": openapi.Schema(type=openapi.TYPE_INTEGER, example=2),
+                "minor": openapi.Schema(type=openapi.TYPE_INTEGER, example=5),
+                "nearMiss": openapi.Schema(type=openapi.TYPE_INTEGER, example=10),
+                "totalManhours": openapi.Schema(type=openapi.TYPE_NUMBER, example=500000),
+                "lossOfManhours": openapi.Schema(type=openapi.TYPE_NUMBER, example=120),
+                "totalIncidents": openapi.Schema(type=openapi.TYPE_INTEGER, example=18),
+                "ltifr": openapi.Schema(type=openapi.TYPE_NUMBER, example=0.24),
+                "incidentRate": openapi.Schema(type=openapi.TYPE_NUMBER, example=36.0),
+                "created_at": openapi.Schema(type=openapi.TYPE_STRING, example="2024-01-15T10:30:00Z"),
+                "updated_at": openapi.Schema(type=openapi.TYPE_STRING, example="2024-01-15T10:30:00Z"),
+            },
+        ),
+    },
+)
+
+
+# ---------------------------------------------------------------------------
+# Pagination
+# ---------------------------------------------------------------------------
+
+class HSERecordPagination(PageNumberPagination):
+    """Pagination for HSE records (20 per page, configurable up to 100)."""
+
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
+# ---------------------------------------------------------------------------
+# ViewSet
+# ---------------------------------------------------------------------------
+
+class HSERecordViewSet(viewsets.ModelViewSet):
+    """
+    HSE Record Management ViewSet.
+
+    One record per project — tracks cumulative incident counts and manhour data.
+    All endpoints return a uniform {success, message, data} envelope.
+
+    Computed KPI fields returned on every response (never sent by client):
+      - totalIncidents  : sum of all incident categories
+      - ltifr           : Lost Time Injury Frequency Rate
+      - incidentRate    : Total incidents per 1,000,000 manhours
+
+    Scalable for future additions:
+      - monthly HSE tracking
+      - incident history
+      - safety score calculation
+      - LTIFR / TRIR calculations
+      - project-wise HSE analytics
+      - charts and KPI cards
+    """
+
+    queryset = HSERecord.objects.all()
+    serializer_class = HSERecordSerializer
+    permission_classes = [AllowAny]
+    pagination_class = HSERecordPagination
+
+    # -------------------------------------------------------------------------
+    # Queryset
+    # -------------------------------------------------------------------------
+
+    def get_queryset(self):
+        """
+        Optimised queryset.
+        Supports optional ?project_name= filter for project-wise filtering.
+        """
+        qs = HSERecord.objects.only(
+            "id",
+            "projectName",
+            "fatalities",
+            "significant",
+            "major",
+            "minor",
+            "nearMiss",
+            "totalManhours",
+            "lossOfManhours",
+            "created_at",
+            "updated_at",
+        )
+
+        # Optional project-wise filter: ?project_name=Atlas
+        project_name = self.request.query_params.get("project_name")
+        if project_name:
+            qs = qs.filter(projectName__icontains=project_name.strip())
+
+        return qs
+
+    # -------------------------------------------------------------------------
+    # Helpers
+    # -------------------------------------------------------------------------
+
+    def _invalidate_cache(self):
+        """Invalidate the list cache whenever data changes."""
+        cache.delete(_HSE_CACHE_KEY_LIST)
+
+    def _success(self, message: str, data, http_status=status.HTTP_200_OK):
+        """Uniform success response: {success, message, data}."""
+        return Response(
+            {"success": True, "message": message, "data": data},
+            status=http_status,
+        )
+
+    def _error(self, message: str, errors=None, http_status=status.HTTP_400_BAD_REQUEST):
+        """Uniform error response: {success, message, errors?}."""
+        payload = {"success": False, "message": message}
+        if errors is not None:
+            payload["errors"] = errors
+        return Response(payload, status=http_status)
+
+    # -------------------------------------------------------------------------
+    # CREATE  POST /api/hse/
+    # -------------------------------------------------------------------------
+
+    @swagger_auto_schema(
+        operation_summary="Create HSE Record",
+        operation_description=(
+            "Create a new HSE record for a project. "
+            "totalIncidents, ltifr, and incidentRate are auto-calculated."
+        ),
+        request_body=_HSE_POST_SCHEMA,
+        responses={
+            201: openapi.Response("Created", _HSE_RESPONSE_SCHEMA),
+            400: "Validation error",
+        },
+        tags=["HSE Records"],
+    )
+    def create(self, request, *args, **kwargs):
+        """
+        Create or update a project-level HSE record (upsert by projectName).
+
+        If a record already exists for the given projectName it is updated
+        in-place rather than returning a 500 uniqueness error.
+        Auto-calculates totalIncidents, ltifr, and incidentRate.
+        """
+        project_name = str(request.data.get("projectName", "")).strip()
+
+        # Strip read-only / auto-calculated fields the frontend should not send
+        _READ_ONLY = {"totalIncidents", "ltifr", "incidentRate", "id", "created_at", "updated_at"}
+        payload = {k: v for k, v in request.data.items() if k not in _READ_ONLY}
+
+        # Upsert: if a record already exists for this project, update it.
+        existing = None
+        if project_name:
+            try:
+                existing = HSERecord.objects.get(
+                    projectName__iexact=project_name
+                )
+            except HSERecord.DoesNotExist:
+                pass
+
+        if existing is not None:
+            serializer = HSERecordSerializer(
+                existing, data=payload, partial=False
+            )
+        else:
+            serializer = HSERecordSerializer(data=payload)
+
+        if not serializer.is_valid():
+            return self._error("Invalid data provided", errors=serializer.errors)
+
+        try:
+            instance = serializer.save()
+        except Exception as exc:
+            logger.error(f"HSE record create error: {exc}")
+            return self._error(
+                "Failed to save HSE record",
+                errors=str(exc),
+                http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        self._invalidate_cache()
+
+        http_status = status.HTTP_200_OK if existing else status.HTTP_201_CREATED
+        message = (
+            "HSE record updated successfully"
+            if existing
+            else "HSE record created successfully"
+        )
+
+        return self._success(
+            message,
+            HSERecordSerializer(instance).data,
+            http_status=http_status,
+        )
+
+    # -------------------------------------------------------------------------
+    # LIST  GET /api/hse/
+    # -------------------------------------------------------------------------
+
+    @swagger_auto_schema(
+        operation_summary="Get All HSE Records",
+        operation_description=(
+            "Retrieve all HSE records. "
+            "Supports optional ?project_name= filter and pagination."
+        ),
+        manual_parameters=[
+            openapi.Parameter(
+                "project_name",
+                openapi.IN_QUERY,
+                description="Filter by project name (case-insensitive partial match)",
+                type=openapi.TYPE_STRING,
+                required=False,
+            ),
+            openapi.Parameter(
+                "page",
+                openapi.IN_QUERY,
+                description="Page number",
+                type=openapi.TYPE_INTEGER,
+                required=False,
+            ),
+            openapi.Parameter(
+                "page_size",
+                openapi.IN_QUERY,
+                description="Records per page (max 100)",
+                type=openapi.TYPE_INTEGER,
+                required=False,
+            ),
+        ],
+        responses={200: openapi.Response("OK", _HSE_RESPONSE_SCHEMA)},
+        tags=["HSE Records"],
+    )
+    def list(self, request, *args, **kwargs):
+        """
+        Return all HSE records (paginated).
+        Results are cached for 5 minutes; cache is invalidated on any write.
+        """
+        project_filter = request.query_params.get("project_name")
+        page_param = request.query_params.get("page", "1")
+        use_cache = not project_filter and page_param == "1"
+
+        if use_cache:
+            cached = cache.get(_HSE_CACHE_KEY_LIST)
+            if cached is not None:
+                return Response(cached)
+
+        queryset = self.get_queryset()
+        page = self.paginate_queryset(queryset)
+
+        if page is not None:
+            serializer = HSERecordSerializer(page, many=True)
+            paginated = self.get_paginated_response(serializer.data)
+            payload = {
+                "success": True,
+                "message": "HSE records retrieved successfully",
+                "data": paginated.data,
+            }
+            if use_cache:
+                cache.set(_HSE_CACHE_KEY_LIST, payload, _HSE_CACHE_TIMEOUT)
+            return Response(payload)
+
+        serializer = HSERecordSerializer(queryset, many=True)
+        payload = {
+            "success": True,
+            "message": "HSE records retrieved successfully",
+            "data": serializer.data,
+        }
+        if use_cache:
+            cache.set(_HSE_CACHE_KEY_LIST, payload, _HSE_CACHE_TIMEOUT)
+        return Response(payload)
+
+    # -------------------------------------------------------------------------
+    # RETRIEVE  GET /api/hse/{id}/
+    # -------------------------------------------------------------------------
+
+    @swagger_auto_schema(
+        operation_summary="Get HSE Record by ID",
+        responses={
+            200: openapi.Response("OK", _HSE_RESPONSE_SCHEMA),
+            404: "Not found",
+        },
+        tags=["HSE Records"],
+    )
+    def retrieve(self, request, *args, **kwargs):
+        """Retrieve a single HSE record by its primary key."""
+        try:
+            instance = HSERecord.objects.get(pk=kwargs["pk"])
+        except HSERecord.DoesNotExist:
+            return self._error("HSE record not found", http_status=status.HTTP_404_NOT_FOUND)
+
+        return self._success(
+            "HSE record retrieved successfully",
+            HSERecordSerializer(instance).data,
+        )
+
+    # -------------------------------------------------------------------------
+    # UPDATE  PUT /api/hse/{id}/
+    # -------------------------------------------------------------------------
+
+    @swagger_auto_schema(
+        operation_summary="Update HSE Record",
+        operation_description=(
+            "Full or partial update of an HSE record. "
+            "KPI fields (totalIncidents, ltifr, incidentRate) are recalculated automatically."
+        ),
+        request_body=_HSE_POST_SCHEMA,
+        responses={
+            200: openapi.Response("OK", _HSE_RESPONSE_SCHEMA),
+            400: "Validation error",
+            404: "Not found",
+        },
+        tags=["HSE Records"],
+    )
+    def update(self, request, *args, **kwargs):
+        """
+        Full update (PUT) of an HSE record.
+        KPI fields are recalculated after update.
+        """
+        partial = kwargs.pop("partial", False)
+
+        try:
+            instance = HSERecord.objects.get(pk=kwargs["pk"])
+        except HSERecord.DoesNotExist:
+            return self._error("HSE record not found", http_status=status.HTTP_404_NOT_FOUND)
+
+        _READ_ONLY = {"totalIncidents", "ltifr", "incidentRate", "id", "created_at", "updated_at"}
+        payload = {k: v for k, v in request.data.items() if k not in _READ_ONLY}
+
+        serializer = HSERecordSerializer(instance, data=payload, partial=partial)
+
+        if not serializer.is_valid():
+            return self._error("Invalid data provided", errors=serializer.errors)
+
+        try:
+            updated = serializer.save()
+        except Exception as exc:
+            logger.error(f"HSE record update error: {exc}")
+            return self._error("Failed to update HSE record", errors=str(exc),
+                               http_status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        self._invalidate_cache()
+
+        return self._success(
+            "HSE record updated successfully",
+            HSERecordSerializer(updated).data,
+        )
+
+    def partial_update(self, request, *args, **kwargs):
+        """PATCH — partial update, delegates to update() with partial=True."""
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
+
+    # -------------------------------------------------------------------------
+    # DELETE  DELETE /api/hse/{id}/
+    # -------------------------------------------------------------------------
+
+    @swagger_auto_schema(
+        operation_summary="Delete HSE Record",
+        responses={
+            200: openapi.Response("OK"),
+            404: "Not found",
+        },
+        tags=["HSE Records"],
+    )
+    def destroy(self, request, *args, **kwargs):
+        """Delete an HSE record by its primary key."""
+        try:
+            instance = HSERecord.objects.get(pk=kwargs["pk"])
+        except HSERecord.DoesNotExist:
+            return self._error("HSE record not found", http_status=status.HTTP_404_NOT_FOUND)
+
+        project_name = instance.projectName
+        instance.delete()
+        self._invalidate_cache()
+
+        return self._success(
+            f"HSE record for '{project_name}' deleted successfully",
+            {},
+        )
+
+    # -------------------------------------------------------------------------
+    # CUSTOM ACTION  GET /api/hse/project/{projectName}/
+    # -------------------------------------------------------------------------
+
+    @swagger_auto_schema(
+        operation_summary="Get HSE Record by Project Name",
+        operation_description=(
+            "Retrieve an HSE record using the exact project name (case-insensitive). "
+            "Useful for dashboard KPI lookups where the project name is known."
+        ),
+        responses={
+            200: openapi.Response("OK", _HSE_RESPONSE_SCHEMA),
+            404: "Not found",
+        },
+        tags=["HSE Records"],
+    )
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path=r"project/(?P<projectName>[^/.]+)",
+        url_name="by-project-name",
+    )
+    def get_by_project_name(self, request, projectName: str = None):
+        """
+        Retrieve an HSE record by exact project name (case-insensitive).
+        Returns all KPI fields ready for dashboard card rendering.
+        """
+        if not projectName or not projectName.strip():
+            return self._error("projectName is required.")
+
+        try:
+            instance = HSERecord.objects.get(projectName__iexact=projectName.strip())
+        except HSERecord.DoesNotExist:
+            return self._error(
+                f"No HSE record found for project '{projectName}'",
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return self._success(
+            "HSE record retrieved successfully",
+            HSERecordSerializer(instance).data,
+        )

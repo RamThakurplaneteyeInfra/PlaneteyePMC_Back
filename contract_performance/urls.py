@@ -1,12 +1,23 @@
-from rest_framework.routers import DefaultRouter
-from django.urls import path, include
+"""
+Contract Performance app URL configuration.
 
-from .views import ContractPerformanceViewSet
+All routes are defined in routes/contract_performance_routes.py and
+included here so backend/urls.py only needs a single include().
 
+Final URL structure (when mounted at /api/ in backend/urls.py):
+  POST   /api/contract-performance/
+  GET    /api/contract-performance/
+  GET    /api/contract-performance/{id}/
+  PUT    /api/contract-performance/{id}/
+  PATCH  /api/contract-performance/{id}/
+  DELETE /api/contract-performance/{id}/
+  GET    /api/contract-performance/project/{projectName}/
+"""
 
-router = DefaultRouter()
-router.register(r"contract-performance", ContractPerformanceViewSet, basename="contract-performance")
+from django.urls import include, path
+
+from .routes.contract_performance_routes import urlpatterns as cp_urlpatterns
 
 urlpatterns = [
-    path("", include(router.urls)),
+    path("", include(cp_urlpatterns)),
 ]

@@ -87,8 +87,14 @@ urlpatterns = [
     path('api/', include('plant_machinery.urls')),
     # Manpower Management System API
     path('api/', include('manpower_management.urls')),
-    # Health & Safety API
+    # Health & Safety Analytics API (status calculation, reports)
+    # → /api/health-safety/status/
+    # → /api/health-safety/example/
+    # → /api/health-safety/reports/
     path('api/health-safety/', include('health_safety.urls')),
+    # HSE Record CRUD API (project-wise)
+    # → /api/hse/  /api/hse/{id}/  /api/hse/project/{projectName}/
+    path('api/', include('health_safety.hse_urls')),
     # Health Check
     path('api/health/', health_check, name='health-check'),
     # Monthly Scope API
@@ -98,6 +104,27 @@ urlpatterns = [
 
     # Notifications Test Page
     path('notifications/', include('notifications.urls')),
+
+    # Drawings Management API
+    path('api/', include('drawings.urls')),
+
+    # Correspondence & Delivery Status API
+    path('api/', include('correspondence.urls')),
+
+    # Planned vs Earned Value API
+    path('api/', include('planned_earned_value.urls')),
+
+    # Contract Values API (SCL + Contractor, single scalable API)
+    path('api/', include('contract_values.urls')),
+
+    # Project Quality Status API
+    path('api/', include('project_quality_status.urls')),
+
+    # Monthly Construction Progress API
+    path('api/', include('construction_progress.urls')),
+
+    # Monthly Project Equipment Tracking API
+    path('api/', include('project_equipment.urls')),
 ]
 
 if settings.DEBUG:

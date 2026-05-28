@@ -1,5 +1,13 @@
+from datetime import date
+
 from rest_framework import serializers
 from .models import ProjectProgressStatus
+
+
+def _current_month_first_day() -> date:
+    """Return the first day of the current month."""
+    today = date.today()
+    return date(today.year, today.month, 1)
 
 
 class ProjectProgressStatusSerializer(serializers.ModelSerializer):
@@ -8,11 +16,15 @@ class ProjectProgressStatusSerializer(serializers.ModelSerializer):
     
     Notes:
     - All percentage fields are validated to be between 0-100
+    - progress_month is OPTIONAL — defaults to the first day of the current month
+      when not provided by the frontend
     - progress_month should be the first day of the month (YYYY-MM-01)
     - One record per project per month (unique_together constraint)
     """
     
     progress_month_display = serializers.SerializerMethodField()
+    # progress_month is optional — defaults to current month's first day
+    progress_month = serializers.DateField(required=False, default=_current_month_first_day)
     monthly_plan = serializers.FloatField(required=False, default=0.0)
     cumulative_plan = serializers.FloatField(required=False, default=0.0)
     monthly_actual = serializers.FloatField(required=False, default=0.0)
@@ -81,15 +93,19 @@ class ProjectProgressStatusSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         """
         Additional validation:
-        - Ensure progress_month is the first day of the month
+        - Ensure progress_month defaults to the first day of the current month
+          when not provided by the frontend.
+        - Ensure progress_month is always stored as the first day of the month.
         - Validate logical constraints (cumulative should generally be >= monthly)
         """
-        progress_month = attrs.get("progress_month")
-        if progress_month:
-            # Ensure it's the first day of the month
-            if progress_month.day != 1:
-                from datetime import date
-                attrs["progress_month"] = date(progress_month.year, progress_month.month, 1)
+        # Default progress_month to current month's first day if not provided
+        if not attrs.get("progress_month"):
+            attrs["progress_month"] = _current_month_first_day()
+
+        progress_month = attrs["progress_month"]
+        # Normalise to first day of the month regardless of what was sent
+        if progress_month.day != 1:
+            attrs["progress_month"] = date(progress_month.year, progress_month.month, 1)
         
         # Set defaults for required fields if missing
         attrs.setdefault("cumulative_plan", attrs.get("monthly_plan", 0.0))
