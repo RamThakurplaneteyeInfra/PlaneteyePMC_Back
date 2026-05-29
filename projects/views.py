@@ -329,40 +329,101 @@ class ProjectViewSet(viewsets.ModelViewSet):
         """
         Update dashboard data for a project (partial update).
         API: PATCH /api/projects-data/projects/{id}/update-dashboard-data/
+
+        Accepts project_start_date, contract_finish_date, forecast_finish_date
+        and syncs them back to the Project model so both sources stay consistent.
         """
+        import logging
+        logger = logging.getLogger(__name__)
+
         project = self.get_object()
         user = request.user
-        
-        # Check permissions (Team Leader/Lead, PMC Head, CEO, or directly assigned)
-        if not (user.groups.filter(name__in=['Team Leader', 'Team Lead', 'PMC Head', 'CEO']).exists() or 
+
+        # Check permissions
+        if not (user.groups.filter(name__in=['Team Leader', 'Team Lead', 'PMC Head', 'CEO']).exists() or
                 user.is_superuser or
                 project.team_lead == user or
                 project.pmc_head == user):
             return Response({'error': 'You do not have permission to update dashboard data'}, status=403)
-            
+
+        logger.debug(f"[update_dashboard_data] project={project.id} incoming payload={request.data}")
+
         try:
             dashboard_data = project.dashboard_data
         except ProjectDashboardData.DoesNotExist:
             dashboard_data = ProjectDashboardData(project=project)
-            
+
         serializer = ProjectDashboardDataSerializer(
-            dashboard_data, 
-            data=request.data, 
-            partial=True
+            dashboard_data,
+            data=request.data,
+            partial=True,
         )
-        
-        if serializer.is_valid():
-            serializer.save()
-            return Response({
-                'success': True,
-                'message': 'Dashboard data updated successfully',
-                'data': serializer.data
-            })
-            
+
+        if not serializer.is_valid():
+            logger.warning(f"[update_dashboard_data] validation errors={serializer.errors}")
+            return Response({'success': False, 'errors': serializer.errors}, status=400)
+
+        instance = serializer.save()
+        logger.debug(f"[update_dashboard_data] saved dashboard_data id={instance.id} "
+                     f"project_start_date={instance.project_start_date} "
+                     f"contract_finish_date={instance.contract_finish_date} "
+                     f"forecast_finish_date={instance.forecast_finish_date}")
+
+        # ---------------------------------------------------------------
+        # Sync date fields back to the Project model so that
+        # GET /api/projects-data/projects/{id}/ always returns the latest
+        # values regardless of which source the frontend reads from.
+        # ---------------------------------------------------------------
+        project_fields_changed = False
+
+        if instance.project_start_date is not None:
+            project.project_start = instance.project_start_date
+            project_fields_changed = True
+
+        if instance.contract_finish_date is not None:
+            project.contract_finish = instance.contract_finish_date
+            project_fields_changed = True
+
+        if instance.forecast_finish_date is not None:
+            project.forecast_finish = instance.forecast_finish_date
+            project_fields_changed = True
+
+        if project_fields_changed:
+            project.save(update_fields=[
+                'project_start',
+                'contract_finish',
+                'forecast_finish',
+                'delay_days',
+                'revised_contract_value',
+                'updated_at',
+            ])
+            logger.debug(f"[update_dashboard_data] synced Project model: "
+                         f"project_start={project.project_start} "
+                         f"contract_finish={project.contract_finish} "
+                         f"forecast_finish={project.forecast_finish}")
+
+        # Re-fetch project with dashboard_data to build a complete response.
+        # Returning both the dashboard_data fields AND the full project fields
+        # (including project_start / contract_finish / forecast_finish) means
+        # the frontend can update ALL of its state from this single response
+        # without needing a separate re-fetch that could race or return stale data.
+        project_refreshed = Project.objects.select_related(
+            'dashboard_data', 'pmc_head', 'team_lead',
+            'billing_site_engineer', 'qaqc_site_engineer', 'created_by',
+        ).prefetch_related('sites', 'coordinators', 'site_engineers').get(pk=project.pk)
+
+        from .serializers import ProjectSerializer as _ProjectSerializer
+        project_data = _ProjectSerializer(project_refreshed, context={'request': request}).data
+
         return Response({
-            'success': False,
-            'errors': serializer.errors
-        }, status=400)
+            'success': True,
+            'message': 'Dashboard data updated successfully',
+            # dashboard_data fields (what the frontend originally expected)
+            'data': serializer.data,
+            # full project snapshot — frontend should use this to update its state
+            # so it never needs to re-fetch and risk getting stale cached data
+            'project': project_data,
+        })
 
     @action(detail=True, methods=['post'], url_path='assign-team-lead')
     def assign_team_lead(self, request, pk=None):

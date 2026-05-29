@@ -40,6 +40,13 @@ class ProjectSerializer(serializers.ModelSerializer):
     minor = serializers.SerializerMethodField()
     near_miss = serializers.SerializerMethodField()
 
+    # Project date fields — read from dashboard_data when available,
+    # fall back to Project model fields (project_start / contract_finish / forecast_finish).
+    # These are the canonical names the frontend uses everywhere.
+    project_start_date = serializers.SerializerMethodField()
+    contract_finish_date = serializers.SerializerMethodField()
+    forecast_finish_date = serializers.SerializerMethodField()
+
 
 
     class Meta:
@@ -145,6 +152,37 @@ class ProjectSerializer(serializers.ModelSerializer):
 
     def get_near_miss(self, obj):
         return self._get_dashboard_field_safe(obj, 'near_miss')
+
+    def get_project_start_date(self, obj):
+        """
+        Return project_start_date from dashboard_data when available,
+        falling back to the Project model's project_start field.
+        This ensures the frontend always gets the latest saved value.
+        """
+        dd_value = self._get_dashboard_field_safe(obj, 'project_start_date')
+        if dd_value is not None:
+            return str(dd_value)
+        return str(obj.project_start) if obj.project_start else None
+
+    def get_contract_finish_date(self, obj):
+        """
+        Return contract_finish_date from dashboard_data when available,
+        falling back to the Project model's contract_finish field.
+        """
+        dd_value = self._get_dashboard_field_safe(obj, 'contract_finish_date')
+        if dd_value is not None:
+            return str(dd_value)
+        return str(obj.contract_finish) if obj.contract_finish else None
+
+    def get_forecast_finish_date(self, obj):
+        """
+        Return forecast_finish_date from dashboard_data when available,
+        falling back to the Project model's forecast_finish field.
+        """
+        dd_value = self._get_dashboard_field_safe(obj, 'forecast_finish_date')
+        if dd_value is not None:
+            return str(dd_value)
+        return str(obj.forecast_finish) if obj.forecast_finish else None
 
     def to_internal_value(self, data):
         """
