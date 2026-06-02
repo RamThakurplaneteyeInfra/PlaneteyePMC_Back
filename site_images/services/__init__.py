@@ -3,7 +3,6 @@ from .cloudinary_service import (
     check_cloudinary_ready,
     delete_image,
     is_cloudinary_available,
-    is_cloudinary_configured,
     upload_image,
 )
 
@@ -12,6 +11,5 @@ __all__ = [
     "check_cloudinary_ready",
     "delete_image",
     "is_cloudinary_available",
-    "is_cloudinary_configured",
     "upload_image",
 ]

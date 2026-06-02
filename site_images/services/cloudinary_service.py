@@ -1,24 +1,19 @@
 """
 Cloudinary upload/delete helpers.
 
-Package must be installed (see requirements.txt).
-Configuration is applied in backend/settings.py at startup.
+Imports cloudinary.uploader only inside upload/delete functions.
+Configuration: core.cloudinary_config.configure_cloudinary()
 """
 
 import logging
 
-from django.conf import settings
+from core.cloudinary_config import (
+    configure_cloudinary,
+    is_cloudinary_configured,
+    is_cloudinary_package_available,
+)
 
 logger = logging.getLogger(__name__)
-
-try:
-    import cloudinary
-    import cloudinary.uploader
-except ImportError:  # pragma: no cover — handled via CLOUDINARY_AVAILABLE
-    cloudinary = None  # type: ignore[assignment]
-    cloudinary_uploader = None  # type: ignore[assignment,misc]
-else:
-    cloudinary_uploader = cloudinary.uploader
 
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 MAX_FILE_BYTES = 10 * 1024 * 1024  # 10 MB
@@ -26,15 +21,11 @@ MAX_IMAGES_PER_REQUEST = 20
 
 
 def is_cloudinary_available() -> bool:
-    return bool(getattr(settings, "CLOUDINARY_AVAILABLE", False))
-
-
-def is_cloudinary_configured() -> bool:
-    return bool(getattr(settings, "CLOUDINARY_CONFIGURED", False))
+    return is_cloudinary_package_available()
 
 
 def check_cloudinary_ready() -> tuple[bool, str | None]:
-    if not is_cloudinary_available():
+    if not is_cloudinary_package_available():
         return (
             False,
             "Cloudinary Python package is not installed. "
@@ -73,13 +64,11 @@ def upload_image(uploaded_file, *, folder: str) -> dict:
 
     logger.info("Cloudinary upload start: file=%s folder=%s", file_name, folder)
 
-    if cloudinary_uploader is None:
-        raise RuntimeError(
-            "Cloudinary Python package is not installed. Run: pip install cloudinary"
-        )
+    configure_cloudinary()
+    import cloudinary.uploader
 
     try:
-        result = cloudinary_uploader.upload(
+        result = cloudinary.uploader.upload(
             uploaded_file,
             folder=folder,
             resource_type="image",
@@ -117,14 +106,13 @@ def delete_image(public_id: str) -> None:
         logger.warning("Cloudinary delete skipped: %s", message)
         return
 
-    if cloudinary_uploader is None:
-        raise RuntimeError(
-            "Cloudinary Python package is not installed. Run: pip install cloudinary"
-        )
-
     logger.info("Cloudinary delete start: public_id=%s", public_id)
+
+    configure_cloudinary()
+    import cloudinary.uploader
+
     try:
-        cloudinary_uploader.destroy(public_id, resource_type="image")
+        cloudinary.uploader.destroy(public_id, resource_type="image")
         logger.info("Cloudinary delete success: public_id=%s", public_id)
     except Exception as exc:
         logger.exception(
