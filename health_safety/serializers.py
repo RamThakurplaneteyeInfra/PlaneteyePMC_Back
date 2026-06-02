@@ -206,3 +206,161 @@ class HSERecordSerializer(serializers.ModelSerializer):
             )
 
         return attrs
+
+
+# =============================================================================
+# HEALTH & SAFETY RECORD SERIALIZER (monthly entry)
+# =============================================================================
+
+from .models import HealthSafetyRecord  # noqa: E402
+
+
+class HealthSafetyRecordSerializer(serializers.ModelSerializer):
+    """
+    Serializer for HealthSafetyRecord.
+
+    Writable fields:
+      project_name, month, year,
+      fatalities, significant, major, minor, near_miss,
+      total_manhours, loss_of_manhours
+
+    Read-only computed fields (not stored in DB):
+      total_incidents, ltifr, incident_rate
+    """
+
+    total_incidents = serializers.IntegerField(read_only=True)
+    ltifr = serializers.FloatField(read_only=True)
+    incident_rate = serializers.FloatField(read_only=True)
+
+    class Meta:
+        model = HealthSafetyRecord
+        fields = [
+            "id",
+            "project_name",
+            "month",
+            "year",
+            "fatalities",
+            "significant",
+            "major",
+            "minor",
+            "near_miss",
+            "total_manhours",
+            "loss_of_manhours",
+            # Computed
+            "total_incidents",
+            "ltifr",
+            "incident_rate",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "total_incidents",
+            "ltifr",
+            "incident_rate",
+            "created_at",
+            "updated_at",
+        ]
+        # Suppress auto UniqueTogetherValidator — controller handles upsert
+        validators = []
+
+    # -------------------------------------------------------------------------
+    # Field-level validation
+    # -------------------------------------------------------------------------
+
+    def validate_project_name(self, value: str) -> str:
+        if not value or not value.strip():
+            raise serializers.ValidationError("project_name cannot be blank.")
+        return value.strip()
+
+    def validate_month(self, value: int) -> int:
+        if not (1 <= value <= 12):
+            raise serializers.ValidationError("month must be between 1 and 12.")
+        return value
+
+    def validate_year(self, value: int) -> int:
+        if not (2000 <= value <= 2100):
+            raise serializers.ValidationError("year must be between 2000 and 2100.")
+        return value
+
+    def _validate_non_negative(self, value, field_name: str):
+        if value < 0:
+            raise serializers.ValidationError(f"{field_name} must be >= 0.")
+        return value
+
+    def validate_fatalities(self, v):
+        return self._validate_non_negative(v, "fatalities")
+
+    def validate_significant(self, v):
+        return self._validate_non_negative(v, "significant")
+
+    def validate_major(self, v):
+        return self._validate_non_negative(v, "major")
+
+    def validate_minor(self, v):
+        return self._validate_non_negative(v, "minor")
+
+    def validate_near_miss(self, v):
+        return self._validate_non_negative(v, "near_miss")
+
+    def validate_total_manhours(self, v):
+        return self._validate_non_negative(v, "total_manhours")
+
+    def validate_loss_of_manhours(self, v):
+        return self._validate_non_negative(v, "loss_of_manhours")
+
+    # -------------------------------------------------------------------------
+    # Cross-field validation
+    # -------------------------------------------------------------------------
+
+    def validate(self, attrs: dict) -> dict:
+        instance = self.instance
+
+        total_manhours = attrs.get(
+            "total_manhours",
+            getattr(instance, "total_manhours", 0) if instance else 0,
+        )
+        loss_of_manhours = attrs.get(
+            "loss_of_manhours",
+            getattr(instance, "loss_of_manhours", 0) if instance else 0,
+        )
+
+        if loss_of_manhours > total_manhours:
+            raise serializers.ValidationError(
+                {
+                    "loss_of_manhours": (
+                        f"loss_of_manhours ({loss_of_manhours}) cannot exceed "
+                        f"total_manhours ({total_manhours})."
+                    )
+                }
+            )
+
+        return attrs
+
+
+class HealthSafetyRecordDataSerializer(serializers.Serializer):
+    """Core monthly HSE fields returned by read endpoints."""
+
+    month = serializers.IntegerField()
+    year = serializers.IntegerField()
+    fatalities = serializers.IntegerField()
+    significant = serializers.IntegerField()
+    major = serializers.IntegerField()
+    minor = serializers.IntegerField()
+    near_miss = serializers.IntegerField()
+    total_manhours = serializers.DecimalField(max_digits=18, decimal_places=2)
+    loss_of_manhours = serializers.DecimalField(max_digits=18, decimal_places=2)
+
+
+class YearlySummarySerializer(serializers.Serializer):
+    """Read-only serializer for yearly aggregated HSE data."""
+
+    project_name = serializers.CharField()
+    year = serializers.IntegerField()
+    fatalities = serializers.IntegerField()
+    significant = serializers.IntegerField()
+    major = serializers.IntegerField()
+    minor = serializers.IntegerField()
+    near_miss = serializers.IntegerField()
+    total_manhours = serializers.DecimalField(max_digits=18, decimal_places=2)
+    loss_of_manhours = serializers.DecimalField(max_digits=18, decimal_places=2)

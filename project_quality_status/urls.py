@@ -1,17 +1,10 @@
 """
 Project Quality Status app URL configuration.
 
-All routes are defined in routes/quality_status_routes.py and
-included here so backend/urls.py only needs a single include().
+Mounted at /api/ in backend/urls.py.
 
-Final URL structure (when mounted at /api/ in backend/urls.py):
-  POST   /api/project-quality-status/
-  GET    /api/project-quality-status/
-  GET    /api/project-quality-status/{id}/
-  PUT    /api/project-quality-status/{id}/
-  PATCH  /api/project-quality-status/{id}/
-  DELETE /api/project-quality-status/{id}/
-  GET    /api/project-quality-status/project/{projectName}/
+  /api/project-quality/              — primary routes
+  /api/project-quality-status/       — legacy alias (same ViewSet)
 """
 
 from django.urls import include, path

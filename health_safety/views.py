@@ -808,3 +808,427 @@ class HSERecordViewSet(viewsets.ModelViewSet):
             "HSE record retrieved successfully",
             HSERecordSerializer(instance).data,
         )
+
+
+# =============================================================================
+# HEALTH & SAFETY RECORD VIEWSET (monthly entry + dynamic aggregation)
+# Endpoints (mounted at /api/health-safety/):
+#   POST   /api/health-safety/
+#   GET    /api/health-safety/
+#   GET    /api/health-safety/{id}/
+#   PUT    /api/health-safety/{id}/
+#   PATCH  /api/health-safety/{id}/
+#   DELETE /api/health-safety/{id}/
+#   GET    /api/health-safety/project/{projectName}/month/{month}/year/{year}/
+#   GET    /api/health-safety/project/{projectName}/year/{year}/summary/
+#   GET    /api/health-safety/project/{projectName}/dashboard/
+# =============================================================================
+
+from decimal import Decimal
+from django.db.models import Sum, Value
+from django.db.models.functions import Coalesce
+
+from .models import HealthSafetyRecord
+from .serializers import HealthSafetyRecordSerializer
+
+MONTH_NAMES = {
+    1: "January", 2: "February", 3: "March", 4: "April",
+    5: "May", 6: "June", 7: "July", 8: "August",
+    9: "September", 10: "October", 11: "November", 12: "December",
+}
+
+
+def _record_data(record: HealthSafetyRecord) -> dict:
+    """Return core monthly HSE fields for API responses."""
+    return {
+        "month": record.month,
+        "year": record.year,
+        "fatalities": record.fatalities,
+        "significant": record.significant,
+        "major": record.major,
+        "minor": record.minor,
+        "near_miss": record.near_miss,
+        "total_manhours": record.total_manhours,
+        "loss_of_manhours": record.loss_of_manhours,
+    }
+
+
+def _aggregate_records(queryset) -> dict:
+    """
+    Aggregate a queryset of HealthSafetyRecord into a single summary dict.
+    Uses DB-level SUM — never stores yearly totals.
+    """
+    agg = queryset.aggregate(
+        fatalities=Coalesce(Sum("fatalities"), Value(0)),
+        significant=Coalesce(Sum("significant"), Value(0)),
+        major=Coalesce(Sum("major"), Value(0)),
+        minor=Coalesce(Sum("minor"), Value(0)),
+        near_miss=Coalesce(Sum("near_miss"), Value(0)),
+        total_manhours=Coalesce(Sum("total_manhours"), Value(Decimal("0.00"))),
+        loss_of_manhours=Coalesce(Sum("loss_of_manhours"), Value(Decimal("0.00"))),
+    )
+
+    return {
+        "fatalities": agg["fatalities"],
+        "significant": agg["significant"],
+        "major": agg["major"],
+        "minor": agg["minor"],
+        "near_miss": agg["near_miss"],
+        "total_manhours": agg["total_manhours"],
+        "loss_of_manhours": agg["loss_of_manhours"],
+    }
+
+
+class HealthSafetyRecordPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
+class HealthSafetyRecordViewSet(viewsets.ModelViewSet):
+    """
+    Health & Safety Record ViewSet.
+
+    One record per project per month/year.
+    Yearly totals are aggregated dynamically using DB SUM — never stored.
+
+    Filtering:
+      ?project_name=Thane Project
+      ?year=2026
+      ?month=5
+    """
+
+    queryset = HealthSafetyRecord.objects.all()
+    serializer_class = HealthSafetyRecordSerializer
+    permission_classes = [AllowAny]
+    pagination_class = HealthSafetyRecordPagination
+
+    # -------------------------------------------------------------------------
+    # Queryset
+    # -------------------------------------------------------------------------
+
+    def get_queryset(self):
+        qs = HealthSafetyRecord.objects.all()
+
+        project_name = self.request.query_params.get("project_name")
+        if project_name:
+            qs = qs.filter(project_name__icontains=project_name.strip())
+
+        year = self.request.query_params.get("year")
+        if year:
+            try:
+                qs = qs.filter(year=int(year))
+            except ValueError:
+                pass
+
+        month = self.request.query_params.get("month")
+        if month:
+            try:
+                qs = qs.filter(month=int(month))
+            except ValueError:
+                pass
+
+        return qs.order_by("project_name", "year", "month")
+
+    # -------------------------------------------------------------------------
+    # Helpers
+    # -------------------------------------------------------------------------
+
+    def _success(self, message: str, data, http_status=status.HTTP_200_OK):
+        return Response(
+            {"success": True, "message": message, "data": data},
+            status=http_status,
+        )
+
+    def _error(self, message: str, errors=None, http_status=status.HTTP_400_BAD_REQUEST):
+        payload = {"success": False, "message": message}
+        if errors is not None:
+            payload["errors"] = errors
+        return Response(payload, status=http_status)
+
+    # -------------------------------------------------------------------------
+    # CREATE  POST /api/health-safety/
+    # -------------------------------------------------------------------------
+
+    def create(self, request, *args, **kwargs):
+        """
+        Create or update a monthly Health & Safety record (upsert).
+
+        If a record already exists for the same project_name + month + year,
+        it is updated in place instead of returning a duplicate error.
+        """
+        project_name = str(request.data.get("project_name", "")).strip()
+        month = request.data.get("month")
+        year = request.data.get("year")
+
+        existing = None
+        if project_name and month is not None and year is not None:
+            try:
+                existing = HealthSafetyRecord.objects.get(
+                    project_name__iexact=project_name,
+                    month=int(month),
+                    year=int(year),
+                )
+            except (HealthSafetyRecord.DoesNotExist, TypeError, ValueError):
+                pass
+
+        if existing is not None:
+            serializer = HealthSafetyRecordSerializer(existing, data=request.data)
+        else:
+            serializer = HealthSafetyRecordSerializer(data=request.data)
+
+        if not serializer.is_valid():
+            return self._error("Validation failed", errors=serializer.errors)
+
+        try:
+            instance = serializer.save()
+        except Exception as exc:
+            logger.error(f"HealthSafetyRecord create error: {exc}")
+            return self._error(
+                "Failed to save HSE record",
+                errors=str(exc),
+                http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        http_status = status.HTTP_200_OK if existing else status.HTTP_201_CREATED
+        message = (
+            "Health & Safety record updated successfully"
+            if existing
+            else "Health & Safety record saved successfully"
+        )
+
+        return self._success(message, _record_data(instance), http_status=http_status)
+
+    # -------------------------------------------------------------------------
+    # LIST  GET /api/health-safety/
+    # -------------------------------------------------------------------------
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+
+        if page is not None:
+            data = [_record_data(record) for record in page]
+            paginated = self.get_paginated_response(data)
+            return Response({
+                "success": True,
+                "message": "Health & Safety records retrieved successfully",
+                "data": paginated.data,
+            })
+
+        data = [_record_data(record) for record in queryset]
+        return Response({
+            "success": True,
+            "message": "Health & Safety records retrieved successfully",
+            "data": data,
+        })
+
+    # -------------------------------------------------------------------------
+    # RETRIEVE  GET /api/health-safety/{id}/
+    # -------------------------------------------------------------------------
+
+    def retrieve(self, request, *args, **kwargs):
+        try:
+            instance = HealthSafetyRecord.objects.get(pk=kwargs["pk"])
+        except HealthSafetyRecord.DoesNotExist:
+            return self._error("Health & Safety record not found", http_status=status.HTTP_404_NOT_FOUND)
+
+        return self._success(
+            "Health & Safety record retrieved successfully",
+            _record_data(instance),
+        )
+
+    # -------------------------------------------------------------------------
+    # UPDATE  PUT /api/health-safety/{id}/
+    # -------------------------------------------------------------------------
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+
+        try:
+            instance = HealthSafetyRecord.objects.get(pk=kwargs["pk"])
+        except HealthSafetyRecord.DoesNotExist:
+            return self._error("Health & Safety record not found", http_status=status.HTTP_404_NOT_FOUND)
+
+        serializer = HealthSafetyRecordSerializer(instance, data=request.data, partial=partial)
+        if not serializer.is_valid():
+            return self._error("Validation failed", errors=serializer.errors)
+
+        try:
+            updated = serializer.save()
+        except Exception as exc:
+            logger.error(f"HealthSafetyRecord update error: {exc}")
+            return self._error("Failed to update HSE record", errors=str(exc),
+                               http_status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return self._success(
+            "Health & Safety record updated successfully",
+            _record_data(updated),
+        )
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
+
+    # -------------------------------------------------------------------------
+    # DELETE  DELETE /api/health-safety/{id}/
+    # -------------------------------------------------------------------------
+
+    def destroy(self, request, *args, **kwargs):
+        try:
+            instance = HealthSafetyRecord.objects.get(pk=kwargs["pk"])
+        except HealthSafetyRecord.DoesNotExist:
+            return self._error("Health & Safety record not found", http_status=status.HTTP_404_NOT_FOUND)
+
+        label = f"{instance.project_name} ({instance.month:02d}/{instance.year})"
+        instance.delete()
+        return self._success(f"HSE record for '{label}' deleted successfully", {})
+
+    # -------------------------------------------------------------------------
+    # GET BY MONTH  GET /api/health-safety/project/{projectName}/month/{month}/year/{year}/
+    # -------------------------------------------------------------------------
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path=r"project/(?P<projectName>[^/.]+)/month/(?P<month>\d+)/year/(?P<year>\d+)",
+        url_name="by-month-year",
+    )
+    def get_by_month_year(self, request, projectName=None, month=None, year=None):
+        """Return the HSE record for a specific project, month, and year."""
+        try:
+            month_int = int(month)
+            year_int = int(year)
+        except (TypeError, ValueError):
+            return self._error("month and year must be valid integers.")
+
+        if not (1 <= month_int <= 12):
+            return self._error("month must be between 1 and 12.")
+        if not (2000 <= year_int <= 2100):
+            return self._error("year must be between 2000 and 2100.")
+
+        try:
+            instance = HealthSafetyRecord.objects.get(
+                project_name__iexact=projectName.strip(),
+                month=month_int,
+                year=year_int,
+            )
+        except HealthSafetyRecord.DoesNotExist:
+            return self._error(
+                f"No HSE record found for project '{projectName}' "
+                f"in {month_int:02d}/{year_int}.",
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return self._success(
+            f"HSE record for {MONTH_NAMES.get(month_int, month_int)} {year_int} retrieved successfully",
+            _record_data(instance),
+        )
+
+    # -------------------------------------------------------------------------
+    # YEARLY SUMMARY  GET /api/health-safety/project/{projectName}/year/{year}/summary/
+    # -------------------------------------------------------------------------
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path=r"project/(?P<projectName>[^/.]+)/year/(?P<year>\d+)/summary",
+        url_name="yearly-summary",
+    )
+    def yearly_summary(self, request, projectName=None, year=None):
+        """
+        Aggregate all monthly records for a project in a given year.
+        Uses DB-level SUM — yearly totals are never stored.
+        """
+        try:
+            year_int = int(year)
+        except (TypeError, ValueError):
+            return self._error("year must be a valid integer.")
+
+        if not (2000 <= year_int <= 2100):
+            return self._error("year must be between 2000 and 2100.")
+
+        project_name = projectName.strip()
+        qs = HealthSafetyRecord.objects.filter(
+            project_name__iexact=project_name,
+            year=year_int,
+        )
+
+        if not qs.exists():
+            return self._error(
+                f"No HSE records found for project '{project_name}' in {year_int}.",
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+
+        agg = _aggregate_records(qs)
+
+        return self._success(
+            f"Yearly HSE summary for '{project_name}' ({year_int}) retrieved successfully",
+            {
+                "project_name": project_name,
+                "year": year_int,
+                **agg,
+            },
+        )
+
+    # -------------------------------------------------------------------------
+    # DASHBOARD  GET /api/health-safety/project/{projectName}/dashboard/
+    # -------------------------------------------------------------------------
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path=r"project/(?P<projectName>[^/.]+)/dashboard",
+        url_name="dashboard",
+    )
+    def dashboard(self, request, projectName=None):
+        """
+        Return current month record + year-to-date aggregation.
+
+        current_month : the record for today's month/year (null if not entered yet)
+        year_to_date  : SUM of all months from January to current month of current year
+        """
+        import datetime
+        today = datetime.date.today()
+        current_month = today.month
+        current_year = today.year
+        project_name = projectName.strip()
+
+        # --- Current month record ---
+        current_month_data = None
+        try:
+            cm_record = HealthSafetyRecord.objects.get(
+                project_name__iexact=project_name,
+                month=current_month,
+                year=current_year,
+            )
+            current_month_data = _record_data(cm_record)
+        except HealthSafetyRecord.DoesNotExist:
+            current_month_data = None
+
+        # --- Year-to-date: Jan → current month ---
+        ytd_qs = HealthSafetyRecord.objects.filter(
+            project_name__iexact=project_name,
+            year=current_year,
+            month__lte=current_month,
+        )
+
+        if not ytd_qs.exists() and current_month_data is None:
+            return self._error(
+                f"No HSE records found for project '{project_name}'.",
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+
+        ytd_agg = _aggregate_records(ytd_qs)
+
+        return self._success(
+            f"HSE dashboard for '{project_name}' retrieved successfully",
+            {
+                "current_month": current_month_data,
+                "year_to_date": {
+                    "project_name": project_name,
+                    "year": current_year,
+                    **ytd_agg,
+                },
+            },
+        )

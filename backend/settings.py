@@ -75,6 +75,8 @@ INSTALLED_APPS = [
     'project_quality_status',
     'construction_progress',
     'project_equipment',
+    'project_dates',
+    'site_images.apps.SiteImagesConfig',
 ]
 
 MIDDLEWARE = [
@@ -116,17 +118,24 @@ ASGI_APPLICATION = 'backend.asgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
+# Database — use DATABASE_URL when set (Render/Neon). Fallback to SQLite for
+# local tooling only; production must set DATABASE_URL (see settings_prod).
 DATABASE_URL = os.environ.get('DATABASE_URL')
-if not DATABASE_URL:
-    raise Exception('DATABASE_URL environment variable must be set.')
-
-DATABASES = {
-    'default': dj_database_url.parse(
-        DATABASE_URL,
-        conn_max_age=600,
-        ssl_require=True
-    )
-}
+if DATABASE_URL:
+    DATABASES = {
+        'default': dj_database_url.parse(
+            DATABASE_URL,
+            conn_max_age=600,
+            ssl_require=True,
+        )
+    }
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
 
 
 # Password validation
@@ -298,6 +307,38 @@ EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True').lower() == 'true'
 EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER)
+
+# ==============================
+# CLOUDINARY (Site Progress Images)
+# ==============================
+CLOUDINARY_CLOUD_NAME = os.environ.get('CLOUDINARY_CLOUD_NAME', '')
+CLOUDINARY_API_KEY = os.environ.get('CLOUDINARY_API_KEY', '')
+CLOUDINARY_API_SECRET = os.environ.get('CLOUDINARY_API_SECRET', '')
+
+CLOUDINARY_AVAILABLE = False
+CLOUDINARY_CONFIGURED = False
+
+try:
+    import cloudinary
+    import cloudinary.uploader  # noqa: F401 — ensures uploader submodule is present
+
+    CLOUDINARY_AVAILABLE = True
+
+    if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
+        cloudinary.config(
+            cloud_name=CLOUDINARY_CLOUD_NAME,
+            api_key=CLOUDINARY_API_KEY,
+            api_secret=CLOUDINARY_API_SECRET,
+            secure=True,
+        )
+        CLOUDINARY_CONFIGURED = True
+except ImportError:
+    import logging as _logging
+
+    _logging.getLogger(__name__).warning(
+        'cloudinary package is not installed. '
+        'Site image uploads will return an error until you run: pip install cloudinary'
+    )
 
 
 

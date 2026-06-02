@@ -9,53 +9,39 @@ from .models.project_quality_status import ProjectQualityStatus
 
 @admin.register(ProjectQualityStatus)
 class ProjectQualityStatusAdmin(admin.ModelAdmin):
-    """Admin view for Project Quality Status records."""
+    """Admin view for monthly Project Quality Status records."""
 
     list_display = [
         "projectName",
-        "totalTestsConducted",
-        "totalTestsPassed",
-        "variance",
-        "performancePercentage",
+        "month",
+        "year",
+        "tests_required",
+        "tests_conducted",
+        "tests_passed",
+        "tests_failed",
         "created_at",
         "updated_at",
     ]
-    list_filter = ["created_at"]
+    list_filter = ["year", "month", "created_at"]
     search_fields = ["projectName"]
-    readonly_fields = [
-        "variance",
-        "performancePercentage",
-        "created_at",
-        "updated_at",
-    ]
-    ordering = ["projectName"]
+    readonly_fields = ["created_at", "updated_at"]
+    ordering = ["projectName", "year", "month"]
 
     fieldsets = (
-        ("Project", {"fields": ("projectName",)}),
+        ("Project & Period", {"fields": ("projectName", "month", "year")}),
         (
             "Test Counts",
             {
-                "fields": ("totalTestsConducted", "totalTestsPassed"),
-                "description": (
-                    "Enter test counts. "
-                    "Calculated fields update automatically on save."
-                ),
-            },
-        ),
-        (
-            "Auto-Calculated KPIs",
-            {
-                "fields": ("variance", "performancePercentage"),
-                "description": (
-                    "These fields are calculated automatically and cannot be edited directly."
+                "fields": (
+                    "tests_required",
+                    "tests_conducted",
+                    "tests_passed",
+                    "tests_failed",
                 ),
             },
         ),
         (
             "Timestamps",
-            {
-                "fields": ("created_at", "updated_at"),
-                "classes": ("collapse",),
-            },
+            {"fields": ("created_at", "updated_at"), "classes": ("collapse",)},
         ),
     )

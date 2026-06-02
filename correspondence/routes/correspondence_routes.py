@@ -9,7 +9,11 @@ Uses DRF DefaultRouter to auto-generate standard REST endpoints:
   PUT    /api/correspondence/{id}/                     -> update (full)
   PATCH  /api/correspondence/{id}/                     -> partial update
   DELETE /api/correspondence/{id}/                     -> destroy
-  GET    /api/correspondence/project/{projectName}/    -> get_by_project_name
+  GET    /api/correspondence/project/{projectName}/                    -> project summary (legacy)
+  GET    /api/correspondence/project/{projectName}/month/{m}/year/{y}/
+  GET    /api/correspondence/project/{projectName}/summary/
+  GET    /api/correspondence/project/{projectName}/year/{year}/summary/
+  GET    /api/correspondence/project/{projectName}/dashboard/
 """
 
 from rest_framework.routers import DefaultRouter

@@ -1,55 +1,44 @@
 """
 Project Quality Status Serializer.
 
-Handles input validation and output formatting for ProjectQualityStatus records.
+Writable: projectName, month, year, tests_required, tests_conducted,
+          tests_passed, tests_failed
 
-Calculated fields are always read-only — derived by the model's save():
-  - variance
-  - performancePercentage
-
-Runtime-computed properties exposed as read-only output:
-  - qualityStatus  (excellent / good / average / poor)
-  - failedTests    (alias for variance)
-
-Validation rules:
-  - projectName          : required, non-blank string
-  - totalTestsConducted  : integer >= 0
-  - totalTestsPassed     : integer >= 0, must not exceed totalTestsConducted
+Computed (never stored): shortfall, quality_performance, pass_rate, fail_rate
+Legacy read aliases: totalTestsConducted, totalTestsPassed, variance,
+                     performancePercentage, qualityStatus, failedTests
 """
 
 from rest_framework import serializers
 
 from ..models.project_quality_status import ProjectQualityStatus
+from .quality_metrics import (
+    compute_fail_rate,
+    compute_pass_rate,
+    compute_quality_performance,
+    compute_shortfall,
+    metrics_from_record,
+)
 
 
 class ProjectQualityStatusSerializer(serializers.ModelSerializer):
-    """
-    Full serializer for ProjectQualityStatus model.
+    """Full serializer for monthly ProjectQualityStatus records."""
 
-    Read-only fields (auto-calculated by the model on every save):
-      - id
-      - variance
-      - performancePercentage
-      - created_at
-      - updated_at
+    project_name = serializers.SerializerMethodField()
 
-    Read-only computed properties (derived at runtime, not stored):
-      - qualityStatus
-      - failedTests
+    shortfall = serializers.SerializerMethodField()
+    quality_performance = serializers.SerializerMethodField()
+    pass_rate = serializers.SerializerMethodField()
+    fail_rate = serializers.SerializerMethodField()
 
-    Writable fields:
-      - projectName         (required, unique per project)
-      - totalTestsConducted (>= 0)
-      - totalTestsPassed    (>= 0, must not exceed totalTestsConducted)
-    """
+    # Legacy aliases (read-only, backward compatible)
+    totalTestsConducted = serializers.IntegerField(source="tests_conducted", read_only=True)
+    totalTestsPassed = serializers.IntegerField(source="tests_passed", read_only=True)
+    variance = serializers.SerializerMethodField()
+    performancePercentage = serializers.SerializerMethodField()
+    qualityStatus = serializers.SerializerMethodField()
+    failedTests = serializers.IntegerField(source="tests_failed", read_only=True)
 
-    # Expose Python @property fields as read-only serializer fields
-    qualityStatus = serializers.CharField(read_only=True)
-    failedTests = serializers.IntegerField(read_only=True)
-
-    # Override projectName to remove the auto-added UniqueValidator.
-    # Uniqueness is enforced at the DB level; the controller handles upsert
-    # logic manually so the validator would incorrectly reject updates.
     projectName = serializers.CharField(max_length=255)
 
     class Meta:
@@ -57,20 +46,36 @@ class ProjectQualityStatusSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "projectName",
+            "project_name",
+            "month",
+            "year",
+            "tests_required",
+            "tests_conducted",
+            "tests_passed",
+            "tests_failed",
+            "shortfall",
+            "quality_performance",
+            "pass_rate",
+            "fail_rate",
+            # Legacy
             "totalTestsConducted",
             "totalTestsPassed",
-            # Auto-calculated stored fields
             "variance",
             "performancePercentage",
-            # Computed runtime properties
             "qualityStatus",
             "failedTests",
-            # Timestamps
             "created_at",
             "updated_at",
         ]
         read_only_fields = [
             "id",
+            "project_name",
+            "shortfall",
+            "quality_performance",
+            "pass_rate",
+            "fail_rate",
+            "totalTestsConducted",
+            "totalTestsPassed",
             "variance",
             "performancePercentage",
             "qualityStatus",
@@ -78,61 +83,121 @@ class ProjectQualityStatusSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        validators = []
 
-    # -------------------------------------------------------------------------
-    # Field-level validation
-    # -------------------------------------------------------------------------
+    def get_project_name(self, obj) -> str:
+        return obj.projectName
+
+    def get_shortfall(self, obj) -> int:
+        return compute_shortfall(obj.tests_required, obj.tests_conducted)
+
+    def get_quality_performance(self, obj) -> float:
+        return compute_quality_performance(obj.tests_passed, obj.tests_conducted)
+
+    def get_pass_rate(self, obj) -> float:
+        return compute_pass_rate(obj.tests_passed, obj.tests_required)
+
+    def get_fail_rate(self, obj) -> float:
+        return compute_fail_rate(obj.tests_failed, obj.tests_conducted)
+
+    def get_variance(self, obj) -> int:
+        """Legacy: failed + pending vs old variance semantics."""
+        return obj.tests_failed
+
+    def get_performancePercentage(self, obj) -> float:
+        return self.get_quality_performance(obj)
+
+    def get_qualityStatus(self, obj) -> str:
+        pct = self.get_quality_performance(obj)
+        if pct >= 95:
+            return "excellent"
+        if pct >= 80:
+            return "good"
+        if pct >= 60:
+            return "average"
+        return "poor"
+
+    def to_internal_value(self, data):
+        if hasattr(data, "copy"):
+            data = data.copy()
+        else:
+            data = dict(data)
+
+        if "project_name" in data and "projectName" not in data:
+            data["projectName"] = data["project_name"]
+
+        # Legacy field mapping
+        if "total_tests_conducted" in data and "tests_conducted" not in data:
+            data["tests_conducted"] = data["total_tests_conducted"]
+        if "totalTestsConducted" in data and "tests_conducted" not in data:
+            data["tests_conducted"] = data["totalTestsConducted"]
+
+        if "total_tests_passed" in data and "tests_passed" not in data:
+            data["tests_passed"] = data["total_tests_passed"]
+        if "totalTestsPassed" in data and "tests_passed" not in data:
+            data["tests_passed"] = data["totalTestsPassed"]
+
+        if "total_tests_failed" in data and "tests_failed" not in data:
+            data["tests_failed"] = data["total_tests_failed"]
+        if "failed_tests" in data and "tests_failed" not in data:
+            data["tests_failed"] = data["failed_tests"]
+
+        return super().to_internal_value(data)
 
     def validate_projectName(self, value: str) -> str:
-        """Strip whitespace and reject blank project names."""
         if not value or not value.strip():
             raise serializers.ValidationError("projectName cannot be blank.")
         return value.strip()
 
-    def validate_totalTestsConducted(self, value: int) -> int:
-        """Ensure totalTestsConducted is non-negative."""
-        if value < 0:
-            raise serializers.ValidationError(
-                "totalTestsConducted must be >= 0."
-            )
+    def validate_month(self, value: int) -> int:
+        if not (1 <= value <= 12):
+            raise serializers.ValidationError("month must be between 1 and 12.")
         return value
 
-    def validate_totalTestsPassed(self, value: int) -> int:
-        """Ensure totalTestsPassed is non-negative."""
-        if value < 0:
-            raise serializers.ValidationError(
-                "totalTestsPassed must be >= 0."
-            )
+    def validate_year(self, value: int) -> int:
+        if not (2000 <= value <= 2100):
+            raise serializers.ValidationError("year must be between 2000 and 2100.")
         return value
 
-    # -------------------------------------------------------------------------
-    # Cross-field validation
-    # -------------------------------------------------------------------------
+    def _validate_non_negative(self, value: int, field_name: str) -> int:
+        if value < 0:
+            raise serializers.ValidationError(f"{field_name} must be >= 0.")
+        return value
+
+    def validate_tests_required(self, value):
+        return self._validate_non_negative(value, "tests_required")
+
+    def validate_tests_conducted(self, value):
+        return self._validate_non_negative(value, "tests_conducted")
+
+    def validate_tests_passed(self, value):
+        return self._validate_non_negative(value, "tests_passed")
+
+    def validate_tests_failed(self, value):
+        return self._validate_non_negative(value, "tests_failed")
 
     def validate(self, attrs: dict) -> dict:
-        """
-        Cross-field check: totalTestsPassed must not exceed totalTestsConducted.
-
-        For partial updates (PATCH/PUT with missing fields), fall back to
-        the existing instance values so the check remains accurate.
-        """
-        instance = self.instance  # None on create, existing object on update
+        instance = self.instance
 
         conducted = attrs.get(
-            "totalTestsConducted",
-            getattr(instance, "totalTestsConducted", 0) if instance else 0,
+            "tests_conducted",
+            getattr(instance, "tests_conducted", 0) if instance else 0,
         )
         passed = attrs.get(
-            "totalTestsPassed",
-            getattr(instance, "totalTestsPassed", 0) if instance else 0,
+            "tests_passed",
+            getattr(instance, "tests_passed", 0) if instance else 0,
+        )
+        failed = attrs.get(
+            "tests_failed",
+            getattr(instance, "tests_failed", 0) if instance else 0,
         )
 
-        if passed > conducted:
+        if passed + failed > conducted:
             raise serializers.ValidationError(
                 {
-                    "totalTestsPassed": (
-                        f"totalTestsPassed ({passed}) cannot be greater than "
-                        f"totalTestsConducted ({conducted})."
+                    "tests_passed": (
+                        f"tests_passed ({passed}) + tests_failed ({failed}) cannot exceed "
+                        f"tests_conducted ({conducted})."
                     )
                 }
             )

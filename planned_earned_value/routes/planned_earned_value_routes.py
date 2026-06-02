@@ -1,22 +1,21 @@
 """
 Planned vs Earned Value URL routes.
 
-Uses DRF DefaultRouter to auto-generate standard REST endpoints:
-
-  POST   /api/planned-earned-value/                          -> create
-  GET    /api/planned-earned-value/                          -> list
-  GET    /api/planned-earned-value/{id}/                     -> retrieve
-  PUT    /api/planned-earned-value/{id}/                     -> update (full)
-  PATCH  /api/planned-earned-value/{id}/                     -> partial update
-  DELETE /api/planned-earned-value/{id}/                     -> destroy
-  GET    /api/planned-earned-value/project/{projectName}/    -> get_by_project_name
+  POST   /api/planned-earned-value/
+  GET    /api/planned-earned-value/
+  GET    /api/planned-earned-value/{id}/
+  PUT    /api/planned-earned-value/{id}/
+  PATCH  /api/planned-earned-value/{id}/
+  DELETE /api/planned-earned-value/{id}/
+  GET    /api/planned-earned-value/project/{projectName}/
+  GET    /api/planned-earned-value/project/{projectName}/month/{month}/year/{year}/
+  GET    /api/planned-earned-value/project/{projectName}/year/{year}/summary/
 """
 
 from rest_framework.routers import DefaultRouter
 
 from ..controllers.planned_earned_value_controller import PlannedEarnedValueViewSet
 
-# Register the ViewSet — the router generates all standard URL patterns
 router = DefaultRouter()
 router.register(
     r"planned-earned-value",
@@ -24,5 +23,4 @@ router.register(
     basename="planned-earned-value",
 )
 
-# urlpatterns is imported by planned_earned_value/urls.py
 urlpatterns = router.urls

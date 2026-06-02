@@ -87,12 +87,13 @@ urlpatterns = [
     path('api/', include('plant_machinery.urls')),
     # Manpower Management System API
     path('api/', include('manpower_management.urls')),
-    # Health & Safety Analytics API (status calculation, reports)
-    # → /api/health-safety/status/
-    # → /api/health-safety/example/
-    # → /api/health-safety/reports/
+    # Health & Safety API (monthly records + analytics)
+    # → /api/health-safety/                    — monthly CRUD + aggregation
+    # → /api/health-safety/status/             — analytics calculator
+    # → /api/health-safety/example/            — example payload
+    # → /api/health-safety/reports/            — legacy date-based reports
     path('api/health-safety/', include('health_safety.urls')),
-    # HSE Record CRUD API (project-wise)
+    # Legacy cumulative HSE records (project-wise, camelCase)
     # → /api/hse/  /api/hse/{id}/  /api/hse/project/{projectName}/
     path('api/', include('health_safety.hse_urls')),
     # Health Check
@@ -125,6 +126,12 @@ urlpatterns = [
 
     # Monthly Project Equipment Tracking API
     path('api/', include('project_equipment.urls')),
+
+    # Project Dates (SCL & Contractor) API
+    path('api/', include('project_dates.urls')),
+
+    # Site Progress Images (Cloudinary)
+    path('api/', include('site_images.urls')),
 ]
 
 if settings.DEBUG:

@@ -258,3 +258,168 @@ class HSERecord(models.Model):
         indexes = [
             models.Index(fields=["projectName"], name="hse_record_project_name_idx"),
         ]
+
+
+# =============================================================================
+# HEALTH & SAFETY RECORD MODEL (monthly entry)
+# One record per project per month/year.
+# Yearly totals are calculated dynamically using DB aggregation (Sum).
+# Never stored — always computed on the fly.
+# =============================================================================
+
+class HealthSafetyRecord(models.Model):
+    """
+    Monthly Health & Safety record per project.
+
+    One record per (project_name, month, year).
+    Yearly totals are aggregated dynamically — never stored.
+
+    Computed properties (not stored):
+      - total_incidents  = fatalities + significant + major + minor + near_miss
+      - ltifr            = (loss_of_manhours / total_manhours) * 1,000,000
+      - incident_rate    = (total_incidents / total_manhours) * 1,000,000
+    """
+
+    # -------------------------------------------------------------------------
+    # Core identifiers
+    # -------------------------------------------------------------------------
+    project_name = models.CharField(
+        max_length=255,
+        db_index=True,
+        help_text="Project name for this monthly HSE record",
+    )
+    month = models.PositiveSmallIntegerField(
+        db_index=True,
+        help_text="Month number (1–12)",
+    )
+    year = models.PositiveSmallIntegerField(
+        db_index=True,
+        help_text="Year (e.g. 2026)",
+    )
+
+    # -------------------------------------------------------------------------
+    # Incident counts
+    # -------------------------------------------------------------------------
+    fatalities = models.PositiveIntegerField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Number of fatality incidents this month",
+    )
+    significant = models.PositiveIntegerField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Number of significant incidents this month",
+    )
+    major = models.PositiveIntegerField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Number of major incidents this month",
+    )
+    minor = models.PositiveIntegerField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Number of minor incidents this month",
+    )
+    near_miss = models.PositiveIntegerField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Number of near-miss incidents this month",
+    )
+
+    # -------------------------------------------------------------------------
+    # Manhour data
+    # -------------------------------------------------------------------------
+    total_manhours = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Total manhours worked this month",
+    )
+    loss_of_manhours = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Manhours lost due to incidents this month",
+    )
+
+    # -------------------------------------------------------------------------
+    # Timestamps
+    # -------------------------------------------------------------------------
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    # =========================================================================
+    # Validation
+    # =========================================================================
+
+    def clean(self):
+        errors = {}
+
+        if self.month is not None and not (1 <= self.month <= 12):
+            errors["month"] = "month must be between 1 and 12."
+
+        if self.year is not None and not (2000 <= self.year <= 2100):
+            errors["year"] = "year must be between 2000 and 2100."
+
+        if (
+            self.loss_of_manhours is not None
+            and self.total_manhours is not None
+            and self.loss_of_manhours > self.total_manhours
+        ):
+            errors["loss_of_manhours"] = (
+                f"loss_of_manhours ({self.loss_of_manhours}) cannot exceed "
+                f"total_manhours ({self.total_manhours})."
+            )
+
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        if self.project_name:
+            self.project_name = self.project_name.strip()
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    # =========================================================================
+    # Computed properties
+    # =========================================================================
+
+    @property
+    def total_incidents(self) -> int:
+        return (
+            self.fatalities
+            + self.significant
+            + self.major
+            + self.minor
+            + self.near_miss
+        )
+
+    @property
+    def ltifr(self) -> float:
+        """Lost Time Injury Frequency Rate = (loss_of_manhours / total_manhours) * 1,000,000"""
+        if not self.total_manhours:
+            return 0.0
+        return round(float(self.loss_of_manhours / self.total_manhours) * 1_000_000, 2)
+
+    @property
+    def incident_rate(self) -> float:
+        """Incident Rate = (total_incidents / total_manhours) * 1,000,000"""
+        if not self.total_manhours:
+            return 0.0
+        return round((self.total_incidents / float(self.total_manhours)) * 1_000_000, 2)
+
+    def __str__(self) -> str:
+        return f"HSE Monthly — {self.project_name} ({self.month:02d}/{self.year})"
+
+    class Meta:
+        ordering = ["project_name", "year", "month"]
+        verbose_name = "Health & Safety Record"
+        verbose_name_plural = "Health & Safety Records"
+        db_table = "health_safety_healthsafetyrecord"
+        unique_together = [("project_name", "month", "year")]
+        indexes = [
+            models.Index(fields=["project_name", "year", "month"], name="mhse_proj_year_month_idx"),
+            models.Index(fields=["year", "month"], name="mhse_year_month_idx"),
+        ]

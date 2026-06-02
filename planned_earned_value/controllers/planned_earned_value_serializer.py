@@ -1,22 +1,12 @@
 """
 Planned vs Earned Value Serializer.
 
-Handles input validation and output formatting for PlannedEarnedValue records.
+Accepts camelCase (legacy) and snake_case (new) field names on write.
+CRUD responses use camelCase for backward compatibility.
 
-Calculated fields are read-only — always derived by the model's save():
-  - variance
-  - variancePercentage
-  - performancePercentage
-
-Computed properties exposed as read-only output fields:
-  - schedulePerformanceIndex  (SPI = EV / PV)
-  - performanceStatus         (ahead / on_track / at_risk / behind)
-
-Validation rules:
-  - projectName       : required, non-blank string
-  - plannedValue      : Decimal >= 0
-  - earnedValue       : Decimal >= 0
-    (earnedValue > plannedValue is intentionally allowed — ahead of schedule)
+Calculated fields (read-only):
+  - variance, variancePercentage, performancePercentage
+  - schedulePerformanceIndex, spi, performanceStatus
 """
 
 from decimal import Decimal
@@ -27,105 +17,130 @@ from ..models.planned_earned_value import PlannedEarnedValue
 
 
 class PlannedEarnedValueSerializer(serializers.ModelSerializer):
-    """
-    Full serializer for PlannedEarnedValue model.
+    """Full serializer for PlannedEarnedValue monthly records."""
 
-    Read-only fields (auto-calculated by the model on every save):
-      - id
-      - variance
-      - variancePercentage
-      - performancePercentage
-      - created_at
-      - updated_at
-
-    Read-only computed properties (derived at runtime, not stored):
-      - schedulePerformanceIndex
-      - performanceStatus
-
-    Writable fields:
-      - projectName   (required, unique per project)
-      - plannedValue  (>= 0)
-      - earnedValue   (>= 0; may exceed plannedValue)
-    """
-
-    # Expose Python @property fields as read-only serializer fields
     schedulePerformanceIndex = serializers.FloatField(read_only=True)
+    spi = serializers.FloatField(read_only=True)
     performanceStatus = serializers.CharField(read_only=True)
+
+    # snake_case aliases for read (alongside legacy camelCase)
+    project_name = serializers.SerializerMethodField()
+    planned_value = serializers.DecimalField(
+        source="plannedValue",
+        max_digits=20,
+        decimal_places=4,
+        read_only=True,
+    )
+    earned_value = serializers.DecimalField(
+        source="earnedValue",
+        max_digits=20,
+        decimal_places=4,
+        read_only=True,
+    )
+    performance_percentage = serializers.FloatField(
+        source="performancePercentage",
+        read_only=True,
+    )
 
     class Meta:
         model = PlannedEarnedValue
         fields = [
             "id",
+            # Legacy camelCase (backward compatible)
             "projectName",
             "plannedValue",
             "earnedValue",
-            # Auto-calculated stored fields
+            # New monthly / type fields
+            "value_type",
+            "month",
+            "year",
+            # snake_case read aliases
+            "project_name",
+            "planned_value",
+            "earned_value",
+            "performance_percentage",
+            # Auto-calculated
             "variance",
             "variancePercentage",
             "performancePercentage",
-            # Computed runtime properties
             "schedulePerformanceIndex",
+            "spi",
             "performanceStatus",
-            # Timestamps
             "created_at",
             "updated_at",
         ]
         read_only_fields = [
             "id",
+            "project_name",
+            "planned_value",
+            "earned_value",
+            "performance_percentage",
             "variance",
             "variancePercentage",
             "performancePercentage",
             "schedulePerformanceIndex",
+            "spi",
             "performanceStatus",
             "created_at",
             "updated_at",
         ]
+        validators = []
 
-    # -------------------------------------------------------------------------
-    # Field-level validation
-    # -------------------------------------------------------------------------
+    def get_project_name(self, obj) -> str:
+        return obj.projectName
+
+    def to_internal_value(self, data):
+        """Normalize snake_case aliases to camelCase model fields."""
+        if hasattr(data, "copy"):
+            data = data.copy()
+        else:
+            data = dict(data)
+
+        if "project_name" in data and "projectName" not in data:
+            data["projectName"] = data["project_name"]
+        if "planned_value" in data and "plannedValue" not in data:
+            data["plannedValue"] = data["planned_value"]
+        if "earned_value" in data and "earnedValue" not in data:
+            data["earnedValue"] = data["earned_value"]
+
+        return super().to_internal_value(data)
 
     def validate_projectName(self, value: str) -> str:
-        """Strip whitespace and reject blank project names."""
         if not value or not value.strip():
             raise serializers.ValidationError("projectName cannot be blank.")
         return value.strip()
 
+    def validate_value_type(self, value: str) -> str:
+        allowed = {
+            PlannedEarnedValue.VALUE_TYPE_SCL,
+            PlannedEarnedValue.VALUE_TYPE_CONTRACTOR,
+        }
+        if value not in allowed:
+            raise serializers.ValidationError("value_type must be SCL or CONTRACTOR.")
+        return value
+
+    def validate_month(self, value: int) -> int:
+        if not (1 <= value <= 12):
+            raise serializers.ValidationError("month must be between 1 and 12.")
+        return value
+
+    def validate_year(self, value: int) -> int:
+        if not (2000 <= value <= 2100):
+            raise serializers.ValidationError("year must be between 2000 and 2100.")
+        return value
+
     def validate_plannedValue(self, value: Decimal) -> Decimal:
-        """Ensure plannedValue is non-negative."""
         if value < 0:
-            raise serializers.ValidationError(
-                "plannedValue must be >= 0. Negative planned values are not allowed."
-            )
+            raise serializers.ValidationError("plannedValue must be >= 0.")
         return value
 
     def validate_earnedValue(self, value: Decimal) -> Decimal:
-        """
-        Ensure earnedValue is non-negative.
-        Note: earnedValue > plannedValue is intentionally allowed
-        (project is ahead of schedule).
-        """
         if value < 0:
-            raise serializers.ValidationError(
-                "earnedValue must be >= 0. Negative earned values are not allowed."
-            )
+            raise serializers.ValidationError("earnedValue must be >= 0.")
         return value
 
-    # -------------------------------------------------------------------------
-    # Cross-field validation
-    # -------------------------------------------------------------------------
-
     def validate(self, attrs: dict) -> dict:
-        """
-        Cross-field validation.
-
-        No hard constraint between plannedValue and earnedValue —
-        earnedValue > plannedValue is valid (ahead of schedule).
-
-        For partial updates, fall back to existing instance values
-        so validation is accurate even when only one field is sent.
-        """
-        instance = self.instance  # None on create, existing object on update
+        instance = self.instance
 
         planned = attrs.get(
             "plannedValue",
@@ -136,14 +151,9 @@ class PlannedEarnedValueSerializer(serializers.ModelSerializer):
             getattr(instance, "earnedValue", Decimal("0")) if instance else Decimal("0"),
         )
 
-        # Both must be non-negative (belt-and-suspenders; field validators run first)
         if planned < 0:
-            raise serializers.ValidationError(
-                {"plannedValue": "plannedValue must be >= 0."}
-            )
+            raise serializers.ValidationError({"plannedValue": "plannedValue must be >= 0."})
         if earned < 0:
-            raise serializers.ValidationError(
-                {"earnedValue": "earnedValue must be >= 0."}
-            )
+            raise serializers.ValidationError({"earnedValue": "earnedValue must be >= 0."})
 
         return attrs

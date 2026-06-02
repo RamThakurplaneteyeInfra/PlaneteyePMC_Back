@@ -1,37 +1,26 @@
 """
-Correspondence Controller (ViewSet).
+Correspondence & Delivery Status Controller (ViewSet).
 
-Handles all CRUD operations for Correspondence records.
-Uses DRF ModelViewSet for a clean, DRY implementation with a uniform
-{success, message, data} response envelope on every endpoint.
-
-Endpoints (registered via router in correspondence_routes.py):
-  POST   /api/correspondence/                          -> create
-  GET    /api/correspondence/                          -> list (paginated, filterable)
-  GET    /api/correspondence/{id}/                     -> retrieve by ID
-  PUT    /api/correspondence/{id}/                     -> full update
-  PATCH  /api/correspondence/{id}/                     -> partial update
-  DELETE /api/correspondence/{id}/                     -> destroy
-  GET    /api/correspondence/project/{projectName}/    -> lookup by project name
-
-Auto-calculated fields returned on every response (never sent by client):
-  - pendingCorrespondence  = correspondenceReceived - correspondenceDelivered
-  - deliveryPercentage     = (correspondenceDelivered / correspondenceReceived) * 100
-
-Scalable for future additions:
-  - monthly correspondence tracking
-  - inward / outward correspondence history
-  - document categories
-  - priority levels
-  - overdue correspondence tracking
-  - project-wise delivery analytics
-  - charts and KPI cards
+  POST   /api/correspondence/
+  GET    /api/correspondence/
+  GET    /api/correspondence/{id}/
+  PUT    /api/correspondence/{id}/
+  PATCH  /api/correspondence/{id}/
+  DELETE /api/correspondence/{id}/
+  GET    /api/correspondence/project/{projectName}/                    (legacy → project summary)
+  GET    /api/correspondence/project/{projectName}/month/{m}/year/{y}/
+  GET    /api/correspondence/project/{projectName}/summary/
+  GET    /api/correspondence/project/{projectName}/year/{year}/summary/
+  GET    /api/correspondence/project/{projectName}/dashboard/
 """
 
 import logging
+from datetime import date
 
 from django.core.cache import cache
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db.models import Sum, Value
+from django.db.models.functions import Coalesce
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status, viewsets
@@ -40,54 +29,122 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
-from ..models.correspondence import Correspondence
+from ..models.correspondence import CorrespondenceStatus
+from .correspondence_metrics import (
+    metrics_from_counts,
+    metrics_from_record,
+    monthly_full_response,
+    dual_type_summary,
+)
 from .correspondence_serializer import CorrespondenceSerializer
 
 logger = logging.getLogger(__name__)
 
-# Cache settings
 _CACHE_KEY_LIST = "correspondence_list"
-_CACHE_TIMEOUT = 300  # 5 minutes
+_CACHE_TIMEOUT = 300
+
+_FIELD_ALIASES = {
+    "project_name": "_project_name",
+    "projectName": "_project_name",
+    "correspondenceReceived": "correspondence_received",
+    "correspondenceDelivered": "correspondence_delivered",
+}
+
+_STRIP_FIELDS = {
+    "pending_correspondence",
+    "delivery_efficiency",
+    "pendingCorrespondence",
+    "deliveryPercentage",
+    "id",
+    "created_at",
+    "updated_at",
+}
 
 
-# =============================================================================
-# Pagination
-# =============================================================================
+def _normalise_payload(data: dict) -> dict:
+    if hasattr(data, "copy"):
+        data = data.copy()
+    else:
+        data = dict(data)
+
+    normalised = {}
+    for key, value in data.items():
+        canonical = _FIELD_ALIASES.get(key, key)
+        if canonical in _STRIP_FIELDS or key in _STRIP_FIELDS:
+            continue
+        normalised[canonical] = value
+
+    for field in (
+        "correspondence_received",
+        "correspondence_delivered",
+        "month",
+        "year",
+    ):
+        if field in normalised:
+            try:
+                normalised[field] = int(normalised[field])
+            except (TypeError, ValueError):
+                pass
+
+    if "correspondence_type" in normalised and isinstance(
+        normalised["correspondence_type"], str
+    ):
+        normalised["correspondence_type"] = normalised["correspondence_type"].upper()
+
+    return normalised
+
+
+def _flatten_errors(errors) -> dict:
+    flat: dict = {}
+    if isinstance(errors, dict):
+        for field, messages in errors.items():
+            if isinstance(messages, list):
+                flat[field] = " ".join(str(m) for m in messages)
+            elif isinstance(messages, dict):
+                flat[field] = _flatten_errors(messages)
+            else:
+                flat[field] = str(messages)
+    elif isinstance(errors, list):
+        return {"detail": " ".join(str(m) for m in errors)}
+    else:
+        return {"detail": str(errors)}
+    return flat
+
+
+def _aggregate_queryset(queryset) -> dict:
+    agg = queryset.aggregate(
+        received=Coalesce(Sum("correspondence_received"), Value(0)),
+        delivered=Coalesce(Sum("correspondence_delivered"), Value(0)),
+    )
+    return metrics_from_counts(agg["received"], agg["delivered"])
+
+
+def _records_by_type(queryset):
+    by_type = {r.correspondence_type: r for r in queryset}
+    return (
+        by_type.get(CorrespondenceStatus.TYPE_CLIENT),
+        by_type.get(CorrespondenceStatus.TYPE_CONTRACTOR),
+    )
+
 
 class CorrespondencePagination(PageNumberPagination):
-    """Standard pagination for correspondence records (20 per page, configurable)."""
-
     page_size = 20
     page_size_query_param = "page_size"
     max_page_size = 100
 
 
-# =============================================================================
-# Swagger schema helpers
-# =============================================================================
-
 _CORRESPONDENCE_POST_SCHEMA = openapi.Schema(
     type=openapi.TYPE_OBJECT,
-    required=["projectName"],
+    required=["project_name", "month", "year", "correspondence_type"],
     properties={
-        "projectName": openapi.Schema(
-            type=openapi.TYPE_STRING,
-            description="Unique project name",
-            example="Atlas Tower",
+        "project_name": openapi.Schema(type=openapi.TYPE_STRING, example="Thane Project"),
+        "month": openapi.Schema(type=openapi.TYPE_INTEGER, example=6),
+        "year": openapi.Schema(type=openapi.TYPE_INTEGER, example=2026),
+        "correspondence_type": openapi.Schema(
+            type=openapi.TYPE_STRING, enum=["CLIENT", "CONTRACTOR"], example="CLIENT"
         ),
-        "correspondenceReceived": openapi.Schema(
-            type=openapi.TYPE_INTEGER,
-            description="Total correspondence items received (≥ 0)",
-            example=150,
-        ),
-        "correspondenceDelivered": openapi.Schema(
-            type=openapi.TYPE_INTEGER,
-            description=(
-                "Total correspondence items delivered "
-                "(≥ 0, must not exceed correspondenceReceived)"
-            ),
-            example=120,
-        ),
+        "correspondence_received": openapi.Schema(type=openapi.TYPE_INTEGER, example=120),
+        "correspondence_delivered": openapi.Schema(type=openapi.TYPE_INTEGER, example=110),
     },
 )
 
@@ -95,176 +152,125 @@ _CORRESPONDENCE_RESPONSE_SCHEMA = openapi.Schema(
     type=openapi.TYPE_OBJECT,
     properties={
         "success": openapi.Schema(type=openapi.TYPE_BOOLEAN, example=True),
-        "message": openapi.Schema(
-            type=openapi.TYPE_STRING,
-            example="Correspondence record created successfully",
-        ),
-        "data": openapi.Schema(
-            type=openapi.TYPE_OBJECT,
-            properties={
-                "id": openapi.Schema(type=openapi.TYPE_INTEGER, example=1),
-                "projectName": openapi.Schema(
-                    type=openapi.TYPE_STRING, example="Atlas Tower"
-                ),
-                "correspondenceReceived": openapi.Schema(
-                    type=openapi.TYPE_INTEGER, example=150
-                ),
-                "correspondenceDelivered": openapi.Schema(
-                    type=openapi.TYPE_INTEGER, example=120
-                ),
-                "pendingCorrespondence": openapi.Schema(
-                    type=openapi.TYPE_INTEGER,
-                    description="Auto-calculated: received - delivered",
-                    example=30,
-                ),
-                "deliveryPercentage": openapi.Schema(
-                    type=openapi.TYPE_NUMBER,
-                    description="Auto-calculated: (delivered / received) * 100",
-                    example=80.0,
-                ),
-                "created_at": openapi.Schema(
-                    type=openapi.TYPE_STRING, example="2024-01-15T10:30:00Z"
-                ),
-                "updated_at": openapi.Schema(
-                    type=openapi.TYPE_STRING, example="2024-01-15T10:30:00Z"
-                ),
-            },
-        ),
+        "message": openapi.Schema(type=openapi.TYPE_STRING),
+        "data": openapi.Schema(type=openapi.TYPE_OBJECT),
     },
 )
 
 
-# =============================================================================
-# ViewSet
-# =============================================================================
-
 class CorrespondenceViewSet(viewsets.ModelViewSet):
     """
-    Correspondence & Delivery Status ViewSet.
+    Monthly Correspondence & Delivery Status ViewSet.
 
-    Provides full CRUD for Correspondence records plus a project-name lookup.
-    All calculated fields (pendingCorrespondence, deliveryPercentage) are
-    auto-computed by the model on every save — clients never need to send them.
-
-    One record per project. Use PUT /api/correspondence/{id}/ to update
-    as new correspondence data arrives.
+    One record per (project, month, year, correspondence_type).
+    pending_correspondence and delivery_efficiency are computed on read.
     """
 
-    queryset = Correspondence.objects.all()
+    queryset = CorrespondenceStatus.objects.select_related("project").all()
     serializer_class = CorrespondenceSerializer
     permission_classes = [AllowAny]
     pagination_class = CorrespondencePagination
 
-    # -------------------------------------------------------------------------
-    # Queryset optimisation
-    # -------------------------------------------------------------------------
-
     def get_queryset(self):
-        """
-        Return optimised queryset.
-        Supports optional ?project_name= filter for project-wise filtering.
-        """
-        qs = Correspondence.objects.only(
-            "id",
-            "projectName",
-            "correspondenceReceived",
-            "correspondenceDelivered",
-            "pendingCorrespondence",
-            "deliveryPercentage",
-            "created_at",
-            "updated_at",
-        )
+        qs = CorrespondenceStatus.objects.select_related("project").all()
 
-        # Optional project-wise filter: ?project_name=Atlas
         project_name = self.request.query_params.get("project_name")
         if project_name:
-            qs = qs.filter(projectName__icontains=project_name.strip())
+            qs = qs.filter(project__name__icontains=project_name.strip())
 
-        return qs
+        correspondence_type = self.request.query_params.get("correspondence_type")
+        if correspondence_type:
+            qs = qs.filter(correspondence_type=correspondence_type.strip().upper())
 
-    # -------------------------------------------------------------------------
-    # Response helpers
-    # -------------------------------------------------------------------------
+        year = self.request.query_params.get("year")
+        if year:
+            try:
+                qs = qs.filter(year=int(year))
+            except ValueError:
+                pass
+
+        month = self.request.query_params.get("month")
+        if month:
+            try:
+                qs = qs.filter(month=int(month))
+            except ValueError:
+                pass
+
+        return qs.order_by("project__name", "year", "month", "correspondence_type")
 
     def _invalidate_list_cache(self):
-        """Invalidate the cached list whenever data changes."""
         cache.delete(_CACHE_KEY_LIST)
 
     def _success(self, message: str, data, http_status=status.HTTP_200_OK):
-        """Uniform success response: {success, message, data}."""
         return Response(
             {"success": True, "message": message, "data": data},
             status=http_status,
         )
 
-    def _error(
-        self,
-        message: str,
-        errors=None,
-        http_status=status.HTTP_400_BAD_REQUEST,
-    ):
-        """Uniform error response: {success, message, errors?}."""
+    def _error(self, message: str, errors=None, http_status=status.HTTP_400_BAD_REQUEST):
         payload = {"success": False, "message": message}
         if errors is not None:
             payload["errors"] = errors
         return Response(payload, status=http_status)
 
-    # -------------------------------------------------------------------------
-    # CREATE  POST /api/correspondence/
-    # -------------------------------------------------------------------------
+    def _find_monthly_record(self, project_name: str, month: int, year: int, corr_type: str):
+        return (
+            CorrespondenceStatus.objects.select_related("project")
+            .filter(
+                project__name__iexact=project_name.strip(),
+                month=month,
+                year=year,
+                correspondence_type=corr_type,
+            )
+            .first()
+        )
 
-    @swagger_auto_schema(
-        operation_summary="Create Correspondence Record",
-        operation_description=(
-            "Create a new correspondence record for a project. "
-            "pendingCorrespondence and deliveryPercentage are auto-calculated. "
-            "correspondenceDelivered must not exceed correspondenceReceived."
-        ),
-        request_body=_CORRESPONDENCE_POST_SCHEMA,
-        responses={
-            201: openapi.Response("Created", _CORRESPONDENCE_RESPONSE_SCHEMA),
-            400: "Validation error",
-        },
-        tags=["Correspondence"],
-    )
-    def create(self, request, *args, **kwargs):
-        """
-        Create or update a correspondence record (upsert by projectName).
+    def _project_queryset(self, project_name: str):
+        return CorrespondenceStatus.objects.filter(
+            project__name__iexact=project_name.strip()
+        )
 
-        If a record already exists for the given projectName it is updated
-        in-place rather than returning a 500 uniqueness error.
-        Auto-calculates pendingCorrespondence and deliveryPercentage.
-        """
-        project_name = str(request.data.get("projectName", "")).strip()
+    def _upsert_from_payload(self, payload: dict):
+        project_name = payload.get("_project_name", "").strip()
+        month = payload.get("month")
+        year = payload.get("year")
+        corr_type = payload.get("correspondence_type")
 
-        # Strip read-only / auto-calculated fields the frontend should not send
-        _READ_ONLY = {"pendingCorrespondence", "deliveryPercentage", "id", "created_at", "updated_at"}
-        payload = {k: v for k, v in request.data.items() if k not in _READ_ONLY}
-
-        # Upsert: if a record already exists for this project, update it.
         existing = None
-        if project_name:
-            try:
-                existing = Correspondence.objects.get(
-                    projectName__iexact=project_name
-                )
-            except Correspondence.DoesNotExist:
-                pass
+        if project_name and month is not None and year is not None and corr_type:
+            existing = self._find_monthly_record(
+                project_name, int(month), int(year), corr_type
+            )
 
         if existing is not None:
-            serializer = CorrespondenceSerializer(
-                existing, data=payload, partial=False
-            )
+            serializer = CorrespondenceSerializer(existing, data=payload)
         else:
             serializer = CorrespondenceSerializer(data=payload)
 
+        return serializer, existing
+
+    @swagger_auto_schema(
+        operation_summary="Create Correspondence Record",
+        request_body=_CORRESPONDENCE_POST_SCHEMA,
+        responses={201: openapi.Response("Created", _CORRESPONDENCE_RESPONSE_SCHEMA), 400: "Validation error"},
+        tags=["Correspondence"],
+    )
+    def create(self, request, *args, **kwargs):
+        """Create or update monthly record (upsert by project + month + year + type)."""
+        payload = _normalise_payload(request.data)
+
+        serializer, existing = self._upsert_from_payload(payload)
+
         if not serializer.is_valid():
-            return self._error("Invalid data provided", errors=serializer.errors)
+            return self._error(
+                "Validation failed",
+                errors=_flatten_errors(serializer.errors),
+            )
 
         try:
             instance = serializer.save()
         except DjangoValidationError as exc:
-            return self._error("Validation failed", errors=exc.message_dict)
+            return self._error("Validation failed", errors=_flatten_errors(exc.message_dict))
         except Exception as exc:
             logger.error(f"Correspondence create error: {exc}")
             return self._error(
@@ -279,7 +285,7 @@ class CorrespondenceViewSet(viewsets.ModelViewSet):
         message = (
             "Correspondence record updated successfully"
             if existing
-            else "Correspondence record created successfully"
+            else "Correspondence record saved successfully"
         )
 
         return self._success(
@@ -288,36 +294,17 @@ class CorrespondenceViewSet(viewsets.ModelViewSet):
             http_status=http_status,
         )
 
-    # -------------------------------------------------------------------------
-    # LIST  GET /api/correspondence/
-    # -------------------------------------------------------------------------
-
     @swagger_auto_schema(
-        operation_summary="Get All Correspondence Records",
-        operation_description=(
-            "Retrieve all correspondence records. "
-            "Supports optional ?project_name= filter and pagination."
-        ),
+        operation_summary="List Correspondence Records",
         manual_parameters=[
+            openapi.Parameter("project_name", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter("month", openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=False),
+            openapi.Parameter("year", openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=False),
             openapi.Parameter(
-                "project_name",
+                "correspondence_type",
                 openapi.IN_QUERY,
-                description="Filter by project name (case-insensitive partial match)",
                 type=openapi.TYPE_STRING,
-                required=False,
-            ),
-            openapi.Parameter(
-                "page",
-                openapi.IN_QUERY,
-                description="Page number",
-                type=openapi.TYPE_INTEGER,
-                required=False,
-            ),
-            openapi.Parameter(
-                "page_size",
-                openapi.IN_QUERY,
-                description="Records per page (max 100)",
-                type=openapi.TYPE_INTEGER,
+                enum=["CLIENT", "CONTRACTOR"],
                 required=False,
             ),
         ],
@@ -325,13 +312,12 @@ class CorrespondenceViewSet(viewsets.ModelViewSet):
         tags=["Correspondence"],
     )
     def list(self, request, *args, **kwargs):
-        """
-        Return all correspondence records (paginated).
-        Results are cached for 5 minutes; cache is invalidated on any write.
-        """
-        project_filter = request.query_params.get("project_name")
+        has_filters = any(
+            request.query_params.get(k)
+            for k in ("project_name", "month", "year", "correspondence_type")
+        )
         page_param = request.query_params.get("page", "1")
-        use_cache = not project_filter and page_param == "1"
+        use_cache = not has_filters and page_param == "1"
 
         if use_cache:
             cached = cache.get(_CACHE_KEY_LIST)
@@ -363,80 +349,53 @@ class CorrespondenceViewSet(viewsets.ModelViewSet):
             cache.set(_CACHE_KEY_LIST, payload, _CACHE_TIMEOUT)
         return Response(payload)
 
-    # -------------------------------------------------------------------------
-    # RETRIEVE  GET /api/correspondence/{id}/
-    # -------------------------------------------------------------------------
-
     @swagger_auto_schema(
-        operation_summary="Get Correspondence Record by ID",
-        responses={
-            200: openapi.Response("OK", _CORRESPONDENCE_RESPONSE_SCHEMA),
-            404: "Not found",
-        },
+        operation_summary="Get Correspondence by ID",
+        responses={200: openapi.Response("OK", _CORRESPONDENCE_RESPONSE_SCHEMA), 404: "Not found"},
         tags=["Correspondence"],
     )
     def retrieve(self, request, *args, **kwargs):
-        """Retrieve a single correspondence record by its primary key."""
         try:
-            instance = Correspondence.objects.get(pk=kwargs["pk"])
-        except Correspondence.DoesNotExist:
+            instance = CorrespondenceStatus.objects.select_related("project").get(pk=kwargs["pk"])
+        except CorrespondenceStatus.DoesNotExist:
             return self._error(
                 "Correspondence record not found",
                 http_status=status.HTTP_404_NOT_FOUND,
             )
-
         return self._success(
             "Correspondence record retrieved successfully",
             CorrespondenceSerializer(instance).data,
         )
 
-    # -------------------------------------------------------------------------
-    # UPDATE  PUT /api/correspondence/{id}/
-    # -------------------------------------------------------------------------
-
     @swagger_auto_schema(
         operation_summary="Update Correspondence Record",
-        operation_description=(
-            "Full or partial update of a correspondence record. "
-            "pendingCorrespondence and deliveryPercentage are recalculated automatically."
-        ),
         request_body=_CORRESPONDENCE_POST_SCHEMA,
-        responses={
-            200: openapi.Response("OK", _CORRESPONDENCE_RESPONSE_SCHEMA),
-            400: "Validation error",
-            404: "Not found",
-        },
+        responses={200: openapi.Response("OK", _CORRESPONDENCE_RESPONSE_SCHEMA), 400: "Validation error", 404: "Not found"},
         tags=["Correspondence"],
     )
     def update(self, request, *args, **kwargs):
-        """
-        Full update (PUT) of a correspondence record.
-        Recalculates pendingCorrespondence and deliveryPercentage after update.
-        """
         partial = kwargs.pop("partial", False)
-
         try:
-            instance = Correspondence.objects.get(pk=kwargs["pk"])
-        except Correspondence.DoesNotExist:
+            instance = CorrespondenceStatus.objects.select_related("project").get(pk=kwargs["pk"])
+        except CorrespondenceStatus.DoesNotExist:
             return self._error(
                 "Correspondence record not found",
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
-        _READ_ONLY = {"pendingCorrespondence", "deliveryPercentage", "id", "created_at", "updated_at"}
-        payload = {k: v for k, v in request.data.items() if k not in _READ_ONLY}
-
-        serializer = CorrespondenceSerializer(
-            instance, data=payload, partial=partial
-        )
+        payload = _normalise_payload(request.data)
+        serializer = CorrespondenceSerializer(instance, data=payload, partial=partial)
 
         if not serializer.is_valid():
-            return self._error("Invalid data provided", errors=serializer.errors)
+            return self._error(
+                "Validation failed",
+                errors=_flatten_errors(serializer.errors),
+            )
 
         try:
             updated = serializer.save()
         except DjangoValidationError as exc:
-            return self._error("Validation failed", errors=exc.message_dict)
+            return self._error("Validation failed", errors=_flatten_errors(exc.message_dict))
         except Exception as exc:
             logger.error(f"Correspondence update error: {exc}")
             return self._error(
@@ -446,62 +405,229 @@ class CorrespondenceViewSet(viewsets.ModelViewSet):
             )
 
         self._invalidate_list_cache()
-
         return self._success(
             "Correspondence record updated successfully",
             CorrespondenceSerializer(updated).data,
         )
 
     def partial_update(self, request, *args, **kwargs):
-        """PATCH — partial update, delegates to update() with partial=True."""
         kwargs["partial"] = True
         return self.update(request, *args, **kwargs)
 
-    # -------------------------------------------------------------------------
-    # DELETE  DELETE /api/correspondence/{id}/
-    # -------------------------------------------------------------------------
-
     @swagger_auto_schema(
         operation_summary="Delete Correspondence Record",
-        responses={
-            200: openapi.Response("OK"),
-            404: "Not found",
-        },
+        responses={200: openapi.Response("OK"), 404: "Not found"},
         tags=["Correspondence"],
     )
     def destroy(self, request, *args, **kwargs):
-        """Delete a correspondence record by its primary key."""
         try:
-            instance = Correspondence.objects.get(pk=kwargs["pk"])
-        except Correspondence.DoesNotExist:
+            instance = CorrespondenceStatus.objects.select_related("project").get(pk=kwargs["pk"])
+        except CorrespondenceStatus.DoesNotExist:
             return self._error(
                 "Correspondence record not found",
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
-        project_name = instance.projectName
+        label = (
+            f"{instance.project_name} [{instance.correspondence_type}] "
+            f"({instance.month:02d}/{instance.year})"
+        )
         instance.delete()
         self._invalidate_list_cache()
-
         return self._success(
-            f"Correspondence record for '{project_name}' deleted successfully",
+            f"Correspondence record for '{label}' deleted successfully",
             {},
         )
 
     # -------------------------------------------------------------------------
-    # CUSTOM ACTION  GET /api/correspondence/project/{projectName}/
+    # MONTHLY  GET .../project/{projectName}/month/{month}/year/{year}/
     # -------------------------------------------------------------------------
 
     @swagger_auto_schema(
-        operation_summary="Get Correspondence Record by Project Name",
-        operation_description=(
-            "Retrieve a correspondence record using the exact project name "
-            "(case-insensitive). Useful for dashboard KPI card lookups."
-        ),
-        responses={
-            200: openapi.Response("OK", _CORRESPONDENCE_RESPONSE_SCHEMA),
-            404: "Not found",
-        },
+        operation_summary="Monthly CLIENT + CONTRACTOR correspondence",
+        responses={200: openapi.Response("OK"), 404: "Not found"},
+        tags=["Correspondence"],
+    )
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path=r"project/(?P<projectName>[^/.]+)/month/(?P<month>\d+)/year/(?P<year>\d+)",
+        url_name="by-month-year",
+    )
+    def get_by_month_year(self, request, projectName=None, month=None, year=None):
+        try:
+            month_int = int(month)
+            year_int = int(year)
+        except (TypeError, ValueError):
+            return self._error("month and year must be valid integers.")
+
+        if not (1 <= month_int <= 12):
+            return self._error("month must be between 1 and 12.")
+        if not (2000 <= year_int <= 2100):
+            return self._error("year must be between 2000 and 2100.")
+
+        project_name = projectName.strip()
+        records = self._project_queryset(project_name).filter(
+            month=month_int, year=year_int
+        )
+
+        if not records.exists():
+            return self._error(
+                f"No correspondence records found for '{project_name}' "
+                f"in {month_int:02d}/{year_int}.",
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+
+        client, contractor = _records_by_type(records)
+        return self._success(
+            f"Correspondence for '{project_name}' ({month_int:02d}/{year_int}) retrieved successfully",
+            monthly_full_response(project_name, month_int, year_int, client, contractor),
+        )
+
+    # -------------------------------------------------------------------------
+    # PROJECT SUMMARY  GET .../project/{projectName}/summary/
+    # -------------------------------------------------------------------------
+
+    @swagger_auto_schema(
+        operation_summary="Project-wide correspondence summary (all months, SUM)",
+        responses={200: openapi.Response("OK"), 404: "Not found"},
+        tags=["Correspondence"],
+    )
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path=r"project/(?P<projectName>[^/.]+)/summary",
+        url_name="project-summary",
+    )
+    def project_summary(self, request, projectName=None):
+        if not projectName or not projectName.strip():
+            return self._error("projectName is required.")
+
+        project_name = projectName.strip()
+        qs = self._project_queryset(project_name)
+
+        if not qs.exists():
+            return self._error(
+                f"No correspondence records found for project '{project_name}'",
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+
+        client_qs = qs.filter(correspondence_type=CorrespondenceStatus.TYPE_CLIENT)
+        contractor_qs = qs.filter(correspondence_type=CorrespondenceStatus.TYPE_CONTRACTOR)
+
+        return self._success(
+            f"Project correspondence summary for '{project_name}' retrieved successfully",
+            dual_type_summary(
+                project_name,
+                _aggregate_queryset(client_qs),
+                _aggregate_queryset(contractor_qs),
+            ),
+        )
+
+    # -------------------------------------------------------------------------
+    # YEARLY SUMMARY  GET .../project/{projectName}/year/{year}/summary/
+    # -------------------------------------------------------------------------
+
+    @swagger_auto_schema(
+        operation_summary="Yearly correspondence summary (SUM for selected year)",
+        responses={200: openapi.Response("OK"), 404: "Not found"},
+        tags=["Correspondence"],
+    )
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path=r"project/(?P<projectName>[^/.]+)/year/(?P<year>\d+)/summary",
+        url_name="yearly-summary",
+    )
+    def yearly_summary(self, request, projectName=None, year=None):
+        try:
+            year_int = int(year)
+        except (TypeError, ValueError):
+            return self._error("year must be a valid integer.")
+
+        if not (2000 <= year_int <= 2100):
+            return self._error("year must be between 2000 and 2100.")
+
+        project_name = projectName.strip()
+        qs = self._project_queryset(project_name).filter(year=year_int)
+
+        if not qs.exists():
+            return self._error(
+                f"No correspondence records found for '{project_name}' in {year_int}.",
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+
+        client_qs = qs.filter(correspondence_type=CorrespondenceStatus.TYPE_CLIENT)
+        contractor_qs = qs.filter(correspondence_type=CorrespondenceStatus.TYPE_CONTRACTOR)
+
+        return self._success(
+            f"Yearly correspondence summary for '{project_name}' ({year_int}) retrieved successfully",
+            dual_type_summary(
+                project_name,
+                _aggregate_queryset(client_qs),
+                _aggregate_queryset(contractor_qs),
+                year=year_int,
+            ),
+        )
+
+    # -------------------------------------------------------------------------
+    # DASHBOARD  GET .../project/{projectName}/dashboard/
+    # -------------------------------------------------------------------------
+
+    @swagger_auto_schema(
+        operation_summary="Dashboard — current month + project totals",
+        responses={200: openapi.Response("OK"), 404: "Not found"},
+        tags=["Correspondence"],
+    )
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path=r"project/(?P<projectName>[^/.]+)/dashboard",
+        url_name="dashboard",
+    )
+    def dashboard(self, request, projectName=None):
+        if not projectName or not projectName.strip():
+            return self._error("projectName is required.")
+
+        project_name = projectName.strip()
+        qs = self._project_queryset(project_name)
+
+        if not qs.exists():
+            return self._error(
+                f"No correspondence records found for project '{project_name}'",
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+
+        today = date.today()
+        current_records = qs.filter(month=today.month, year=today.year)
+        client_cm, contractor_cm = _records_by_type(current_records)
+
+        client_all = qs.filter(correspondence_type=CorrespondenceStatus.TYPE_CLIENT)
+        contractor_all = qs.filter(correspondence_type=CorrespondenceStatus.TYPE_CONTRACTOR)
+
+        return self._success(
+            f"Correspondence dashboard for '{project_name}' retrieved successfully",
+            {
+                "project_name": project_name,
+                "current_month": {
+                    "client": metrics_from_record(client_cm),
+                    "contractor": metrics_from_record(contractor_cm),
+                },
+                "project_summary": {
+                    "client": _aggregate_queryset(client_all),
+                    "contractor": _aggregate_queryset(contractor_all),
+                },
+            },
+        )
+
+    # -------------------------------------------------------------------------
+    # LEGACY  GET .../project/{projectName}/
+    # -------------------------------------------------------------------------
+
+    @swagger_auto_schema(
+        operation_summary="Get correspondence by project name (legacy)",
+        operation_description="Returns aggregated project summary (same as /summary/).",
+        responses={200: openapi.Response("OK", _CORRESPONDENCE_RESPONSE_SCHEMA), 404: "Not found"},
         tags=["Correspondence"],
     )
     @action(
@@ -511,24 +637,4 @@ class CorrespondenceViewSet(viewsets.ModelViewSet):
         url_name="by-project-name",
     )
     def get_by_project_name(self, request, projectName: str = None):
-        """
-        Retrieve a correspondence record by exact project name (case-insensitive).
-        Returns all KPI fields ready for dashboard card rendering.
-        """
-        if not projectName or not projectName.strip():
-            return self._error("projectName is required.")
-
-        try:
-            instance = Correspondence.objects.get(
-                projectName__iexact=projectName.strip()
-            )
-        except Correspondence.DoesNotExist:
-            return self._error(
-                f"No correspondence record found for project '{projectName}'",
-                http_status=status.HTTP_404_NOT_FOUND,
-            )
-
-        return self._success(
-            "Correspondence record retrieved successfully",
-            CorrespondenceSerializer(instance).data,
-        )
+        return self.project_summary(request, projectName=projectName)

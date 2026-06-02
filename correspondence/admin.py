@@ -4,51 +4,36 @@ Django admin registration for the Correspondence app.
 
 from django.contrib import admin
 
-from .models.correspondence import Correspondence
+from .models.correspondence import CorrespondenceStatus
 
 
-@admin.register(Correspondence)
-class CorrespondenceAdmin(admin.ModelAdmin):
-    """Admin view for Correspondence records."""
+@admin.register(CorrespondenceStatus)
+class CorrespondenceStatusAdmin(admin.ModelAdmin):
+    """Admin view for monthly CorrespondenceStatus records."""
 
     list_display = [
-        "projectName",
-        "correspondenceReceived",
-        "correspondenceDelivered",
-        "pendingCorrespondence",
-        "deliveryPercentage",
+        "project",
+        "month",
+        "year",
+        "correspondence_type",
+        "correspondence_received",
+        "correspondence_delivered",
         "created_at",
         "updated_at",
     ]
-    list_filter = ["created_at"]
-    search_fields = ["projectName"]
-    readonly_fields = [
-        "pendingCorrespondence",
-        "deliveryPercentage",
-        "created_at",
-        "updated_at",
-    ]
-    ordering = ["projectName"]
+    list_filter = ["year", "month", "correspondence_type", "created_at"]
+    search_fields = ["project__name"]
+    readonly_fields = ["created_at", "updated_at"]
+    ordering = ["project__name", "year", "month", "correspondence_type"]
 
     fieldsets = (
-        ("Project", {"fields": ("projectName",)}),
         (
-            "Correspondence Counts",
-            {
-                "fields": (
-                    "correspondenceReceived",
-                    "correspondenceDelivered",
-                ),
-            },
+            "Project & Period",
+            {"fields": ("project", "month", "year", "correspondence_type")},
         ),
         (
-            "Auto-Calculated KPIs",
-            {
-                "fields": ("pendingCorrespondence", "deliveryPercentage"),
-                "description": (
-                    "These fields are calculated automatically and cannot be edited."
-                ),
-            },
+            "Correspondence Counts",
+            {"fields": ("correspondence_received", "correspondence_delivered")},
         ),
         (
             "Timestamps",

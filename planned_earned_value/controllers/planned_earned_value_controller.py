@@ -1,41 +1,25 @@
 """
 Planned vs Earned Value Controller (ViewSet).
 
-Handles all CRUD operations for PlannedEarnedValue records.
-Uses DRF ModelViewSet for a clean, DRY implementation with a uniform
-{success, message, data} response envelope on every endpoint.
-
-Endpoints (registered via router in planned_earned_value_routes.py):
-  POST   /api/planned-earned-value/                          -> create
-  GET    /api/planned-earned-value/                          -> list (paginated, filterable)
-  GET    /api/planned-earned-value/{id}/                     -> retrieve by ID
-  PUT    /api/planned-earned-value/{id}/                     -> full update
-  PATCH  /api/planned-earned-value/{id}/                     -> partial update
-  DELETE /api/planned-earned-value/{id}/                     -> destroy
-  GET    /api/planned-earned-value/project/{projectName}/    -> lookup by project name
-
-Auto-calculated fields returned on every response (never sent by client):
-  - variance              = earnedValue - plannedValue
-  - variancePercentage    = (variance / plannedValue) * 100
-  - performancePercentage = (earnedValue / plannedValue) * 100
-
-Runtime-computed fields (not stored, derived on read):
-  - schedulePerformanceIndex  (SPI = EV / PV)
-  - performanceStatus         (ahead / on_track / at_risk / behind)
-
-Scalable for future additions:
-  - monthly planned vs earned tracking
-  - trend analysis and baseline comparison
-  - schedule variance (SV) and cost variance (CV)
-  - forecasting analytics (EAC, ETC, TCPI)
-  - project health indicators
-  - S-curve chart data
+Endpoints:
+  POST   /api/planned-earned-value/
+  GET    /api/planned-earned-value/
+  GET    /api/planned-earned-value/{id}/
+  PUT    /api/planned-earned-value/{id}/
+  PATCH  /api/planned-earned-value/{id}/
+  DELETE /api/planned-earned-value/{id}/
+  GET    /api/planned-earned-value/project/{projectName}/                     (legacy)
+  GET    /api/planned-earned-value/project/{projectName}/month/{m}/year/{y}/  (dashboard)
+  GET    /api/planned-earned-value/project/{projectName}/year/{y}/summary/    (yearly)
 """
 
 import logging
+from decimal import Decimal
 
 from django.core.cache import cache
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db.models import Sum, Value
+from django.db.models.functions import Coalesce
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status, viewsets
@@ -49,49 +33,197 @@ from .planned_earned_value_serializer import PlannedEarnedValueSerializer
 
 logger = logging.getLogger(__name__)
 
-# Cache settings
 _CACHE_KEY_LIST = "planned_earned_value_list"
-_CACHE_TIMEOUT = 300  # 5 minutes
+_CACHE_TIMEOUT = 300
+
+_READ_ONLY_FIELDS = {
+    "variance",
+    "variancePercentage",
+    "performancePercentage",
+    "schedulePerformanceIndex",
+    "spi",
+    "performanceStatus",
+    "performance_percentage",
+    "scl",
+    "contractor",
+    "SCL",
+    "CONTRACTOR",
+    "id",
+    "created_at",
+    "updated_at",
+}
 
 
-# =============================================================================
-# Pagination
-# =============================================================================
+def _to_decimal(value) -> Decimal:
+    if value is None or value == "":
+        return Decimal("0")
+    return Decimal(str(value))
+
+
+def _extract_nested_type_values(
+    data,
+    existing_record=None,
+) -> tuple[Decimal, Decimal]:
+    """
+    Read planned/earned from nested scl/contractor object.
+
+    Missing keys on UPDATE fall back to the existing DB record — never default to 0.
+    On CREATE both fields must be present in the payload.
+    """
+    if not isinstance(data, dict):
+        raise DjangoValidationError({"detail": "Nested section must be an object."})
+
+    planned = None
+    earned = None
+
+    if "planned_value" in data:
+        planned = _to_decimal(data["planned_value"])
+    elif "plannedValue" in data:
+        planned = _to_decimal(data["plannedValue"])
+
+    if "earned_value" in data:
+        earned = _to_decimal(data["earned_value"])
+    elif "earnedValue" in data:
+        earned = _to_decimal(data["earnedValue"])
+
+    if existing_record is not None:
+        if planned is None:
+            planned = existing_record.plannedValue
+        if earned is None:
+            earned = existing_record.earnedValue
+        return planned, earned
+
+    errors = {}
+    if planned is None:
+        errors["planned_value"] = "planned_value is required when creating a new record."
+    if earned is None:
+        errors["earned_value"] = "earned_value is required when creating a new record."
+    if errors:
+        raise DjangoValidationError(errors)
+
+    return planned, earned
+
+
+def _nested_section_data(data, *keys):
+    """Return nested section only if the key is explicitly present in the payload."""
+    for key in keys:
+        if key in data:
+            return data[key]
+    return None
+
+
+def _nested_section_present(data, *keys) -> bool:
+    return any(key in data for key in keys)
+
+
+def _is_nested_payload(data) -> bool:
+    if not isinstance(data, dict):
+        return False
+    return any(
+        key in data
+        for key in ("scl", "contractor", "SCL", "CONTRACTOR")
+    )
+
+
+def _metrics_for_response(record) -> dict | None:
+    """Dashboard-style metrics; None when no DB record exists."""
+    if record is None:
+        return None
+    metrics = _metrics_from_record(record)
+    return {
+        "planned_value": float(metrics["planned_value"]),
+        "earned_value": float(metrics["earned_value"]),
+        "variance": float(metrics["variance"]),
+        "spi": metrics["spi"],
+        "performance_percentage": metrics["performance_percentage"],
+    }
+
+
+def _build_month_dashboard_response(project_name: str, month: int, year: int) -> dict:
+    records = PlannedEarnedValue.objects.filter(
+        projectName__iexact=project_name,
+        month=month,
+        year=year,
+    )
+    by_type = {r.value_type: r for r in records}
+    scl = by_type.get(PlannedEarnedValue.VALUE_TYPE_SCL)
+    contractor = by_type.get(PlannedEarnedValue.VALUE_TYPE_CONTRACTOR)
+    return {
+        "project_name": project_name,
+        "month": month,
+        "year": year,
+        "scl": _metrics_for_response(scl),
+        "contractor": _metrics_for_response(contractor),
+    }
+
+
+def _metrics_from_totals(planned, earned) -> dict:
+    """Compute KPI metrics from planned/earned totals."""
+    planned = Decimal(planned or 0)
+    earned = Decimal(earned or 0)
+    variance = earned - planned
+    spi = round(float(earned / planned), 4) if planned > 0 else 0.0
+    performance_percentage = round(float(earned / planned) * 100, 2) if planned > 0 else 0.0
+    return {
+        "planned_value": planned,
+        "earned_value": earned,
+        "variance": variance,
+        "spi": spi,
+        "performance_percentage": performance_percentage,
+    }
+
+
+def _empty_metrics() -> dict:
+    return _metrics_from_totals(0, 0)
+
+
+def _metrics_from_record(record) -> dict:
+    if record is None:
+        return _empty_metrics()
+    return _metrics_from_totals(record.plannedValue, record.earnedValue)
+
+
+def _aggregate_by_type(queryset, value_type: str) -> dict:
+    """SUM monthly records for a value type, then compute KPIs."""
+    qs = queryset.filter(value_type=value_type)
+    agg = qs.aggregate(
+        planned=Coalesce(Sum("plannedValue"), Value(Decimal("0.0000"))),
+        earned=Coalesce(Sum("earnedValue"), Value(Decimal("0.0000"))),
+    )
+    return _metrics_from_totals(agg["planned"], agg["earned"])
+
 
 class PlannedEarnedValuePagination(PageNumberPagination):
-    """Standard pagination for Planned vs Earned Value records (20/page)."""
-
     page_size = 20
     page_size_query_param = "page_size"
     max_page_size = 100
 
 
-# =============================================================================
-# Swagger schema helpers
-# =============================================================================
-
 _PEV_POST_SCHEMA = openapi.Schema(
     type=openapi.TYPE_OBJECT,
-    required=["projectName", "plannedValue", "earnedValue"],
+    required=["project_name", "month", "year"],
     properties={
-        "projectName": openapi.Schema(
-            type=openapi.TYPE_STRING,
-            description="Unique project name",
-            example="Atlas Tower",
+        "project_name": openapi.Schema(type=openapi.TYPE_STRING, example="Thane Project"),
+        "projectName": openapi.Schema(type=openapi.TYPE_STRING, example="Thane Project"),
+        "month": openapi.Schema(type=openapi.TYPE_INTEGER, example=6),
+        "year": openapi.Schema(type=openapi.TYPE_INTEGER, example=2026),
+        "scl": openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                "planned_value": openapi.Schema(type=openapi.TYPE_NUMBER, example=2000000),
+                "earned_value": openapi.Schema(type=openapi.TYPE_NUMBER, example=1000000),
+            },
         ),
-        "plannedValue": openapi.Schema(
-            type=openapi.TYPE_NUMBER,
-            description="Planned Value — PV / BCWS (>= 0)",
-            example=500000.00,
+        "contractor": openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                "planned_value": openapi.Schema(type=openapi.TYPE_NUMBER, example=0),
+                "earned_value": openapi.Schema(type=openapi.TYPE_NUMBER, example=0),
+            },
         ),
-        "earnedValue": openapi.Schema(
-            type=openapi.TYPE_NUMBER,
-            description=(
-                "Earned Value — EV / BCWP (>= 0). "
-                "Can exceed plannedValue when project is ahead of schedule."
-            ),
-            example=480000.00,
-        ),
+        "value_type": openapi.Schema(type=openapi.TYPE_STRING, enum=["SCL", "CONTRACTOR"]),
+        "planned_value": openapi.Schema(type=openapi.TYPE_NUMBER, description="Flat single-record payload"),
+        "earned_value": openapi.Schema(type=openapi.TYPE_NUMBER, description="Flat single-record payload"),
     },
 )
 
@@ -99,79 +231,18 @@ _PEV_RESPONSE_SCHEMA = openapi.Schema(
     type=openapi.TYPE_OBJECT,
     properties={
         "success": openapi.Schema(type=openapi.TYPE_BOOLEAN, example=True),
-        "message": openapi.Schema(
-            type=openapi.TYPE_STRING,
-            example="Planned vs Earned Value record created successfully",
-        ),
-        "data": openapi.Schema(
-            type=openapi.TYPE_OBJECT,
-            properties={
-                "id": openapi.Schema(type=openapi.TYPE_INTEGER, example=1),
-                "projectName": openapi.Schema(
-                    type=openapi.TYPE_STRING, example="Atlas Tower"
-                ),
-                "plannedValue": openapi.Schema(
-                    type=openapi.TYPE_NUMBER, example=500000.00
-                ),
-                "earnedValue": openapi.Schema(
-                    type=openapi.TYPE_NUMBER, example=480000.00
-                ),
-                "variance": openapi.Schema(
-                    type=openapi.TYPE_NUMBER,
-                    description="Auto-calculated: EV - PV (negative = behind schedule)",
-                    example=-20000.00,
-                ),
-                "variancePercentage": openapi.Schema(
-                    type=openapi.TYPE_NUMBER,
-                    description="Auto-calculated: (variance / plannedValue) * 100",
-                    example=-4.00,
-                ),
-                "performancePercentage": openapi.Schema(
-                    type=openapi.TYPE_NUMBER,
-                    description="Auto-calculated: (earnedValue / plannedValue) * 100",
-                    example=96.00,
-                ),
-                "schedulePerformanceIndex": openapi.Schema(
-                    type=openapi.TYPE_NUMBER,
-                    description="SPI = EV / PV (> 1 = ahead, < 1 = behind)",
-                    example=0.96,
-                ),
-                "performanceStatus": openapi.Schema(
-                    type=openapi.TYPE_STRING,
-                    description="ahead | on_track | at_risk | behind",
-                    example="on_track",
-                ),
-                "created_at": openapi.Schema(
-                    type=openapi.TYPE_STRING, example="2024-01-15T10:30:00Z"
-                ),
-                "updated_at": openapi.Schema(
-                    type=openapi.TYPE_STRING, example="2024-01-15T10:30:00Z"
-                ),
-            },
-        ),
+        "message": openapi.Schema(type=openapi.TYPE_STRING),
+        "data": openapi.Schema(type=openapi.TYPE_OBJECT),
     },
 )
 
-
-# =============================================================================
-# ViewSet
-# =============================================================================
 
 class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
     """
     Planned vs Earned Value ViewSet.
 
-    One record per project — tracks cumulative PV vs EV for dashboard KPIs,
-    gauge meters, and performance charts.
-
-    All calculated fields are auto-computed by the model on every save.
-    Clients only need to send: projectName, plannedValue, earnedValue.
-
-    Performance status thresholds (performancePercentage):
-      >= 100%  → 'ahead'
-      >= 90%   → 'on_track'
-      >= 75%   → 'at_risk'
-      < 75%    → 'behind'
+    One record per (projectName, value_type, month, year).
+    Supports SCL and CONTRACTOR monthly tracking within the same API.
     """
 
     queryset = PlannedEarnedValue.objects.all()
@@ -179,116 +250,311 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
     permission_classes = [AllowAny]
     pagination_class = PlannedEarnedValuePagination
 
-    # -------------------------------------------------------------------------
-    # Queryset optimisation
-    # -------------------------------------------------------------------------
-
     def get_queryset(self):
-        """
-        Return optimised queryset.
-        Supports optional ?project_name= filter for project-wise filtering.
-        """
-        qs = PlannedEarnedValue.objects.only(
-            "id",
-            "projectName",
-            "plannedValue",
-            "earnedValue",
-            "variance",
-            "variancePercentage",
-            "performancePercentage",
-            "created_at",
-            "updated_at",
-        )
+        qs = PlannedEarnedValue.objects.all()
 
-        # Optional project-wise filter: ?project_name=Atlas
         project_name = self.request.query_params.get("project_name")
         if project_name:
             qs = qs.filter(projectName__icontains=project_name.strip())
 
-        return qs
+        value_type = self.request.query_params.get("value_type")
+        if value_type:
+            qs = qs.filter(value_type=value_type.strip().upper())
 
-    # -------------------------------------------------------------------------
-    # Response helpers
-    # -------------------------------------------------------------------------
+        year = self.request.query_params.get("year")
+        if year:
+            try:
+                qs = qs.filter(year=int(year))
+            except ValueError:
+                pass
+
+        month = self.request.query_params.get("month")
+        if month:
+            try:
+                qs = qs.filter(month=int(month))
+            except ValueError:
+                pass
+
+        return qs.order_by("projectName", "year", "month", "value_type")
 
     def _invalidate_list_cache(self):
-        """Invalidate the cached list whenever data changes."""
         cache.delete(_CACHE_KEY_LIST)
 
     def _success(self, message: str, data, http_status=status.HTTP_200_OK):
-        """Uniform success response: {success, message, data}."""
         return Response(
             {"success": True, "message": message, "data": data},
             status=http_status,
         )
 
-    def _error(
-        self,
-        message: str,
-        errors=None,
-        http_status=status.HTTP_400_BAD_REQUEST,
-    ):
-        """Uniform error response: {success, message, errors?}."""
+    def _error(self, message: str, errors=None, http_status=status.HTTP_400_BAD_REQUEST):
         payload = {"success": False, "message": message}
         if errors is not None:
             payload["errors"] = errors
         return Response(payload, status=http_status)
 
-    # -------------------------------------------------------------------------
-    # CREATE  POST /api/planned-earned-value/
-    # -------------------------------------------------------------------------
+    def _clean_payload(self, request):
+        return {k: v for k, v in request.data.items() if k not in _READ_ONLY_FIELDS}
+
+    def _parse_nested_payload(self, data, instance=None):
+        """
+        Parse nested dashboard payload: project_name, month, year, scl, contractor.
+        Returns (project_name, month, year, scl_data, contractor_data) or raises via errors dict.
+        """
+        errors = {}
+
+        project_name = str(
+            data.get("project_name") or data.get("projectName") or ""
+        ).strip()
+        if not project_name and instance is not None:
+            project_name = instance.projectName
+
+        if not project_name:
+            errors["project_name"] = "project_name is required."
+
+        month = data.get("month")
+        year = data.get("year")
+        if month is None and instance is not None:
+            month = instance.month
+        if year is None and instance is not None:
+            year = instance.year
+
+        try:
+            month = int(month)
+        except (TypeError, ValueError):
+            errors["month"] = "month is required and must be an integer."
+            month = None
+
+        try:
+            year = int(year)
+        except (TypeError, ValueError):
+            errors["year"] = "year is required and must be an integer."
+            year = None
+
+        if month is not None and not (1 <= month <= 12):
+            errors["month"] = "month must be between 1 and 12."
+        if year is not None and not (2000 <= year <= 2100):
+            errors["year"] = "year must be between 2000 and 2100."
+
+        scl_data = _nested_section_data(data, "scl", "SCL")
+        contractor_data = _nested_section_data(data, "contractor", "CONTRACTOR")
+
+        has_scl = _nested_section_present(data, "scl", "SCL")
+        has_contractor = _nested_section_present(data, "contractor", "CONTRACTOR")
+
+        if not has_scl and not has_contractor:
+            errors["scl"] = (
+                "Provide at least one of 'scl' or 'contractor' in the request body."
+            )
+
+        if errors:
+            return None, None, None, None, None, False, False, errors
+
+        return project_name, month, year, scl_data, contractor_data, has_scl, has_contractor, None
+
+    def _get_existing_type_record(
+        self, project_name: str, value_type: str, month: int, year: int
+    ):
+        return PlannedEarnedValue.objects.filter(
+            projectName__iexact=project_name,
+            value_type=value_type,
+            month=month,
+            year=year,
+        ).first()
+
+    def _upsert_type_record(
+        self,
+        project_name: str,
+        value_type: str,
+        month: int,
+        year: int,
+        planned: Decimal,
+        earned: Decimal,
+    ) -> tuple[PlannedEarnedValue, bool]:
+        """Upsert one monthly record using update_or_create."""
+        if planned < 0:
+            raise DjangoValidationError({"plannedValue": "planned_value must be >= 0."})
+        if earned < 0:
+            raise DjangoValidationError({"earnedValue": "earned_value must be >= 0."})
+
+        existing = PlannedEarnedValue.objects.filter(
+            projectName__iexact=project_name,
+            value_type=value_type,
+            month=month,
+            year=year,
+        ).first()
+        lookup_name = existing.projectName if existing else project_name
+
+        record, created = PlannedEarnedValue.objects.update_or_create(
+            projectName=lookup_name,
+            value_type=value_type,
+            month=month,
+            year=year,
+            defaults={
+                "plannedValue": planned,
+                "earnedValue": earned,
+            },
+        )
+
+        if record.projectName != project_name:
+            record.projectName = project_name
+            record.plannedValue = planned
+            record.earnedValue = earned
+            record.save()
+
+        return record, created
+
+    def _save_nested_payload(self, request, instance=None):
+        """
+        Create/update SCL and/or CONTRACTOR records from nested request body.
+
+        Only sections explicitly included in the payload are updated.
+        Omitted sections are left unchanged in the database.
+        """
+        print("Incoming Payload:", request.data)
+
+        (
+            project_name,
+            month,
+            year,
+            scl_data,
+            contractor_data,
+            has_scl,
+            has_contractor,
+            errors,
+        ) = self._parse_nested_payload(request.data, instance=instance)
+        if errors:
+            return None, None, errors
+
+        print("Updating SCL:", scl_data if has_scl else "(skipped — not in payload)")
+        print(
+            "Updating Contractor:",
+            contractor_data if has_contractor else "(skipped — not in payload)",
+        )
+
+        created_flags = []
+
+        if has_scl:
+            if scl_data is None:
+                return None, None, {"scl": "scl must be an object when provided."}
+            existing_scl = self._get_existing_type_record(
+                project_name,
+                PlannedEarnedValue.VALUE_TYPE_SCL,
+                month,
+                year,
+            )
+            planned, earned = _extract_nested_type_values(scl_data, existing_scl)
+            _, created = self._upsert_type_record(
+                project_name,
+                PlannedEarnedValue.VALUE_TYPE_SCL,
+                month,
+                year,
+                planned,
+                earned,
+            )
+            created_flags.append(created)
+
+        if has_contractor:
+            if contractor_data is None:
+                return None, None, {
+                    "contractor": "contractor must be an object when provided."
+                }
+            existing_contractor = self._get_existing_type_record(
+                project_name,
+                PlannedEarnedValue.VALUE_TYPE_CONTRACTOR,
+                month,
+                year,
+            )
+            planned, earned = _extract_nested_type_values(
+                contractor_data, existing_contractor
+            )
+            _, created = self._upsert_type_record(
+                project_name,
+                PlannedEarnedValue.VALUE_TYPE_CONTRACTOR,
+                month,
+                year,
+                planned,
+                earned,
+            )
+            created_flags.append(created)
+
+        self._invalidate_list_cache()
+
+        response_data = _build_month_dashboard_response(project_name, month, year)
+        http_status = (
+            status.HTTP_201_CREATED
+            if created_flags and any(created_flags)
+            else status.HTTP_200_OK
+        )
+        message = (
+            "Planned vs Earned Value records saved successfully"
+            if created_flags and any(created_flags)
+            else "Planned vs Earned Value records updated successfully"
+        )
+        return response_data, http_status, message
+
+    def _upsert_lookup(self, payload: dict):
+        """Find existing record for upsert by project + type + month + year."""
+        project_name = str(
+            payload.get("projectName") or payload.get("project_name") or ""
+        ).strip()
+        value_type = str(payload.get("value_type") or PlannedEarnedValue.VALUE_TYPE_SCL).upper()
+        month = payload.get("month")
+        year = payload.get("year")
+
+        if not project_name or month is None or year is None:
+            return None
+
+        try:
+            return PlannedEarnedValue.objects.get(
+                projectName__iexact=project_name,
+                value_type=value_type,
+                month=int(month),
+                year=int(year),
+            )
+        except (PlannedEarnedValue.DoesNotExist, TypeError, ValueError):
+            return None
 
     @swagger_auto_schema(
         operation_summary="Create Planned vs Earned Value Record",
-        operation_description=(
-            "Create a new Planned vs Earned Value record for a project.\n\n"
-            "**Auto-calculated fields (do not send):**\n"
-            "- `variance` = earnedValue − plannedValue\n"
-            "- `variancePercentage` = (variance / plannedValue) × 100\n"
-            "- `performancePercentage` = (earnedValue / plannedValue) × 100\n\n"
-            "**earnedValue can exceed plannedValue** (project ahead of schedule).\n"
-            "Both values must be >= 0."
-        ),
         request_body=_PEV_POST_SCHEMA,
-        responses={
-            201: openapi.Response("Created", _PEV_RESPONSE_SCHEMA),
-            400: "Validation error",
-        },
+        responses={201: openapi.Response("Created", _PEV_RESPONSE_SCHEMA), 400: "Validation error"},
         tags=["Planned vs Earned Value"],
     )
     def create(self, request, *args, **kwargs):
         """
-        Create or update a Planned vs Earned Value record (upsert by projectName).
+        Create or update monthly record(s).
 
-        If a record already exists for the given projectName it is updated
-        in-place rather than returning a 500 uniqueness error.
-        Auto-calculates variance, variancePercentage, performancePercentage.
+        Nested payload (dashboard): project_name, month, year, scl, contractor
+        Flat payload (legacy): projectName, value_type, month, year, plannedValue, earnedValue
         """
-        project_name = str(request.data.get("projectName", "")).strip()
-
-        # Strip read-only / auto-calculated fields the frontend should not send
-        _READ_ONLY = {"variance", "variancePercentage", "performancePercentage", "schedulePerformanceIndex", "performanceStatus", "id", "created_at", "updated_at"}
-        payload = {k: v for k, v in request.data.items() if k not in _READ_ONLY}
-
-        # Upsert: if a record already exists for this project, update it.
-        existing = None
-        if project_name:
+        if _is_nested_payload(request.data):
             try:
-                existing = PlannedEarnedValue.objects.get(
-                    projectName__iexact=project_name
+                result, http_status, message = self._save_nested_payload(request)
+            except DjangoValidationError as exc:
+                return self._error("Validation failed", errors=exc.message_dict)
+            except Exception as exc:
+                logger.error(f"PlannedEarnedValue nested create error: {exc}")
+                return self._error(
+                    "Failed to save records",
+                    errors=str(exc),
+                    http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
-            except PlannedEarnedValue.DoesNotExist:
-                pass
+
+            if result is None:
+                return self._error("Validation failed", errors=message)
+
+            return self._success(message, result, http_status=http_status)
+
+        payload = self._clean_payload(request)
+        existing = self._upsert_lookup(payload)
 
         if existing is not None:
-            serializer = PlannedEarnedValueSerializer(
-                existing, data=payload, partial=False
-            )
+            serializer = PlannedEarnedValueSerializer(existing, data=payload)
         else:
             serializer = PlannedEarnedValueSerializer(data=payload)
 
         if not serializer.is_valid():
-            return self._error("Invalid data provided", errors=serializer.errors)
+            return self._error("Validation failed", errors=serializer.errors)
 
         try:
             instance = serializer.save()
@@ -308,59 +574,30 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
         message = (
             "Planned vs Earned Value record updated successfully"
             if existing
-            else "Planned vs Earned Value record created successfully"
+            else "Planned vs Earned Value record saved successfully"
         )
-
-        return self._success(
-            message,
-            PlannedEarnedValueSerializer(instance).data,
-            http_status=http_status,
-        )
-
-    # -------------------------------------------------------------------------
-    # LIST  GET /api/planned-earned-value/
-    # -------------------------------------------------------------------------
+        return self._success(message, PlannedEarnedValueSerializer(instance).data, http_status=http_status)
 
     @swagger_auto_schema(
         operation_summary="Get All Planned vs Earned Value Records",
-        operation_description=(
-            "Retrieve all records. "
-            "Supports optional ?project_name= filter and pagination."
-        ),
         manual_parameters=[
-            openapi.Parameter(
-                "project_name",
-                openapi.IN_QUERY,
-                description="Filter by project name (case-insensitive partial match)",
-                type=openapi.TYPE_STRING,
-                required=False,
-            ),
-            openapi.Parameter(
-                "page",
-                openapi.IN_QUERY,
-                description="Page number",
-                type=openapi.TYPE_INTEGER,
-                required=False,
-            ),
-            openapi.Parameter(
-                "page_size",
-                openapi.IN_QUERY,
-                description="Records per page (max 100)",
-                type=openapi.TYPE_INTEGER,
-                required=False,
-            ),
+            openapi.Parameter("project_name", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter("value_type", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False, enum=["SCL", "CONTRACTOR"]),
+            openapi.Parameter("month", openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=False),
+            openapi.Parameter("year", openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=False),
+            openapi.Parameter("page", openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=False),
+            openapi.Parameter("page_size", openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=False),
         ],
         responses={200: openapi.Response("OK", _PEV_RESPONSE_SCHEMA)},
         tags=["Planned vs Earned Value"],
     )
     def list(self, request, *args, **kwargs):
-        """
-        Return all Planned vs Earned Value records (paginated).
-        Results are cached for 5 minutes; cache is invalidated on any write.
-        """
-        project_filter = request.query_params.get("project_name")
+        has_filters = any(
+            request.query_params.get(k)
+            for k in ("project_name", "value_type", "month", "year")
+        )
         page_param = request.query_params.get("page", "1")
-        use_cache = not project_filter and page_param == "1"
+        use_cache = not has_filters and page_param == "1"
 
         if use_cache:
             cached = cache.get(_CACHE_KEY_LIST)
@@ -392,20 +629,12 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
             cache.set(_CACHE_KEY_LIST, payload, _CACHE_TIMEOUT)
         return Response(payload)
 
-    # -------------------------------------------------------------------------
-    # RETRIEVE  GET /api/planned-earned-value/{id}/
-    # -------------------------------------------------------------------------
-
     @swagger_auto_schema(
         operation_summary="Get Planned vs Earned Value Record by ID",
-        responses={
-            200: openapi.Response("OK", _PEV_RESPONSE_SCHEMA),
-            404: "Not found",
-        },
+        responses={200: openapi.Response("OK", _PEV_RESPONSE_SCHEMA), 404: "Not found"},
         tags=["Planned vs Earned Value"],
     )
     def retrieve(self, request, *args, **kwargs):
-        """Retrieve a single record by its primary key."""
         try:
             instance = PlannedEarnedValue.objects.get(pk=kwargs["pk"])
         except PlannedEarnedValue.DoesNotExist:
@@ -413,36 +642,18 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
                 "Planned vs Earned Value record not found",
                 http_status=status.HTTP_404_NOT_FOUND,
             )
-
         return self._success(
             "Planned vs Earned Value record retrieved successfully",
             PlannedEarnedValueSerializer(instance).data,
         )
 
-    # -------------------------------------------------------------------------
-    # UPDATE  PUT /api/planned-earned-value/{id}/
-    # -------------------------------------------------------------------------
-
     @swagger_auto_schema(
         operation_summary="Update Planned vs Earned Value Record",
-        operation_description=(
-            "Full or partial update of a record. "
-            "variance, variancePercentage, and performancePercentage "
-            "are recalculated automatically after every update."
-        ),
         request_body=_PEV_POST_SCHEMA,
-        responses={
-            200: openapi.Response("OK", _PEV_RESPONSE_SCHEMA),
-            400: "Validation error",
-            404: "Not found",
-        },
+        responses={200: openapi.Response("OK", _PEV_RESPONSE_SCHEMA), 400: "Validation error", 404: "Not found"},
         tags=["Planned vs Earned Value"],
     )
     def update(self, request, *args, **kwargs):
-        """
-        Full update (PUT) of a Planned vs Earned Value record.
-        All calculated fields are recomputed after update.
-        """
         partial = kwargs.pop("partial", False)
 
         try:
@@ -453,15 +664,31 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
-        _READ_ONLY = {"variance", "variancePercentage", "performancePercentage", "schedulePerformanceIndex", "performanceStatus", "id", "created_at", "updated_at"}
-        payload = {k: v for k, v in request.data.items() if k not in _READ_ONLY}
+        if _is_nested_payload(request.data):
+            try:
+                result, http_status, message = self._save_nested_payload(
+                    request, instance=instance
+                )
+            except DjangoValidationError as exc:
+                return self._error("Validation failed", errors=exc.message_dict)
+            except Exception as exc:
+                logger.error(f"PlannedEarnedValue nested update error: {exc}")
+                return self._error(
+                    "Failed to update records",
+                    errors=str(exc),
+                    http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
 
-        serializer = PlannedEarnedValueSerializer(
-            instance, data=payload, partial=partial
-        )
+            if result is None:
+                return self._error("Validation failed", errors=message)
+
+            return self._success(message, result, http_status=http_status)
+
+        payload = self._clean_payload(request)
+        serializer = PlannedEarnedValueSerializer(instance, data=payload, partial=partial)
 
         if not serializer.is_valid():
-            return self._error("Invalid data provided", errors=serializer.errors)
+            return self._error("Validation failed", errors=serializer.errors)
 
         try:
             updated = serializer.save()
@@ -476,31 +703,21 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
             )
 
         self._invalidate_list_cache()
-
         return self._success(
             "Planned vs Earned Value record updated successfully",
             PlannedEarnedValueSerializer(updated).data,
         )
 
     def partial_update(self, request, *args, **kwargs):
-        """PATCH — partial update, delegates to update() with partial=True."""
         kwargs["partial"] = True
         return self.update(request, *args, **kwargs)
 
-    # -------------------------------------------------------------------------
-    # DELETE  DELETE /api/planned-earned-value/{id}/
-    # -------------------------------------------------------------------------
-
     @swagger_auto_schema(
         operation_summary="Delete Planned vs Earned Value Record",
-        responses={
-            200: openapi.Response("OK"),
-            404: "Not found",
-        },
+        responses={200: openapi.Response("OK"), 404: "Not found"},
         tags=["Planned vs Earned Value"],
     )
     def destroy(self, request, *args, **kwargs):
-        """Delete a record by its primary key."""
         try:
             instance = PlannedEarnedValue.objects.get(pk=kwargs["pk"])
         except PlannedEarnedValue.DoesNotExist:
@@ -509,30 +726,26 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
-        project_name = instance.projectName
+        label = f"{instance.projectName} [{instance.value_type}] {instance.month:02d}/{instance.year}"
         instance.delete()
         self._invalidate_list_cache()
-
         return self._success(
-            f"Planned vs Earned Value record for '{project_name}' deleted successfully",
+            f"Planned vs Earned Value record for '{label}' deleted successfully",
             {},
         )
 
     # -------------------------------------------------------------------------
-    # CUSTOM ACTION  GET /api/planned-earned-value/project/{projectName}/
+    # LEGACY  GET /api/planned-earned-value/project/{projectName}/
+    # Returns the most recently updated SCL record for backward compatibility.
     # -------------------------------------------------------------------------
 
     @swagger_auto_schema(
-        operation_summary="Get Planned vs Earned Value Record by Project Name",
+        operation_summary="Get Planned vs Earned Value by Project Name (legacy)",
         operation_description=(
-            "Retrieve a record using the exact project name (case-insensitive). "
-            "Returns all KPI fields including SPI and performanceStatus — "
-            "ready for dashboard gauge meters and performance cards."
+            "Backward-compatible lookup. Returns the most recently updated SCL record "
+            "for the project. Use the month/year dashboard endpoint for SCL + Contractor together."
         ),
-        responses={
-            200: openapi.Response("OK", _PEV_RESPONSE_SCHEMA),
-            404: "Not found",
-        },
+        responses={200: openapi.Response("OK", _PEV_RESPONSE_SCHEMA), 404: "Not found"},
         tags=["Planned vs Earned Value"],
     )
     @action(
@@ -542,18 +755,26 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
         url_name="by-project-name",
     )
     def get_by_project_name(self, request, projectName: str = None):
-        """
-        Retrieve a Planned vs Earned Value record by exact project name.
-        Case-insensitive lookup. Ideal for dashboard KPI card and gauge integration.
-        """
         if not projectName or not projectName.strip():
             return self._error("projectName is required.")
 
-        try:
-            instance = PlannedEarnedValue.objects.get(
-                projectName__iexact=projectName.strip()
+        instance = (
+            PlannedEarnedValue.objects.filter(
+                projectName__iexact=projectName.strip(),
+                value_type=PlannedEarnedValue.VALUE_TYPE_SCL,
             )
-        except PlannedEarnedValue.DoesNotExist:
+            .order_by("-year", "-month", "-updated_at")
+            .first()
+        )
+
+        if instance is None:
+            instance = (
+                PlannedEarnedValue.objects.filter(projectName__iexact=projectName.strip())
+                .order_by("-year", "-month", "-updated_at")
+                .first()
+            )
+
+        if instance is None:
             return self._error(
                 f"No Planned vs Earned Value record found for project '{projectName}'",
                 http_status=status.HTTP_404_NOT_FOUND,
@@ -562,4 +783,96 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
         return self._success(
             "Planned vs Earned Value record retrieved successfully",
             PlannedEarnedValueSerializer(instance).data,
+        )
+
+    # -------------------------------------------------------------------------
+    # DASHBOARD  GET .../project/{projectName}/month/{month}/year/{year}/
+    # -------------------------------------------------------------------------
+
+    @swagger_auto_schema(
+        operation_summary="Get SCL + Contractor values for a project month",
+        responses={200: openapi.Response("OK"), 404: "Not found"},
+        tags=["Planned vs Earned Value"],
+    )
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path=r"project/(?P<projectName>[^/.]+)/month/(?P<month>\d+)/year/(?P<year>\d+)",
+        url_name="by-month-year",
+    )
+    def get_by_month_year(self, request, projectName=None, month=None, year=None):
+        try:
+            month_int = int(month)
+            year_int = int(year)
+        except (TypeError, ValueError):
+            return self._error("month and year must be valid integers.")
+
+        if not (1 <= month_int <= 12):
+            return self._error("month must be between 1 and 12.")
+        if not (2000 <= year_int <= 2100):
+            return self._error("year must be between 2000 and 2100.")
+
+        project_name = projectName.strip()
+        records = PlannedEarnedValue.objects.filter(
+            projectName__iexact=project_name,
+            month=month_int,
+            year=year_int,
+        )
+
+        if not records.exists():
+            return self._error(
+                f"No Planned vs Earned Value records found for '{project_name}' "
+                f"in {month_int:02d}/{year_int}.",
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return self._success(
+            f"Planned vs Earned Value for '{project_name}' ({month_int:02d}/{year_int}) retrieved successfully",
+            _build_month_dashboard_response(project_name, month_int, year_int),
+        )
+
+    # -------------------------------------------------------------------------
+    # YEARLY SUMMARY  GET .../project/{projectName}/year/{year}/summary/
+    # -------------------------------------------------------------------------
+
+    @swagger_auto_schema(
+        operation_summary="Yearly SCL + Contractor summary (SUM aggregation)",
+        responses={200: openapi.Response("OK"), 404: "Not found"},
+        tags=["Planned vs Earned Value"],
+    )
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path=r"project/(?P<projectName>[^/.]+)/year/(?P<year>\d+)/summary",
+        url_name="yearly-summary",
+    )
+    def yearly_summary(self, request, projectName=None, year=None):
+        try:
+            year_int = int(year)
+        except (TypeError, ValueError):
+            return self._error("year must be a valid integer.")
+
+        if not (2000 <= year_int <= 2100):
+            return self._error("year must be between 2000 and 2100.")
+
+        project_name = projectName.strip()
+        qs = PlannedEarnedValue.objects.filter(
+            projectName__iexact=project_name,
+            year=year_int,
+        )
+
+        if not qs.exists():
+            return self._error(
+                f"No Planned vs Earned Value records found for '{project_name}' in {year_int}.",
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return self._success(
+            f"Yearly Planned vs Earned Value summary for '{project_name}' ({year_int}) retrieved successfully",
+            {
+                "project_name": project_name,
+                "year": year_int,
+                "scl": _aggregate_by_type(qs, PlannedEarnedValue.VALUE_TYPE_SCL),
+                "contractor": _aggregate_by_type(qs, PlannedEarnedValue.VALUE_TYPE_CONTRACTOR),
+            },
         )

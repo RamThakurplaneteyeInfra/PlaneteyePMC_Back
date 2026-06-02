@@ -21,7 +21,8 @@ RUN apt-get update \
 # Install Python dependencies
 COPY requirements.txt /app/
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+    && pip install --no-cache-dir -r requirements.txt \
+    && python -c "import cloudinary; import cloudinary.uploader; print('cloudinary', cloudinary.VERSION)"
 
 # Copy project
 COPY . /app/

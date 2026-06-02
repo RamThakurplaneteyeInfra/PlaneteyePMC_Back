@@ -1,49 +1,44 @@
 # Health & Safety URLs
 #
-# This file is included TWICE in backend/urls.py under different prefixes:
+# Mounted at /api/health-safety/ in backend/urls.py:
 #
-#   path('api/health-safety/', include('health_safety.urls'))
-#       → /api/health-safety/status/
-#       → /api/health-safety/example/
-#       → /api/health-safety/reports/
+#   POST   /api/health-safety/                                          — create monthly record
+#   GET    /api/health-safety/                                          — list (filter: project_name, year, month)
+#   GET    /api/health-safety/{id}/                                       — retrieve by ID
+#   PUT    /api/health-safety/{id}/                                       — update
+#   DELETE /api/health-safety/{id}/                                       — delete
+#   GET    /api/health-safety/project/{projectName}/month/{m}/year/{y}/ — single month
+#   GET    /api/health-safety/project/{projectName}/year/{year}/summary/ — yearly SUM aggregation
+#   GET    /api/health-safety/project/{projectName}/dashboard/          — current month + YTD
 #
-#   path('api/', include('health_safety.hse_urls'))
-#       → /api/hse/
-#       → /api/hse/{id}/
-#       → /api/hse/project/{projectName}/
+#   POST   /api/health-safety/status/                                   — analytics calculator
+#   GET    /api/health-safety/example/                                  — example payload
+#   CRUD   /api/health-safety/reports/                                  — legacy date-based reports
 
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
 
-# ─── Existing analytics router ───────────────────────────────────────────────
+# ─── Monthly Health & Safety records (primary API) ───────────────────────────
+records_router = DefaultRouter()
+records_router.register(
+    r"", views.HealthSafetyRecordViewSet, basename="health-safety-record"
+)
+
+# ─── Legacy analytics router ───────────────────────────────────────────────────
 analytics_router = DefaultRouter()
 analytics_router.register(
     r"reports", views.HealthSafetyReportViewSet, basename="health-safety-report"
 )
 
-# ─── New HSE record CRUD router ──────────────────────────────────────────────
-# Generates:
-#   POST   /api/hse/
-#   GET    /api/hse/
-#   GET    /api/hse/{id}/
-#   PUT    /api/hse/{id}/
-#   PATCH  /api/hse/{id}/
-#   DELETE /api/hse/{id}/
-#   GET    /api/hse/project/{projectName}/
-hse_router = DefaultRouter()
-hse_router.register(r"hse", views.HSERecordViewSet, basename="hse-record")
-
-# ─── Analytics URL patterns (mounted at /api/health-safety/) ─────────────────
 urlpatterns = [
-    # POST /api/health-safety/status/
     path("status/", views.health_safety_status, name="health-safety-status"),
-    # GET  /api/health-safety/example/
     path("example/", views.health_safety_example, name="health-safety-example"),
-    # CRUD /api/health-safety/reports/
-    path("", include(analytics_router.urls)),
+    path("reports/", include(analytics_router.urls)),
+    path("", include(records_router.urls)),
 ]
 
-# ─── HSE record URL patterns (mounted at /api/) ───────────────────────────────
-# Imported by backend/urls.py as: path('api/', include('health_safety.hse_urls'))
+# ─── Legacy cumulative HSE records (mounted at /api/ via hse_urls) ─────────────
+hse_router = DefaultRouter()
+hse_router.register(r"hse", views.HSERecordViewSet, basename="hse-record")
 hse_urlpatterns = hse_router.urls

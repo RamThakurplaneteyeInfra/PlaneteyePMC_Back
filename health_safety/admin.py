@@ -39,7 +39,7 @@ class HealthSafetyReportAdmin(admin.ModelAdmin):
 # HSE RECORD ADMIN
 # =============================================================================
 
-from .models import HSERecord
+from .models import HSERecord, HealthSafetyRecord
 
 
 @admin.register(HSERecord)
@@ -83,5 +83,41 @@ class HSERecordAdmin(admin.ModelAdmin):
                 "fields": ("created_at", "updated_at"),
                 "classes": ("collapse",),
             },
+        ),
+    )
+
+
+@admin.register(HealthSafetyRecord)
+class HealthSafetyRecordAdmin(admin.ModelAdmin):
+    """Admin interface for monthly Health & Safety records."""
+
+    list_display = [
+        "project_name",
+        "month",
+        "year",
+        "fatalities",
+        "significant",
+        "major",
+        "minor",
+        "near_miss",
+        "total_manhours",
+        "loss_of_manhours",
+        "created_at",
+    ]
+    list_filter = ["year", "month", "project_name"]
+    search_fields = ["project_name"]
+    ordering = ["project_name", "year", "month"]
+    readonly_fields = ["created_at", "updated_at"]
+
+    fieldsets = (
+        ("Project & Period", {"fields": ("project_name", "month", "year")}),
+        (
+            "Incident Counts",
+            {"fields": ("fatalities", "significant", "major", "minor", "near_miss")},
+        ),
+        ("Manhours", {"fields": ("total_manhours", "loss_of_manhours")}),
+        (
+            "Timestamps",
+            {"fields": ("created_at", "updated_at"), "classes": ("collapse",)},
         ),
     )

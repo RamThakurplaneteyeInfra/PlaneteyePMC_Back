@@ -1,5 +1,5 @@
 """
-HSE Record URL configuration.
+Legacy HSE Record URL configuration.
 
 Mounted at /api/ in backend/urls.py:
     path('api/', include('health_safety.hse_urls'))

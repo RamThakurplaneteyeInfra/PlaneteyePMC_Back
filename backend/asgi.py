@@ -13,6 +13,7 @@ from django.core.asgi import get_asgi_application
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.auth import AuthMiddlewareStack
 
+# Docker/Render set DJANGO_SETTINGS_MODULE=backend.settings_prod before start.
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'backend.settings')
 
 # Import routing after Django is set up

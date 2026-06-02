@@ -1,28 +1,9 @@
 """
 Project Quality Status Model.
 
-Tracks quality testing KPIs per project.
-Automatically computes:
-  - variance              = totalTestsConducted - totalTestsPassed
-  - performancePercentage = (totalTestsPassed / totalTestsConducted) * 100
-
-Key design decisions:
-  - totalTestsPassed cannot exceed totalTestsConducted.
-  - Both values must be non-negative integers.
-  - Division-by-zero is handled: performancePercentage defaults to 0.0
-    when totalTestsConducted = 0.
-  - Percentages are rounded to 2 decimal places.
-  - One record per project (unique on projectName).
-
-Designed for PMC dashboard KPI cards, quality performance gauges,
-and project health monitoring.
-
-Scalable for future additions:
-  - Category-wise tests (structural, electrical, civil …)
-  - Monthly quality tracking
-  - Failed test history
-  - QA/QC reports and compliance analytics
-  - Quality trends and forecasting
+Monthly quality testing KPIs per project.
+Calculated metrics (shortfall, quality_performance, pass_rate, fail_rate)
+are computed in the serializer — never stored in the database.
 """
 
 from django.core.exceptions import ValidationError
@@ -32,55 +13,44 @@ from django.utils import timezone
 
 class ProjectQualityStatus(models.Model):
     """
-    One record per project capturing quality testing KPIs.
-
-    Calculated fields (variance, performancePercentage) are stored in the DB
-    so dashboard queries never need to compute them on the fly.
+    One monthly quality record per (projectName, month, year).
     """
 
     # -------------------------------------------------------------------------
-    # Core identifier
+    # Core identifiers
     # -------------------------------------------------------------------------
     projectName = models.CharField(
         max_length=255,
-        unique=True,
         db_index=True,
-        help_text="Unique project name for this quality status record",
+        help_text="Project name for this quality status record",
+    )
+    month = models.PositiveSmallIntegerField(
+        db_index=True,
+        help_text="Month number (1–12)",
+    )
+    year = models.PositiveSmallIntegerField(
+        db_index=True,
+        help_text="Year (e.g. 2026)",
     )
 
     # -------------------------------------------------------------------------
     # Input fields
     # -------------------------------------------------------------------------
-    totalTestsConducted = models.PositiveIntegerField(
+    tests_required = models.PositiveIntegerField(
         default=0,
-        help_text="Total number of quality tests conducted",
+        help_text="Number of quality tests required for the month",
     )
-    totalTestsPassed = models.PositiveIntegerField(
+    tests_conducted = models.PositiveIntegerField(
         default=0,
-        help_text=(
-            "Total number of quality tests passed "
-            "(cannot exceed totalTestsConducted)"
-        ),
+        help_text="Number of quality tests conducted",
     )
-
-    # -------------------------------------------------------------------------
-    # Auto-calculated fields (read-only; set in save())
-    # -------------------------------------------------------------------------
-    variance = models.IntegerField(
+    tests_passed = models.PositiveIntegerField(
         default=0,
-        editable=False,
-        help_text=(
-            "Auto-calculated: totalTestsConducted - totalTestsPassed. "
-            "Represents the number of failed / pending tests."
-        ),
+        help_text="Number of tests passed",
     )
-    performancePercentage = models.FloatField(
-        default=0.0,
-        editable=False,
-        help_text=(
-            "Auto-calculated: (totalTestsPassed / totalTestsConducted) * 100. "
-            "0.0 when totalTestsConducted = 0."
-        ),
+    tests_failed = models.PositiveIntegerField(
+        default=0,
+        help_text="Number of tests failed",
     )
 
     # -------------------------------------------------------------------------
@@ -102,102 +72,58 @@ class ProjectQualityStatus(models.Model):
     # =========================================================================
 
     def clean(self):
-        """
-        Cross-field validation.
-        totalTestsPassed must not exceed totalTestsConducted.
-        """
-        conducted = self.totalTestsConducted
-        passed = self.totalTestsPassed
+        errors = {}
 
-        if conducted is not None and passed is not None:
-            if passed > conducted:
-                raise ValidationError(
-                    {
-                        "totalTestsPassed": (
-                            "totalTestsPassed cannot be greater than "
-                            "totalTestsConducted. "
-                            f"Got totalTestsPassed={passed}, "
-                            f"totalTestsConducted={conducted}."
-                        )
-                    }
-                )
+        if self.month is not None and not (1 <= self.month <= 12):
+            errors["month"] = "month must be between 1 and 12."
 
-    # =========================================================================
-    # Auto-calculation on save
-    # =========================================================================
+        if self.year is not None and not (2000 <= self.year <= 2100):
+            errors["year"] = "year must be between 2000 and 2100."
+
+        for field in (
+            "tests_required",
+            "tests_conducted",
+            "tests_passed",
+            "tests_failed",
+        ):
+            value = getattr(self, field)
+            if value is not None and value < 0:
+                errors[field] = f"{field} must be >= 0."
+
+        conducted = self.tests_conducted or 0
+        passed = self.tests_passed or 0
+        failed = self.tests_failed or 0
+
+        if passed + failed > conducted:
+            errors["tests_passed"] = (
+                f"tests_passed ({passed}) + tests_failed ({failed}) cannot exceed "
+                f"tests_conducted ({conducted})."
+            )
+
+        if errors:
+            raise ValidationError(errors)
 
     def save(self, *args, **kwargs):
-        """
-        Override save to:
-        1. Normalize projectName (strip whitespace).
-        2. Auto-calculate variance and performancePercentage.
-        3. Run full_clean() to enforce cross-field validation.
-        """
-        # 1. Normalize project name
         if self.projectName:
             self.projectName = self.projectName.strip()
-
-        conducted = self.totalTestsConducted or 0
-        passed = self.totalTestsPassed or 0
-
-        # 2. Auto-calculate variance (failed / pending tests)
-        self.variance = conducted - passed
-
-        # 3. Auto-calculate performance percentage (guard division by zero)
-        if conducted > 0:
-            self.performancePercentage = round((passed / conducted) * 100, 2)
-        else:
-            self.performancePercentage = 0.0
-
+        self.full_clean()
         super().save(*args, **kwargs)
-
-    # =========================================================================
-    # Computed properties (Python-only, not stored)
-    # =========================================================================
-
-    @property
-    def qualityStatus(self) -> str:
-        """
-        Human-readable quality status for dashboard badges.
-        Based on performancePercentage:
-          >= 95  → 'excellent'
-          >= 80  → 'good'
-          >= 60  → 'average'
-          < 60   → 'poor'
-        """
-        pct = self.performancePercentage
-        if pct >= 95:
-            return "excellent"
-        elif pct >= 80:
-            return "good"
-        elif pct >= 60:
-            return "average"
-        else:
-            return "poor"
-
-    @property
-    def failedTests(self) -> int:
-        """Alias for variance — number of tests that did not pass."""
-        return self.variance
-
-    # =========================================================================
-    # Meta & helpers
-    # =========================================================================
 
     def __str__(self) -> str:
         return (
-            f"{self.projectName} — "
-            f"{self.totalTestsPassed}/{self.totalTestsConducted} passed "
-            f"({self.performancePercentage}%)"
+            f"{self.projectName} ({self.month:02d}/{self.year}) — "
+            f"{self.tests_passed}/{self.tests_conducted} passed"
         )
 
     class Meta:
-        ordering = ["projectName"]
+        ordering = ["projectName", "year", "month"]
         verbose_name = "Project Quality Status"
         verbose_name_plural = "Project Quality Status Records"
+        unique_together = [("projectName", "month", "year")]
         indexes = [
             models.Index(
-                fields=["projectName"],
-                name="pqs_project_name_idx",
+                fields=["projectName", "year", "month"],
+                name="pqs_proj_year_month_idx",
             ),
+            models.Index(fields=["year", "month"], name="pqs_year_month_idx"),
         ]

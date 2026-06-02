@@ -4,23 +4,33 @@ Django admin registration for the Drawings app.
 
 from django.contrib import admin
 
-from .models.drawing import Drawing
+from .models.drawing import DrawingSummary
 
 
-@admin.register(Drawing)
-class DrawingAdmin(admin.ModelAdmin):
-    """Admin view for Drawing records."""
+@admin.register(DrawingSummary)
+class DrawingSummaryAdmin(admin.ModelAdmin):
+    """Admin view for monthly Drawing Summary records."""
 
     list_display = [
-        "projectName",
-        "totalSubmitted",
-        "totalApproved",
-        "variance",
-        "approvalPercentage",
+        "project",
+        "month",
+        "year",
+        "submitted_drawings",
+        "approved_drawings",
         "created_at",
         "updated_at",
     ]
-    list_filter = ["created_at"]
-    search_fields = ["projectName"]
-    readonly_fields = ["variance", "approvalPercentage", "created_at", "updated_at"]
-    ordering = ["projectName"]
+    list_filter = ["year", "month", "created_at"]
+    search_fields = ["project__name"]
+    readonly_fields = ["created_at", "updated_at"]
+    ordering = ["project__name", "year", "month"]
+    autocomplete_fields = ["project"]
+
+    fieldsets = (
+        ("Project & Period", {"fields": ("project", "month", "year")}),
+        ("Counts", {"fields": ("submitted_drawings", "approved_drawings")}),
+        (
+            "Timestamps",
+            {"fields": ("created_at", "updated_at"), "classes": ("collapse",)},
+        ),
+    )

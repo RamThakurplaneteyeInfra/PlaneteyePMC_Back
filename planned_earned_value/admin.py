@@ -13,6 +13,9 @@ class PlannedEarnedValueAdmin(admin.ModelAdmin):
 
     list_display = [
         "projectName",
+        "value_type",
+        "month",
+        "year",
         "plannedValue",
         "earnedValue",
         "variance",
@@ -21,7 +24,7 @@ class PlannedEarnedValueAdmin(admin.ModelAdmin):
         "created_at",
         "updated_at",
     ]
-    list_filter = ["created_at"]
+    list_filter = ["value_type", "year", "month", "created_at"]
     search_fields = ["projectName"]
     readonly_fields = [
         "variance",
@@ -30,38 +33,17 @@ class PlannedEarnedValueAdmin(admin.ModelAdmin):
         "created_at",
         "updated_at",
     ]
-    ordering = ["projectName"]
+    ordering = ["projectName", "year", "month", "value_type"]
 
     fieldsets = (
-        ("Project", {"fields": ("projectName",)}),
-        (
-            "Input Values",
-            {
-                "fields": ("plannedValue", "earnedValue"),
-                "description": (
-                    "Enter Planned Value (PV) and Earned Value (EV). "
-                    "Calculated fields update automatically on save."
-                ),
-            },
-        ),
+        ("Project & Period", {"fields": ("projectName", "value_type", "month", "year")}),
+        ("Input Values", {"fields": ("plannedValue", "earnedValue")}),
         (
             "Auto-Calculated KPIs",
-            {
-                "fields": (
-                    "variance",
-                    "variancePercentage",
-                    "performancePercentage",
-                ),
-                "description": (
-                    "These fields are calculated automatically and cannot be edited directly."
-                ),
-            },
+            {"fields": ("variance", "variancePercentage", "performancePercentage")},
         ),
         (
             "Timestamps",
-            {
-                "fields": ("created_at", "updated_at"),
-                "classes": ("collapse",),
-            },
+            {"fields": ("created_at", "updated_at"), "classes": ("collapse",)},
         ),
     )
