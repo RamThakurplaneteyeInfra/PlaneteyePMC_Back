@@ -136,7 +136,6 @@ class DrawingViewSet(viewsets.ModelViewSet):
 
     queryset = DrawingSummary.objects.select_related("project").all()
     serializer_class = DrawingSerializer
-    permission_classes = [AllowAny]
     pagination_class = DrawingPagination
 
     def get_queryset(self):

@@ -5,7 +5,6 @@ Manpower Management System - DRF ViewSet
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 from rest_framework import viewsets
-from rest_framework.permissions import AllowAny
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django_filters.rest_framework import DjangoFilterBackend
 
@@ -31,7 +30,6 @@ class ManpowerRecordViewSet(viewsets.ModelViewSet):
 
     queryset = ManpowerRecord.objects.all()
     serializer_class = ManpowerRecordSerializer
-    permission_classes = [AllowAny]
 
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_class = ManpowerRecordFilter

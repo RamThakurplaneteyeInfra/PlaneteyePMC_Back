@@ -10,7 +10,6 @@ from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from .models import CashFlow
@@ -84,7 +83,6 @@ _CASHFLOW_POST_SCHEMA = openapi.Schema(
 class CashFlowViewSet(viewsets.ModelViewSet):
     queryset = CashFlow.objects.all()
     serializer_class = CashFlowSerializer
-    permission_classes = [AllowAny]
     pagination_class = CashFlowPagination
     http_method_names = ["get", "post", "head", "options"]
 

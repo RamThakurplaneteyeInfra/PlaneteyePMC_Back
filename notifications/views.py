@@ -7,7 +7,6 @@ from datetime import datetime
 from django.core.mail import send_mail
 from django.conf import settings
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework import status
 from services.notifications import notify_dpr_submitted, notify_dpr_approved, notify_dpr_rejected, notify_project_created, notify_project_assigned, notify_site_engineer_assigned
@@ -73,7 +72,6 @@ def send_test_email(request):
 
 
 @api_view(['POST'])
-@permission_classes([AllowAny])
 def test_sync_email(request):
     """
     Test email sending synchronously (without Celery)
@@ -105,7 +103,6 @@ def test_sync_email(request):
 
 
 @api_view(['POST'])
-@permission_classes([AllowAny])
 def notify_project_created_endpoint(request):
     """
     Send email notification when a project is created.
@@ -188,7 +185,6 @@ def notify_project_created_endpoint(request):
 
 
 @api_view(['POST'])
-@permission_classes([AllowAny])
 def notify_dpr_submitted_endpoint(request):
     """
     Send email notification when a DPR is submitted.
@@ -230,7 +226,6 @@ def notify_dpr_submitted_endpoint(request):
 
 
 @api_view(['POST'])
-@permission_classes([AllowAny])
 def notify_dpr_approved_endpoint(request):
     """
     Send email notification when a DPR is approved.
@@ -272,7 +267,6 @@ def notify_dpr_approved_endpoint(request):
 
 
 @api_view(['POST'])
-@permission_classes([AllowAny])
 def notify_dpr_rejected_endpoint(request):
     """
     Send email notification when a DPR is rejected.
@@ -314,7 +308,6 @@ def notify_dpr_rejected_endpoint(request):
 
 
 @api_view(['POST'])
-@permission_classes([AllowAny])
 def notify_team_lead_assigned_endpoint(request):
     """
     Send email notification when a Team Leader is assigned to a project.
@@ -379,7 +372,6 @@ def notify_team_lead_assigned_endpoint(request):
 
 
 @api_view(['POST'])
-@permission_classes([AllowAny])
 def notify_site_engineer_assigned_endpoint(request):
     """
     Send email notification when a Site Engineer is assigned to a project.
@@ -445,7 +437,6 @@ def notify_site_engineer_assigned_endpoint(request):
 
 
 @api_view(['POST'])
-@permission_classes([AllowAny])
 def chrome_notification_endpoint(request):
     """
     Unified Chrome notification endpoint for all notification types.

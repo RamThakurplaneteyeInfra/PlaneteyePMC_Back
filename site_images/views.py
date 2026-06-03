@@ -94,7 +94,6 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
 
     queryset = SiteProgressImage.objects.all()
     serializer_class = SiteProgressImageSerializer
-    permission_classes = [AllowAny]
     pagination_class = SiteImagePagination
     parser_classes = [MultiPartParser, FormParser]
     http_method_names = ["get", "post", "delete", "head", "options"]

@@ -98,7 +98,6 @@ logger = logging.getLogger(__name__)
     }
 )
 @api_view(['POST'])
-@permission_classes([AllowAny])
 def health_safety_status(request):
     """
     POST /api/health-safety/status/
@@ -151,7 +150,6 @@ def health_safety_status(request):
     }
 )
 @api_view(['GET'])
-@permission_classes([AllowAny])
 def health_safety_example(request):
     """
     GET /api/health-safety/example/
@@ -236,7 +234,6 @@ class HealthSafetyReportViewSet(viewsets.ModelViewSet):
     """
     queryset = HealthSafetyReport.objects.all()
     serializer_class = HealthSafetyReportSerializer
-    permission_classes = [AllowAny]  # No authentication for testing
     pagination_class = PageNumberPagination
     
     def get_queryset(self):
@@ -451,7 +448,6 @@ class HSERecordViewSet(viewsets.ModelViewSet):
 
     queryset = HSERecord.objects.all()
     serializer_class = HSERecordSerializer
-    permission_classes = [AllowAny]
     pagination_class = HSERecordPagination
 
     # -------------------------------------------------------------------------
@@ -900,7 +896,6 @@ class HealthSafetyRecordViewSet(viewsets.ModelViewSet):
 
     queryset = HealthSafetyRecord.objects.all()
     serializer_class = HealthSafetyRecordSerializer
-    permission_classes = [AllowAny]
     pagination_class = HealthSafetyRecordPagination
 
     # -------------------------------------------------------------------------

@@ -29,8 +29,6 @@ class ProjectViewSet(viewsets.ModelViewSet):
     """
     queryset = Project.objects.all()
     serializer_class = ProjectSerializer
-    permission_classes = []
-
     def get_queryset(self):
         """
         Get filtered queryset based on user role and permissions.
@@ -777,8 +775,6 @@ class ProjectViewSet(viewsets.ModelViewSet):
 class SiteViewSet(viewsets.ModelViewSet):
     queryset = Site.objects.all()
     serializer_class = SiteSerializer
-    permission_classes = []
-
     def get_queryset(self):
         # Filter sites based on the project ID if provided in the URL
         project_id = self.request.query_params.get('project_id')

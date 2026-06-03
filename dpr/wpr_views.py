@@ -2,7 +2,6 @@ from datetime import date, datetime
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.permissions import AllowAny
 from django.utils.dateparse import parse_date
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
@@ -28,8 +27,6 @@ class WeeklyProgressReportAPIView(APIView):
     - year: Year (e.g., 2024) - Optional, if not provided returns latest available
     - week: Week number (1-5) - Optional, specific week only
     """
-    
-    permission_classes = [AllowAny]  # No authentication required for testing
     
     @swagger_auto_schema(
         operation_description="Get Weekly Progress Report aggregated from Daily Progress Reports. If month/year not provided, returns latest available data for the project.",

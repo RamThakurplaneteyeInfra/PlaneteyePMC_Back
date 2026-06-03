@@ -36,7 +36,6 @@ class MachineryMasterViewSet(viewsets.ModelViewSet):
 
     queryset = MachineryMaster.objects.all()
     serializer_class = MachineryMasterSerializer
-    permission_classes = [AllowAny]
     filter_backends = [SearchFilter, OrderingFilter, DjangoFilterBackend]
     search_fields = ["name", "category"]
     ordering_fields = ["name", "category", "created_at"]
@@ -89,7 +88,6 @@ class PlantMachineryReportViewSet(viewsets.ModelViewSet):
         "machinery_items__machinery_master"
     ).all()
     serializer_class = PlantMachineryReportSerializer
-    permission_classes = [AllowAny]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_class = PlantMachineryReportFilter
     search_fields = ["project_name", "created_by"]
@@ -204,7 +202,6 @@ class MachineryItemViewSet(viewsets.ModelViewSet):
         "report", "machinery_master"
     ).all()
     serializer_class = MachineryItemSerializer
-    permission_classes = [AllowAny]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_class = MachineryItemFilter
     search_fields = ["machinery_master__name", "remark", "report__project_name"]

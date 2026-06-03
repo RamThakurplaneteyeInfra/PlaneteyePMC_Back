@@ -247,7 +247,6 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
 
     queryset = PlannedEarnedValue.objects.all()
     serializer_class = PlannedEarnedValueSerializer
-    permission_classes = [AllowAny]
     pagination_class = PlannedEarnedValuePagination
 
     def get_queryset(self):

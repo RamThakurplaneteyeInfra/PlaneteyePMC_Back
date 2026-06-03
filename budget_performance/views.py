@@ -12,7 +12,6 @@ from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status, viewsets
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from .models import BudgetCostPerformance
@@ -69,7 +68,6 @@ class BudgetCostPerformanceViewSet(viewsets.ModelViewSet):
 
     queryset = BudgetCostPerformance.objects.all()
     serializer_class = BudgetCostPerformanceSerializer
-    permission_classes = [AllowAny]
     pagination_class = BudgetPerformancePagination
     http_method_names = ["get", "post", "head", "options"]
 

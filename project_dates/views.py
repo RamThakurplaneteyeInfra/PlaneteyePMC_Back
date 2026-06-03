@@ -121,7 +121,6 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
 
     queryset = ProjectDates.objects.select_related("project").all()
     serializer_class = ProjectDatesSerializer
-    permission_classes = [AllowAny]
     pagination_class = ProjectDatesPagination
 
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]

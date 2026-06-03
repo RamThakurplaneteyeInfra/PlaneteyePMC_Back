@@ -260,7 +260,6 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
 
     queryset = InvoicingInformation.objects.all()
     serializer_class = InvoicingInformationSerializer
-    permission_classes = [AllowAny]
     pagination_class = InvoicingPagination
 
     # -------------------------------------------------------------------------

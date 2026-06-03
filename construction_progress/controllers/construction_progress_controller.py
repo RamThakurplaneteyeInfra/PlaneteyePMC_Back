@@ -42,7 +42,6 @@ from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from ..models.construction_progress import ConstructionProgress
@@ -193,7 +192,6 @@ class ConstructionProgressViewSet(viewsets.ModelViewSet):
 
     queryset = ConstructionProgress.objects.all()
     serializer_class = ConstructionProgressSerializer
-    permission_classes = [AllowAny]
     pagination_class = ConstructionProgressPagination
 
     # -------------------------------------------------------------------------

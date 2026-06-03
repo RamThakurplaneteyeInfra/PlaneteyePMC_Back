@@ -130,7 +130,6 @@ class ProjectQualityStatusViewSet(viewsets.ModelViewSet):
 
     queryset = ProjectQualityStatus.objects.all()
     serializer_class = ProjectQualityStatusSerializer
-    permission_classes = [AllowAny]
     pagination_class = QualityStatusPagination
 
     def get_queryset(self):

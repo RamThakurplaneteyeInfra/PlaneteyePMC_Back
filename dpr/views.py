@@ -1,7 +1,6 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import AllowAny
 from rest_framework.pagination import PageNumberPagination
 from django.core.cache import cache
 from django.core.cache.backends.locmem import LocMemCache
@@ -52,7 +51,6 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
     """
     queryset = DailyProgressReport.objects.all()
     serializer_class = DailyProgressReportSerializer
-    permission_classes = [AllowAny]  # No authentication required for testing
     pagination_class = PageNumberPagination
 
     @swagger_auto_schema(

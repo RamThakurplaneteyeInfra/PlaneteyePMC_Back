@@ -9,6 +9,8 @@ from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from core.test_auth import authenticate_client
+
 from .controllers.correspondence_metrics import (
     compute_delivery_efficiency,
     metrics_from_counts,
@@ -156,6 +158,7 @@ class CorrespondenceDocumentAPITest(APITestCase):
         CorrespondenceDocument.objects.filter(
             project_name__iexact="Thane Project"
         ).delete()
+        authenticate_client(self.client)
 
     def _payload(self, correspondence_type="CLIENT", delivery_date="2026-06-05"):
         data = {

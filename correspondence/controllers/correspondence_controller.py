@@ -150,7 +150,6 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
 
     queryset = CorrespondenceDocument.objects.all()
     serializer_class = CorrespondenceDocumentSerializer
-    permission_classes = [AllowAny]
     pagination_class = CorrespondencePagination
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 

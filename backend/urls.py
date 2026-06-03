@@ -8,6 +8,8 @@ from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
 from rest_framework import permissions
 
+from accounts.auth_views import CustomTokenObtainPairView, TokenRefreshViewAllowAny
+
 # Health check endpoint
 def health_check(request):
     return JsonResponse({'status': 'healthy', 'service': 'PMC Backend'})
@@ -17,7 +19,10 @@ schema_view = get_schema_view(
    openapi.Info(
       title="DPR API Documentation",
       default_version='v1',
-      description="PMC API: DPR, Contracts, Cash flow, **Cost performance (EVM)**, Manpower, Equipment, Budget EVM. Swagger: **Cost performance**. All endpoints available without auth for testing.",
+      description=(
+          "PMC API. Login via POST /api/token/ then send "
+          "Authorization: Bearer <access_token> on protected routes."
+      ),
       terms_of_service="https://www.google.com/policies/terms/",
       contact=openapi.Contact(email="contact@example.com"),
       license=openapi.License(name="BSD License"),
@@ -59,7 +64,12 @@ urlpatterns = [
     re_path(r'^redoc/$', schema_view.with_ui('redoc', cache_timeout=0), name='schema-redoc'),
     
 
-    # User Profile API
+    # JWT login (frontend uses /api/token/)
+    path('api/token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path('api/token/refresh/', TokenRefreshViewAllowAny.as_view(), name='token_refresh'),
+    # JWT auth aliases
+    path('api/auth/', include('accounts.auth_urls')),
+    # User profile (legacy path — JWT required)
     path('api/accounts/', include('accounts.urls')),
     # Projects and Sites API
     path('api/projects-data/', include('projects.urls')),

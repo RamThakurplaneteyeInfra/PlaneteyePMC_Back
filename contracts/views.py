@@ -7,7 +7,6 @@ from django.views.decorators.cache import cache_page
 from django.db.models import Sum
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from drf_yasg.utils import swagger_auto_schema
@@ -84,7 +83,6 @@ class ContractViewSet(viewsets.ModelViewSet):
     queryset = Contract.objects.all()
     serializer_class = ContractSerializer
     # Using role from request (temporary). Do not require auth for now.
-    permission_classes = [AllowAny]
 
     def initial(self, request, *args, **kwargs):
         """

@@ -8,8 +8,6 @@ from .serializers import TaskSerializer, DailyProgressReportSerializer
 class TaskViewSet(viewsets.ModelViewSet):
     queryset = Task.objects.all()
     serializer_class = TaskSerializer
-    permission_classes = []
-
     def get_queryset(self):
         # Filter tasks by site if site_id is provided
         site_id = self.request.query_params.get('site_id')
@@ -36,8 +34,6 @@ class TaskViewSet(viewsets.ModelViewSet):
 class DailyProgressReportViewSet(viewsets.ModelViewSet):
     queryset = DailyProgressReport.objects.all()
     serializer_class = DailyProgressReportSerializer
-    permission_classes = []
-
     def get_queryset(self):
         """
         Role-based filtering for DPRs:

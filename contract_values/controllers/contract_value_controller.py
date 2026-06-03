@@ -264,7 +264,6 @@ class ContractValueViewSet(viewsets.ModelViewSet):
 
     queryset = ContractValue.objects.all()
     serializer_class = ContractValueSerializer
-    permission_classes = [AllowAny]
     pagination_class = ContractValuePagination
 
     # -------------------------------------------------------------------------

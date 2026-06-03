@@ -1,8 +1,8 @@
-from datetime import date, timedelta
+from datetime import date
+
 from django.utils.dateparse import parse_date
 from rest_framework import status, viewsets
-from rest_framework.decorators import action
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from drf_yasg.utils import swagger_auto_schema
@@ -11,15 +11,24 @@ from drf_yasg import openapi
 from .models import ProjectProgressStatus
 from .serializers import ProjectProgressStatusSerializer
 
+# Roles allowed to view/edit physical (S-curve) progress
+ALLOWED_PROGRESS_ROLES = {
+    "Billing Site Engineer",
+    "PMC Head",
+    "Team Leader",
+    "Coordinator",
+    "CEO",
+}
+
 
 def _get_role_from_request(request) -> str | None:
     """
-    Simple role extraction (temporary).
-    Requirement says: use request.data['role'] for now.
+    Resolve the caller's role for permission checks.
 
-    We also support:
-    - query param: ?role=Billing Site Engineer (helps for GET)
-    - header: X-Role: Billing Site Engineer
+    Priority:
+    1. Explicit role in body (POST/PUT/PATCH)
+    2. Query param ?role= or header X-Role (legacy)
+    3. Authenticated user's primary role from profile / Django groups (JWT)
     """
     role = None
     try:
@@ -28,6 +37,16 @@ def _get_role_from_request(request) -> str | None:
         role = None
     if not role:
         role = request.query_params.get("role") or request.headers.get("X-Role")
+
+    user = getattr(request, "user", None)
+    if not role and user and user.is_authenticated:
+        try:
+            role = user.profile.get_primary_role()
+        except Exception:
+            groups = user.groups.all()
+            if groups.exists():
+                role = groups.first().name
+
     return role
 
 
@@ -46,10 +65,8 @@ class ProjectProgressStatusViewSet(viewsets.ModelViewSet):
     
     queryset = ProjectProgressStatus.objects.all()
     serializer_class = ProjectProgressStatusSerializer
-    # Disable authentication completely
-    authentication_classes = []
-    permission_classes = [AllowAny]
-    
+    permission_classes = [IsAuthenticated]
+
     # ---- Swagger schemas (fix FloatField showing as string in Swagger UI) ----
     _progress_create_schema = openapi.Schema(
         type=openapi.TYPE_OBJECT,
@@ -133,9 +150,14 @@ class ProjectProgressStatusViewSet(viewsets.ModelViewSet):
         Returns (is_allowed, error_response) tuple.
         """
         role = _get_role_from_request(request)
-        if role not in ["Billing Site Engineer", "PMC Head", "Team Leader"]:
+        if role not in ALLOWED_PROGRESS_ROLES:
             return False, Response(
-                {"detail": f"Only Billing Site Engineer, PMC Head, or Team Leader can {action_name}."},
+                {
+                    "detail": (
+                        f"Only {', '.join(sorted(ALLOWED_PROGRESS_ROLES))} "
+                        f"can {action_name}."
+                    )
+                },
                 status=status.HTTP_403_FORBIDDEN,
             )
         return True, None
