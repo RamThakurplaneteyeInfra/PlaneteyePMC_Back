@@ -9,46 +9,30 @@ from .models.contract_value import ContractValue
 
 @admin.register(ContractValue)
 class ContractValueAdmin(admin.ModelAdmin):
-    """Admin view for Contract Value records."""
-
     list_display = [
-        "projectName",
-        "contractType",
-        "originalContractValue",
-        "approvedVO",
-        "approvedVOPercentage",
-        "revisedContractValue",
-        "potentialPendingVO",
+        "project_name",
+        "contract_type",
+        "original_contract_value",
+        "excess_value",
+        "saving",
         "created_at",
         "updated_at",
     ]
-    list_filter = ["contractType", "created_at"]
-    search_fields = ["projectName"]
-    readonly_fields = [
-        "approvedVOPercentage",
-        "revisedContractValue",
-        "created_at",
-        "updated_at",
-    ]
-    ordering = ["projectName", "contractType"]
+    list_filter = ["contract_type", "created_at"]
+    search_fields = ["project_name"]
+    readonly_fields = ["created_at", "updated_at"]
+    ordering = ["project_name", "contract_type"]
 
     fieldsets = (
-        ("Project & Type", {"fields": ("projectName", "contractType")}),
+        ("Project & Type", {"fields": ("project_name", "contract_type")}),
         (
             "Contract Financials",
             {
                 "fields": (
-                    "originalContractValue",
-                    "approvedVO",
-                    "potentialPendingVO",
+                    "original_contract_value",
+                    "excess_value",
+                    "saving",
                 ),
-            },
-        ),
-        (
-            "Auto-Calculated KPIs",
-            {
-                "fields": ("approvedVOPercentage", "revisedContractValue"),
-                "description": "Calculated automatically on save. Cannot be edited directly.",
             },
         ),
         (

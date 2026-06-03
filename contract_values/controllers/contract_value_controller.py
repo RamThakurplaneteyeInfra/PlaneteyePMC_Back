@@ -18,8 +18,8 @@ Custom filter endpoints (via @action):
   GET    /api/contract-values/project/{projectName}/type/{contractType}/  -> exact lookup
 
 Auto-calculated fields (never send, always returned):
-  - approvedVOPercentage  = (approvedVO / originalContractValue) * 100
-  - revisedContractValue  = originalContractValue + approvedVO
+  - revised_value         = original_contract_value + excess_value - saving
+  - increase_percentage   = ((revised_value - original_contract_value) / original_contract_value) * 100
 
 Scalable for future additions:
   - New contract types: add to ContractValue.ContractType enum only
@@ -40,9 +40,53 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from ..models.contract_value import ContractValue
-from .contract_value_serializer import ContractValueSerializer
+from .contract_value_serializer import ContractValueSerializer, _normalize_contract_type
 
 logger = logging.getLogger(__name__)
+
+_STRIP_FIELDS = {
+    "revised_value",
+    "increase_percentage",
+    "revisedContractValue",
+    "approvedVOPercentage",
+    "approvedVO",
+    "potentialPendingVO",
+    "id",
+    "created_at",
+    "updated_at",
+}
+
+_FIELD_ALIASES = {
+    "projectName": "project_name",
+    "contractType": "contract_type",
+    "originalContractValue": "original_contract_value",
+    "excessValue": "excess_value",
+    "approvedVO": "excess_value",
+    "potentialPendingVO": "saving",
+}
+
+
+def _normalise_payload(data: dict) -> dict:
+    if hasattr(data, "copy"):
+        data = data.copy()
+    else:
+        data = dict(data)
+
+    normalised = {}
+    for key, value in data.items():
+        if key in _STRIP_FIELDS:
+            continue
+        canonical = _FIELD_ALIASES.get(key, key)
+        normalised[canonical] = value
+
+    if "contract_type" in normalised:
+        normalised["contract_type"] = _normalize_contract_type(
+            str(normalised["contract_type"])
+        )
+    if "project_name" in normalised and isinstance(normalised["project_name"], str):
+        normalised["project_name"] = normalised["project_name"].strip()
+
+    return normalised
 
 # Cache settings
 _CACHE_KEY_LIST = "contract_values_list"
@@ -67,32 +111,32 @@ class ContractValuePagination(PageNumberPagination):
 
 _CV_POST_SCHEMA = openapi.Schema(
     type=openapi.TYPE_OBJECT,
-    required=["projectName", "contractType"],
+    required=["project_name", "contract_type"],
     properties={
-        "projectName": openapi.Schema(
+        "project_name": openapi.Schema(
             type=openapi.TYPE_STRING,
             description="Project name",
-            example="PMC Smart City",
+            example="Thane Project",
         ),
-        "contractType": openapi.Schema(
+        "contract_type": openapi.Schema(
             type=openapi.TYPE_STRING,
-            description='Contract type: "SCL" or "Contractor"',
-            enum=["SCL", "Contractor"],
+            description='Contract type: "SCL" or "CONTRACTOR"',
+            enum=["SCL", "CONTRACTOR"],
             example="SCL",
         ),
-        "originalContractValue": openapi.Schema(
+        "original_contract_value": openapi.Schema(
             type=openapi.TYPE_NUMBER,
             description="Original contract value (>= 0)",
             example=10000000.00,
         ),
-        "approvedVO": openapi.Schema(
+        "excess_value": openapi.Schema(
             type=openapi.TYPE_NUMBER,
-            description="Approved Variation Order amount (>= 0)",
+            description="Excess value (>= 0)",
             example=500000.00,
         ),
-        "potentialPendingVO": openapi.Schema(
+        "saving": openapi.Schema(
             type=openapi.TYPE_NUMBER,
-            description="Potential / Pending Variation Order amount (>= 0)",
+            description="Saving amount (>= 0)",
             example=250000.00,
         ),
     },
@@ -110,30 +154,30 @@ _CV_RESPONSE_SCHEMA = openapi.Schema(
             type=openapi.TYPE_OBJECT,
             properties={
                 "id": openapi.Schema(type=openapi.TYPE_INTEGER, example=1),
-                "projectName": openapi.Schema(
-                    type=openapi.TYPE_STRING, example="PMC Smart City"
+                "project_name": openapi.Schema(
+                    type=openapi.TYPE_STRING, example="Thane Project"
                 ),
-                "contractType": openapi.Schema(
+                "contract_type": openapi.Schema(
                     type=openapi.TYPE_STRING, example="SCL"
                 ),
-                "originalContractValue": openapi.Schema(
+                "original_contract_value": openapi.Schema(
                     type=openapi.TYPE_NUMBER, example=10000000.00
                 ),
-                "approvedVO": openapi.Schema(
+                "excess_value": openapi.Schema(
                     type=openapi.TYPE_NUMBER, example=500000.00
                 ),
-                "approvedVOPercentage": openapi.Schema(
-                    type=openapi.TYPE_NUMBER,
-                    description="Auto-calculated: (approvedVO / originalContractValue) * 100",
-                    example=5.00,
-                ),
-                "revisedContractValue": openapi.Schema(
-                    type=openapi.TYPE_NUMBER,
-                    description="Auto-calculated: originalContractValue + approvedVO",
-                    example=10500000.00,
-                ),
-                "potentialPendingVO": openapi.Schema(
+                "saving": openapi.Schema(
                     type=openapi.TYPE_NUMBER, example=250000.00
+                ),
+                "revised_value": openapi.Schema(
+                    type=openapi.TYPE_NUMBER,
+                    description="original_contract_value + excess_value - saving",
+                    example=10250000.00,
+                ),
+                "increase_percentage": openapi.Schema(
+                    type=openapi.TYPE_NUMBER,
+                    description="((revised_value - original) / original) * 100",
+                    example=2.50,
                 ),
                 "created_at": openapi.Schema(
                     type=openapi.TYPE_STRING, example="2024-01-15T10:30:00Z"
@@ -167,25 +211,23 @@ def _build_queryset(
     """
     qs = ContractValue.objects.only(
         "id",
-        "projectName",
-        "contractType",
-        "originalContractValue",
-        "approvedVO",
-        "approvedVOPercentage",
-        "revisedContractValue",
-        "potentialPendingVO",
+        "project_name",
+        "contract_type",
+        "original_contract_value",
+        "excess_value",
+        "saving",
         "created_at",
         "updated_at",
     )
 
     if project_name:
-        qs = qs.filter(projectName__icontains=project_name.strip())
+        qs = qs.filter(project_name__icontains=project_name.strip())
 
     if contract_type:
-        qs = qs.filter(contractType=contract_type.strip())
+        qs = qs.filter(contract_type=_normalize_contract_type(contract_type.strip()))
 
     if search:
-        qs = qs.filter(projectName__icontains=search.strip())
+        qs = qs.filter(project_name__icontains=search.strip())
 
     return qs
 
@@ -311,8 +353,8 @@ class ContractValueViewSet(viewsets.ModelViewSet):
             "Create a new contract value record for a project and contract type.\n\n"
             "**One record per (projectName, contractType) pair.**\n\n"
             "**Auto-calculated fields (do not send):**\n"
-            "- `approvedVOPercentage` = (approvedVO / originalContractValue) × 100\n"
-            "- `revisedContractValue` = originalContractValue + approvedVO\n\n"
+            "- `revised_value` = original_contract_value + excess_value - saving\n"
+            "- `increase_percentage` = ((revised_value - original_contract_value) / original_contract_value) × 100\n\n"
             "**Example — create both types for the same project:**\n"
             "```\n"
             'POST { "projectName": "PMC Smart City", "contractType": "SCL", ... }\n'
@@ -333,26 +375,18 @@ class ContractValueViewSet(viewsets.ModelViewSet):
         If a record already exists for the given (projectName, contractType) pair
         it is updated in-place rather than returning a 400/500 uniqueness error.
 
-        The frontend may send revisedContractValue and approvedVOPercentage —
-        these are auto-calculated by the model and are silently stripped from
-        the payload before validation so they never cause a RuntimeError.
+        Computed fields are stripped from the payload before validation.
         """
-        project_name = str(request.data.get("projectName", "")).strip()
-        contract_type = str(request.data.get("contractType", "")).strip()
+        payload = _normalise_payload(request.data)
+        project_name = payload.get("project_name", "")
+        contract_type = payload.get("contract_type", "")
 
-        # Strip read-only / auto-calculated fields the frontend should not send
-        _READ_ONLY = {"revisedContractValue", "approvedVOPercentage", "id", "created_at", "updated_at"}
-        payload = {k: v for k, v in request.data.items() if k not in _READ_ONLY}
-
-        # ------------------------------------------------------------------
-        # Upsert: if a record already exists for this pair, update it.
-        # ------------------------------------------------------------------
         existing = None
         if project_name and contract_type:
             try:
                 existing = ContractValue.objects.get(
-                    projectName__iexact=project_name,
-                    contractType=contract_type,
+                    project_name__iexact=project_name,
+                    contract_type=contract_type,
                 )
             except ContractValue.DoesNotExist:
                 pass
@@ -404,7 +438,7 @@ class ContractValueViewSet(viewsets.ModelViewSet):
             "Retrieve all contract value records.\n\n"
             "**Supports filtering:**\n"
             "- `?project_name=` — partial, case-insensitive project name\n"
-            "- `?contract_type=SCL` or `?contract_type=Contractor`\n"
+            "- `?contract_type=SCL` or `?contract_type=CONTRACTOR`\n"
             "- `?search=` — free-text search across project names\n"
             "- Combine: `?project_name=Smart City&contract_type=SCL`"
         ),
@@ -416,7 +450,7 @@ class ContractValueViewSet(viewsets.ModelViewSet):
             ),
             openapi.Parameter(
                 "contract_type", openapi.IN_QUERY,
-                description='Filter by contract type: "SCL" or "Contractor"',
+                description='Filter by contract type: "SCL" or "CONTRACTOR"',
                 type=openapi.TYPE_STRING, required=False,
             ),
             openapi.Parameter(
@@ -517,7 +551,7 @@ class ContractValueViewSet(viewsets.ModelViewSet):
         operation_summary="Update Contract Value Record",
         operation_description=(
             "Full or partial update of a contract value record. "
-            "approvedVOPercentage and revisedContractValue are recalculated automatically."
+            "revised_value and increase_percentage are recalculated automatically."
         ),
         request_body=_CV_POST_SCHEMA,
         responses={
@@ -543,9 +577,7 @@ class ContractValueViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Strip read-only / auto-calculated fields the frontend should not send
-        _READ_ONLY = {"revisedContractValue", "approvedVOPercentage", "id", "created_at", "updated_at"}
-        payload = {k: v for k, v in request.data.items() if k not in _READ_ONLY}
+        payload = _normalise_payload(request.data)
 
         serializer = ContractValueSerializer(
             instance, data=payload, partial=partial
@@ -600,8 +632,8 @@ class ContractValueViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
-        project_name = instance.projectName
-        contract_type = instance.contractType
+        project_name = instance.project_name
+        contract_type = instance.contract_type
         instance.delete()
         self._invalidate_cache()
 
@@ -668,7 +700,7 @@ class ContractValueViewSet(viewsets.ModelViewSet):
         operation_summary="Get All Contract Values by Contract Type",
         operation_description=(
             "Retrieve all records for a specific contract type across all projects.\n\n"
-            "Valid values: `SCL`, `Contractor`\n\n"
+            "Valid values: `SCL`, `CONTRACTOR`\n\n"
             "Useful for type-wise analytics and dashboard filtering."
         ),
         responses={
@@ -693,14 +725,15 @@ class ContractValueViewSet(viewsets.ModelViewSet):
             return self._error("contractType is required.")
 
         # Validate the contract type against the enum
+        contract_type = _normalize_contract_type(contractType.strip())
         valid_types = [c.value for c in ContractValue.ContractType]
-        if contractType.strip() not in valid_types:
+        if contract_type not in valid_types:
             return self._error(
                 f"Invalid contractType '{contractType}'. "
                 f"Must be one of: {', '.join(valid_types)}."
             )
 
-        qs = _build_queryset(contract_type=contractType.strip())
+        qs = _build_queryset(contract_type=contract_type)
 
         if not qs.exists():
             return self._error(
@@ -753,8 +786,9 @@ class ContractValueViewSet(viewsets.ModelViewSet):
             return self._error("contractType is required.")
 
         # Validate the contract type
+        contract_type = _normalize_contract_type(contractType.strip())
         valid_types = [c.value for c in ContractValue.ContractType]
-        if contractType.strip() not in valid_types:
+        if contract_type not in valid_types:
             return self._error(
                 f"Invalid contractType '{contractType}'. "
                 f"Must be one of: {', '.join(valid_types)}."
@@ -762,8 +796,8 @@ class ContractValueViewSet(viewsets.ModelViewSet):
 
         try:
             instance = ContractValue.objects.get(
-                projectName__iexact=projectName.strip(),
-                contractType=contractType.strip(),
+                project_name__iexact=projectName.strip(),
+                contract_type=contract_type,
             )
         except ContractValue.DoesNotExist:
             return self._error(

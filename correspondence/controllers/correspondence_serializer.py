@@ -1,44 +1,58 @@
 """
-Correspondence Status Serializer.
+Correspondence Document Serializer.
 
-Writable: project_name (→ Project FK), month, year, correspondence_type,
-          correspondence_received, correspondence_delivered
-
-Computed (never stored): pending_correspondence, delivery_efficiency
-Legacy read aliases: projectName, correspondenceReceived, correspondenceDelivered,
-                     pendingCorrespondence, deliveryPercentage
+Writable: project_name, month, year, correspondence_type, description,
+          received_date, delivered_date
+Auto: sr_no, deadline_date, delivered_status
 """
 
 from rest_framework import serializers
 
-from projects.models import Project
-from ..models.correspondence import CorrespondenceStatus
-from .correspondence_metrics import (
-    compute_delivery_efficiency,
-    compute_pending_correspondence,
-)
+from ..models.correspondence import CorrespondenceDocument
+
+_STRIP_ON_WRITE = {
+    "correspondence_received",
+    "correspondence_delivered",
+    "correspondenceReceived",
+    "correspondenceDelivered",
+    "received_count",
+    "delivered_count",
+    "pending_count",
+    "received",
+    "delivered",
+    "pending",
+    "delivery_efficiency",
+    "deliveryPercentage",
+    "pendingCorrespondence",
+    "pending_correspondence",
+    "deadline_date",
+    "delivered_status",
+    "delivery_status",
+    "sr_no",
+}
 
 
-class CorrespondenceSerializer(serializers.ModelSerializer):
-    """Serializer for monthly CorrespondenceStatus records."""
+def _normalize_correspondence_type(value: str) -> str:
+    if not value:
+        return value
+    normalized = value.strip().upper()
+    if normalized in (
+        CorrespondenceDocument.TYPE_CLIENT,
+        CorrespondenceDocument.TYPE_CONTRACTOR,
+    ):
+        return normalized
+    return value.strip()
 
-    project_name = serializers.SerializerMethodField()
-    pending_correspondence = serializers.SerializerMethodField()
-    delivery_efficiency = serializers.SerializerMethodField()
 
-    # Legacy aliases (read-only)
+class CorrespondenceDocumentSerializer(serializers.ModelSerializer):
     projectName = serializers.SerializerMethodField()
-    correspondenceReceived = serializers.IntegerField(
-        source="correspondence_received", read_only=True
-    )
-    correspondenceDelivered = serializers.IntegerField(
-        source="correspondence_delivered", read_only=True
-    )
-    pendingCorrespondence = serializers.SerializerMethodField()
-    deliveryPercentage = serializers.SerializerMethodField()
+    party_type = serializers.SerializerMethodField()
+    # Legacy read aliases
+    delivery_date = serializers.DateField(source="delivered_date", read_only=True)
+    delivery_status = serializers.CharField(source="delivered_status", read_only=True)
 
     class Meta:
-        model = CorrespondenceStatus
+        model = CorrespondenceDocument
         fields = [
             "id",
             "project_name",
@@ -46,53 +60,36 @@ class CorrespondenceSerializer(serializers.ModelSerializer):
             "month",
             "year",
             "correspondence_type",
-            "correspondence_received",
-            "correspondence_delivered",
-            "pending_correspondence",
-            "delivery_efficiency",
-            "correspondenceReceived",
-            "correspondenceDelivered",
-            "pendingCorrespondence",
-            "deliveryPercentage",
+            "party_type",
+            "sr_no",
+            "description",
+            "received_date",
+            "deadline_date",
+            "delivered_date",
+            "delivered_status",
+            "delivery_date",
+            "delivery_status",
             "created_at",
             "updated_at",
         ]
         read_only_fields = [
             "id",
-            "project_name",
             "projectName",
-            "pending_correspondence",
-            "delivery_efficiency",
-            "correspondenceReceived",
-            "correspondenceDelivered",
-            "pendingCorrespondence",
-            "deliveryPercentage",
+            "party_type",
+            "sr_no",
+            "deadline_date",
+            "delivered_status",
+            "delivery_date",
+            "delivery_status",
             "created_at",
             "updated_at",
         ]
-        validators = []
-
-    def get_project_name(self, obj) -> str:
-        return obj.project_name
 
     def get_projectName(self, obj) -> str:
         return obj.project_name
 
-    def get_pending_correspondence(self, obj) -> int:
-        return compute_pending_correspondence(
-            obj.correspondence_received, obj.correspondence_delivered
-        )
-
-    def get_delivery_efficiency(self, obj) -> float:
-        return compute_delivery_efficiency(
-            obj.correspondence_delivered, obj.correspondence_received
-        )
-
-    def get_pendingCorrespondence(self, obj) -> int:
-        return self.get_pending_correspondence(obj)
-
-    def get_deliveryPercentage(self, obj) -> float:
-        return self.get_delivery_efficiency(obj)
+    def get_party_type(self, obj) -> str:
+        return obj.correspondence_type
 
     def to_internal_value(self, data):
         if hasattr(data, "copy"):
@@ -100,24 +97,29 @@ class CorrespondenceSerializer(serializers.ModelSerializer):
         else:
             data = dict(data)
 
-        if "_project_name" in data:
-            data["_project_name"] = str(data.get("_project_name", "")).strip()
-        elif "project_name" in data:
-            data["_project_name"] = str(data.get("project_name", "")).strip()
-        elif "projectName" in data:
-            data["_project_name"] = str(data.get("projectName", "")).strip()
+        if "projectName" in data and "project_name" not in data:
+            data["project_name"] = data["projectName"]
+        if "party_type" in data and "correspondence_type" not in data:
+            data["correspondence_type"] = data["party_type"]
+        if "correspondence_type" in data:
+            data["correspondence_type"] = _normalize_correspondence_type(
+                str(data["correspondence_type"])
+            )
 
-        if "correspondenceReceived" in data and "correspondence_received" not in data:
-            data["correspondence_received"] = data["correspondenceReceived"]
-        if "correspondenceDelivered" in data and "correspondence_delivered" not in data:
-            data["correspondence_delivered"] = data["correspondenceDelivered"]
+        # Legacy request field names
+        if "delivery_date" in data and "delivered_date" not in data:
+            data["delivered_date"] = data["delivery_date"]
 
-        if "correspondence_type" in data and isinstance(data["correspondence_type"], str):
-            data["correspondence_type"] = data["correspondence_type"].upper()
+        for field in _STRIP_ON_WRITE:
+            data.pop(field, None)
 
-        ret = super().to_internal_value(data)
-        ret["_project_name"] = data.get("_project_name", "")
-        return ret
+        return super().to_internal_value(data)
+
+    def validate_project_name(self, value: str) -> str:
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("project_name cannot be blank.")
+        return value
 
     def validate_month(self, value: int) -> int:
         if not (1 <= value <= 12):
@@ -130,57 +132,57 @@ class CorrespondenceSerializer(serializers.ModelSerializer):
         return value
 
     def validate_correspondence_type(self, value: str) -> str:
+        value = _normalize_correspondence_type(value)
         allowed = {
-            CorrespondenceStatus.TYPE_CLIENT,
-            CorrespondenceStatus.TYPE_CONTRACTOR,
+            CorrespondenceDocument.TYPE_CLIENT,
+            CorrespondenceDocument.TYPE_CONTRACTOR,
         }
-        value = value.upper()
         if value not in allowed:
             raise serializers.ValidationError(
                 "correspondence_type must be CLIENT or CONTRACTOR."
             )
         return value
 
-    def _validate_non_negative(self, value: int, field_name: str) -> int:
-        if value < 0:
-            raise serializers.ValidationError(f"{field_name} must be >= 0.")
-        return value
-
-    def validate_correspondence_received(self, value):
-        return self._validate_non_negative(value, "correspondence_received")
-
-    def validate_correspondence_delivered(self, value):
-        return self._validate_non_negative(value, "correspondence_delivered")
-
-    def validate(self, attrs: dict) -> dict:
+    def validate(self, attrs):
         instance = self.instance
+        received = attrs.get(
+            "received_date",
+            instance.received_date if instance else None,
+        )
+        month = attrs.get("month", instance.month if instance else None)
+        year = attrs.get("year", instance.year if instance else None)
+        delivered = attrs.get(
+            "delivered_date",
+            instance.delivered_date if instance else None,
+        )
 
-        project_name = attrs.pop("_project_name", "").strip()
-        if not project_name:
-            if instance is not None:
-                attrs["project"] = instance.project
-            else:
+        if received and month and year:
+            if received.month != month or received.year != year:
                 raise serializers.ValidationError(
-                    {"project_name": "project_name is required."}
+                    {
+                        "received_date": (
+                            "received_date must fall within the selected "
+                            "month and year."
+                        )
+                    }
                 )
-        else:
-            try:
-                project = Project.objects.get(name__iexact=project_name)
-            except Project.DoesNotExist:
-                raise serializers.ValidationError(
-                    {"project_name": f"No project found with name '{project_name}'."}
-                )
-            attrs["project"] = project
+
+        if received and delivered and delivered < received:
+            raise serializers.ValidationError(
+                {
+                    "delivered_date": (
+                        "delivered_date cannot be before received_date."
+                    )
+                }
+            )
 
         return attrs
 
     def create(self, validated_data):
-        validated_data.pop("_project_name", None)
-        return CorrespondenceStatus.objects.create(**validated_data)
-
-    def update(self, instance, validated_data):
-        validated_data.pop("_project_name", None)
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
-        return instance
+        validated_data["sr_no"] = CorrespondenceDocument.next_sr_no(
+            validated_data["project_name"],
+            validated_data["month"],
+            validated_data["year"],
+            validated_data["correspondence_type"],
+        )
+        return CorrespondenceDocument.objects.create(**validated_data)

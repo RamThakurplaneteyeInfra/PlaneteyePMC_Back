@@ -4,42 +4,66 @@ Django admin registration for the Correspondence app.
 
 from django.contrib import admin
 
-from .models.correspondence import CorrespondenceStatus
+from .models.correspondence import CorrespondenceDocument
 
 
-@admin.register(CorrespondenceStatus)
-class CorrespondenceStatusAdmin(admin.ModelAdmin):
-    """Admin view for monthly CorrespondenceStatus records."""
-
+@admin.register(CorrespondenceDocument)
+class CorrespondenceDocumentAdmin(admin.ModelAdmin):
     list_display = [
-        "project",
+        "project_name",
         "month",
         "year",
         "correspondence_type",
-        "correspondence_received",
-        "correspondence_delivered",
+        "sr_no",
+        "received_date",
+        "deadline_date",
+        "delivered_date",
+        "delivered_status",
+        "created_at",
+    ]
+    list_filter = [
+        "correspondence_type",
+        "delivered_status",
+        "received_date",
+        "created_at",
+    ]
+    search_fields = ["project_name", "description"]
+    readonly_fields = [
+        "sr_no",
+        "deadline_date",
+        "delivered_status",
         "created_at",
         "updated_at",
     ]
-    list_filter = ["year", "month", "correspondence_type", "created_at"]
-    search_fields = ["project__name"]
-    readonly_fields = ["created_at", "updated_at"]
-    ordering = ["project__name", "year", "month", "correspondence_type"]
+    ordering = ["project_name", "year", "month", "correspondence_type", "sr_no"]
 
     fieldsets = (
         (
             "Project & Period",
-            {"fields": ("project", "month", "year", "correspondence_type")},
+            {
+                "fields": (
+                    "project_name",
+                    "month",
+                    "year",
+                    "correspondence_type",
+                    "sr_no",
+                    "description",
+                )
+            },
         ),
         (
-            "Correspondence Counts",
-            {"fields": ("correspondence_received", "correspondence_delivered")},
+            "Dates & Delivered Status",
+            {
+                "fields": (
+                    "received_date",
+                    "deadline_date",
+                    "delivered_date",
+                    "delivered_status",
+                ),
+            },
         ),
         (
             "Timestamps",
-            {
-                "fields": ("created_at", "updated_at"),
-                "classes": ("collapse",),
-            },
+            {"fields": ("created_at", "updated_at"), "classes": ("collapse",)},
         ),
     )

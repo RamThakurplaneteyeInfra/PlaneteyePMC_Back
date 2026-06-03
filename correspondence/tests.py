@@ -1,241 +1,239 @@
 """
-Tests for Correspondence & Delivery Status (monthly CLIENT / CONTRACTOR tracking).
+Tests for monthly project-wise correspondence document tracking.
 """
+
+from datetime import date
 
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from projects.models import Project
-
 from .controllers.correspondence_metrics import (
     compute_delivery_efficiency,
-    compute_pending_correspondence,
     metrics_from_counts,
+    metrics_from_queryset,
 )
-from .models.correspondence import CorrespondenceStatus
+from .models.correspondence import CorrespondenceDocument
 
 
 class CorrespondenceMetricsTest(TestCase):
-  def test_pending_never_negative(self):
-    self.assertEqual(compute_pending_correspondence(100, 120), 0)
+    def test_example_kpi_all_delivered_mixed(self):
+        """Received=10, On Time=7, Late=3, Pending=0 -> Delivered=10, Eff=70%."""
+        m = metrics_from_counts(received=10, on_time=7, late_deliveries=3, pending=0)
+        self.assertEqual(m["received"], 10)
+        self.assertEqual(m["delivered"], 10)
+        self.assertEqual(m["pending"], 0)
+        self.assertEqual(m["on_time"], 7)
+        self.assertEqual(m["late_deliveries"], 3)
+        self.assertEqual(m["delivery_efficiency"], 70.0)
+        self.assertEqual(m["status_breakdown"], {
+            "on_time": 7,
+            "late_deliveries": 3,
+            "pending": 0,
+        })
 
-  def test_pending_normal(self):
-    self.assertEqual(compute_pending_correspondence(120, 110), 10)
+    def test_pending_only(self):
+        m = metrics_from_counts(received=5, on_time=0, late_deliveries=0, pending=5)
+        self.assertEqual(m["delivered"], 0)
+        self.assertEqual(m["pending"], 5)
+        self.assertEqual(m["delivery_efficiency"], 0.0)
 
-  def test_efficiency_zero_when_no_received(self):
-    self.assertEqual(compute_delivery_efficiency(0, 0), 0.0)
+    def test_on_time_only(self):
+        m = metrics_from_counts(received=4, on_time=4, late_deliveries=0, pending=0)
+        self.assertEqual(m["delivered"], 4)
+        self.assertEqual(m["delivery_efficiency"], 100.0)
 
-  def test_efficiency_calculated(self):
-    self.assertEqual(compute_delivery_efficiency(110, 120), 91.67)
+    def test_late_counts_as_delivered_not_pending(self):
+        """Late deliveries must increase delivered, not pending."""
+        m = metrics_from_counts(received=3, on_time=0, late_deliveries=3, pending=0)
+        self.assertEqual(m["delivered"], 3)
+        self.assertEqual(m["pending"], 0)
+        self.assertEqual(m["late_deliveries"], 3)
+        self.assertEqual(m["delivery_efficiency"], 0.0)
 
-  def test_metrics_from_counts(self):
-    m = metrics_from_counts(120, 110)
-    self.assertEqual(m["pending_correspondence"], 10)
-    self.assertEqual(m["delivery_efficiency"], 91.67)
+    def test_efficiency_formula_on_time_over_delivered(self):
+        self.assertEqual(compute_delivery_efficiency(7, 10), 70.0)
+        self.assertEqual(compute_delivery_efficiency(0, 0), 0.0)
 
-
-class CorrespondenceStatusModelTest(TestCase):
-  def setUp(self):
-    self.project = Project.objects.create(name="Model Test Project")
-
-  def _make(self, **kwargs):
-    defaults = {
-      "project": self.project,
-      "month": 6,
-      "year": 2026,
-      "correspondence_type": CorrespondenceStatus.TYPE_CLIENT,
-      "correspondence_received": 100,
-      "correspondence_delivered": 80,
-    }
-    defaults.update(kwargs)
-    return CorrespondenceStatus.objects.create(**defaults)
-
-  def test_unique_per_project_month_year_type(self):
-    self._make()
-    with self.assertRaises(Exception):
-      self._make()
-
-  def test_client_and_contractor_same_month_allowed(self):
-    self._make(correspondence_type=CorrespondenceStatus.TYPE_CLIENT)
-    self._make(correspondence_type=CorrespondenceStatus.TYPE_CONTRACTOR)
-    self.assertEqual(CorrespondenceStatus.objects.count(), 2)
-
-  def test_invalid_month_rejected(self):
-    obj = CorrespondenceStatus(
-      project=self.project,
-      month=13,
-      year=2026,
-      correspondence_type=CorrespondenceStatus.TYPE_CLIENT,
-    )
-    with self.assertRaises(ValidationError):
-      obj.save()
-
-  def test_invalid_type_rejected(self):
-    obj = CorrespondenceStatus(
-      project=self.project,
-      month=6,
-      year=2026,
-      correspondence_type="INVALID",
-    )
-    with self.assertRaises(ValidationError):
-      obj.save()
+    def test_delivered_equals_on_time_plus_late(self):
+        m = metrics_from_counts(received=8, on_time=5, late_deliveries=2, pending=1)
+        self.assertEqual(m["delivered"], 7)
+        self.assertEqual(m["on_time"] + m["late_deliveries"], m["delivered"])
 
 
-class CorrespondenceAPITest(APITestCase):
-  LIST_URL = "/api/correspondence/"
+class CorrespondenceDocumentModelTest(TestCase):
+    def _make(self, **kwargs):
+        defaults = {
+            "project_name": "Model Test Project",
+            "month": 6,
+            "year": 2026,
+            "correspondence_type": CorrespondenceDocument.TYPE_CLIENT,
+            "sr_no": CorrespondenceDocument.next_sr_no(
+                "Model Test Project",
+                6,
+                2026,
+                CorrespondenceDocument.TYPE_CLIENT,
+            ),
+            "description": "Test doc",
+            "received_date": date(2026, 6, 1),
+        }
+        defaults.update(kwargs)
+        return CorrespondenceDocument.objects.create(**defaults)
 
-  def setUp(self):
-    self.project = Project.objects.create(name="Thane Project")
-    CorrespondenceStatus.objects.filter(project=self.project).delete()
+    def test_deadline_and_status_on_time(self):
+        doc = self._make(delivered_date=date(2026, 6, 5))
+        self.assertEqual(doc.deadline_date, date(2026, 6, 8))
+        self.assertEqual(doc.delivered_status, "DELIVERED_ON_TIME")
 
-  def _detail_url(self, pk):
-    return f"/api/correspondence/{pk}/"
+    def test_status_pending(self):
+        doc = self._make()
+        self.assertEqual(doc.delivered_status, "PENDING")
 
-  def _monthly_url(self, month=6, year=2026):
-    return f"/api/correspondence/project/Thane%20Project/month/{month}/year/{year}/"
+    def test_status_late(self):
+        doc = self._make(delivered_date=date(2026, 6, 15))
+        self.assertEqual(doc.delivered_status, "DELIVERED_LATE")
 
-  def _summary_url(self):
-    return "/api/correspondence/project/Thane%20Project/summary/"
+    def test_received_date_must_match_month_year(self):
+        obj = CorrespondenceDocument(
+            project_name="X",
+            month=6,
+            year=2026,
+            correspondence_type=CorrespondenceDocument.TYPE_CLIENT,
+            sr_no=1,
+            description="bad",
+            received_date=date(2026, 7, 1),
+        )
+        with self.assertRaises(ValidationError):
+            obj.save()
 
-  def _yearly_url(self, year=2026):
-    return f"/api/correspondence/project/Thane%20Project/year/{year}/summary/"
 
-  def _dashboard_url(self):
-    return "/api/correspondence/project/Thane%20Project/dashboard/"
+class CorrespondenceQuerysetMetricsTest(TestCase):
+    """Integration: metrics_from_queryset with real documents."""
 
-  def _client_payload(self, received=120, delivered=110):
-    return {
-      "project_name": "Thane Project",
-      "month": 6,
-      "year": 2026,
-      "correspondence_type": "CLIENT",
-      "correspondence_received": received,
-      "correspondence_delivered": delivered,
-    }
+    PROJECT = "Metrics Queryset Project"
 
-  def _contractor_payload(self, received=90, delivered=70):
-    return {
-      "project_name": "Thane Project",
-      "month": 6,
-      "year": 2026,
-      "correspondence_type": "CONTRACTOR",
-      "correspondence_received": received,
-      "correspondence_delivered": delivered,
-    }
+    def setUp(self):
+        CorrespondenceDocument.objects.filter(
+            project_name=self.PROJECT
+        ).delete()
 
-  def test_create_client_returns_201_with_metrics(self):
-    response = self.client.post(self.LIST_URL, self._client_payload(), format="json")
-    self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-    self.assertTrue(response.data["success"])
-    data = response.data["data"]
-    self.assertEqual(data["pending_correspondence"], 10)
-    self.assertEqual(data["delivery_efficiency"], 91.67)
+    def _create(self, sr_no, delivered_date=None):
+        return CorrespondenceDocument.objects.create(
+            project_name=self.PROJECT,
+            month=6,
+            year=2026,
+            correspondence_type=CorrespondenceDocument.TYPE_CLIENT,
+            sr_no=sr_no,
+            description=f"Doc {sr_no}",
+            received_date=date(2026, 6, 1),
+            delivered_date=delivered_date,
+        )
 
-  def test_create_contractor(self):
-    response = self.client.post(self.LIST_URL, self._contractor_payload(), format="json")
-    self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+    def test_mixed_scenario(self):
+        self._create(1, date(2026, 6, 5))   # on time
+        self._create(2, date(2026, 6, 5))   # on time
+        self._create(3, date(2026, 6, 15))  # late
+        self._create(4, None)               # pending
 
-  def test_upsert_same_key_returns_200(self):
-    self.client.post(self.LIST_URL, self._client_payload(), format="json")
-    response = self.client.post(
-      self.LIST_URL,
-      self._client_payload(received=200, delivered=180),
-      format="json",
-    )
-    self.assertEqual(response.status_code, status.HTTP_200_OK)
-    self.assertEqual(
-      CorrespondenceStatus.objects.filter(
-        project=self.project,
-        month=6,
-        year=2026,
-        correspondence_type=CorrespondenceStatus.TYPE_CLIENT,
-      ).count(),
-      1,
-    )
+        qs = CorrespondenceDocument.objects.filter(project_name=self.PROJECT)
+        m = metrics_from_queryset(qs)
 
-  def test_monthly_endpoint_dual_type(self):
-    self.client.post(self.LIST_URL, self._client_payload(), format="json")
-    self.client.post(self.LIST_URL, self._contractor_payload(), format="json")
-    response = self.client.get(self._monthly_url())
-    self.assertEqual(response.status_code, status.HTTP_200_OK)
-    data = response.data["data"]
-    self.assertEqual(data["client"]["correspondence_received"], 120)
-    self.assertEqual(data["contractor"]["pending_correspondence"], 20)
+        self.assertEqual(m["received"], 4)
+        self.assertEqual(m["on_time"], 2)
+        self.assertEqual(m["late_deliveries"], 1)
+        self.assertEqual(m["delivered"], 3)
+        self.assertEqual(m["pending"], 1)
+        self.assertEqual(m["delivered"], m["on_time"] + m["late_deliveries"])
+        self.assertAlmostEqual(m["delivery_efficiency"], round(2 / 3 * 100, 2))
 
-  def test_project_summary_aggregates(self):
-    self.client.post(self.LIST_URL, self._client_payload(), format="json")
-    self.client.post(
-      self.LIST_URL,
-      {**self._client_payload(), "month": 7, "correspondence_received": 30, "correspondence_delivered": 20},
-      format="json",
-    )
-    response = self.client.get(self._summary_url())
-    self.assertEqual(response.status_code, status.HTTP_200_OK)
-    self.assertEqual(response.data["data"]["client"]["correspondence_received"], 150)
 
-  def test_yearly_summary(self):
-    self.client.post(self.LIST_URL, self._client_payload(), format="json")
-    response = self.client.get(self._yearly_url())
-    self.assertEqual(response.status_code, status.HTTP_200_OK)
-    self.assertEqual(response.data["data"]["year"], 2026)
+class CorrespondenceDocumentAPITest(APITestCase):
+    LIST_URL = "/api/correspondence-documents/"
+    DASHBOARD_URL = "/api/correspondence-documents/dashboard/"
 
-  def test_dashboard_structure(self):
-    self.client.post(self.LIST_URL, self._client_payload(), format="json")
-    response = self.client.get(self._dashboard_url())
-    self.assertEqual(response.status_code, status.HTTP_200_OK)
-    data = response.data["data"]
-    self.assertIn("current_month", data)
-    self.assertIn("project_summary", data)
-    self.assertIn("client", data["current_month"])
+    def setUp(self):
+        CorrespondenceDocument.objects.filter(
+            project_name__iexact="Thane Project"
+        ).delete()
 
-  def test_list_filter_by_type(self):
-    self.client.post(self.LIST_URL, self._client_payload(), format="json")
-    self.client.post(self.LIST_URL, self._contractor_payload(), format="json")
-    response = self.client.get(
-      self.LIST_URL,
-      {"correspondence_type": "CLIENT", "month": 6, "year": 2026},
-    )
-    self.assertEqual(response.status_code, status.HTTP_200_OK)
-    results = response.data["data"].get("results", response.data["data"])
-    self.assertEqual(len(results), 1)
-    self.assertEqual(results[0]["correspondence_type"], "CLIENT")
+    def _payload(self, correspondence_type="CLIENT", delivery_date="2026-06-05"):
+        data = {
+            "project_name": "Thane Project",
+            "month": 6,
+            "year": 2026,
+            "correspondence_type": correspondence_type,
+            "description": "Letter",
+            "received_date": "2026-06-01",
+        }
+        if delivery_date:
+            data["delivery_date"] = delivery_date
+        return data
 
-  def test_retrieve_update_delete(self):
-    create = self.client.post(self.LIST_URL, self._client_payload(), format="json")
-    pk = create.data["data"]["id"]
+    def test_create_auto_sr_no(self):
+        r1 = self.client.post(self.LIST_URL, self._payload(), format="json")
+        r2 = self.client.post(
+            self.LIST_URL,
+            self._payload(delivery_date=None),
+            format="json",
+        )
+        self.assertEqual(r1.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(r2.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(r1.data["data"]["delivered_status"], "DELIVERED_ON_TIME")
 
-    get_resp = self.client.get(self._detail_url(pk))
-    self.assertEqual(get_resp.status_code, status.HTTP_200_OK)
+    def test_dashboard_kpi_late_counts_as_delivered(self):
+        self.client.post(self.LIST_URL, self._payload(), format="json")
+        self.client.post(
+            self.LIST_URL,
+            self._payload(delivery_date=None),
+            format="json",
+        )
+        self.client.post(
+            self.LIST_URL,
+            self._payload(
+                correspondence_type="CONTRACTOR",
+                delivery_date="2026-06-20",
+            ),
+            format="json",
+        )
+        response = self.client.get(
+            self.DASHBOARD_URL,
+            {"project_name": "Thane Project", "month": 6, "year": 2026},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-    patch_resp = self.client.patch(
-      self._detail_url(pk),
-      {"correspondence_delivered": 115},
-      format="json",
-    )
-    self.assertEqual(patch_resp.status_code, status.HTTP_200_OK)
-    self.assertEqual(patch_resp.data["data"]["pending_correspondence"], 5)
+        client = response.data["data"]["client"]
+        self.assertEqual(client["received"], 2)
+        self.assertEqual(client["delivered"], 1)
+        self.assertEqual(client["pending"], 1)
+        self.assertEqual(client["on_time"], 1)
+        self.assertEqual(client["late_deliveries"], 0)
+        self.assertEqual(client["delivered"], client["on_time"] + client["late_deliveries"])
+        self.assertEqual(client["status_breakdown"]["pending"], 1)
 
-    del_resp = self.client.delete(self._detail_url(pk))
-    self.assertEqual(del_resp.status_code, status.HTTP_200_OK)
-    self.assertFalse(CorrespondenceStatus.objects.filter(pk=pk).exists())
+        contractor = response.data["data"]["contractor"]
+        self.assertEqual(contractor["received"], 1)
+        self.assertEqual(contractor["delivered"], 1)
+        self.assertEqual(contractor["pending"], 0)
+        self.assertEqual(contractor["on_time"], 0)
+        self.assertEqual(contractor["late_deliveries"], 1)
+        self.assertEqual(contractor["delivery_efficiency"], 0.0)
 
-  def test_legacy_camelcase_post(self):
-    payload = {
-      "projectName": "Thane Project",
-      "month": 6,
-      "year": 2026,
-      "correspondence_type": "CLIENT",
-      "correspondenceReceived": 50,
-      "correspondenceDelivered": 40,
-    }
-    response = self.client.post(self.LIST_URL, payload, format="json")
-    self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-    self.assertEqual(response.data["data"]["correspondenceReceived"], 50)
+    def test_patch_late_delivery_updates_status(self):
+        create = self.client.post(self.LIST_URL, self._payload(), format="json")
+        pk = create.data["data"]["id"]
+        patch = self.client.patch(
+            f"{self.LIST_URL}{pk}/",
+            {"delivery_date": "2026-06-15"},
+            format="json",
+        )
+        self.assertEqual(patch.data["data"]["delivered_status"], "DELIVERED_LATE")
 
-  def test_rejects_invalid_month(self):
-    payload = self._client_payload()
-    payload["month"] = 13
-    response = self.client.post(self.LIST_URL, payload, format="json")
-    self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        response = self.client.get(
+            self.DASHBOARD_URL,
+            {"project_name": "Thane Project", "month": 6, "year": 2026},
+        )
+        client = response.data["data"]["client"]
+        self.assertEqual(client["late_deliveries"], 1)
+        self.assertEqual(client["delivered"], 1)
+        self.assertEqual(client["pending"], 0)

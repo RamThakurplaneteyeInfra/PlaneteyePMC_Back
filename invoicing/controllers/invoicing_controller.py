@@ -17,8 +17,9 @@ Custom filter endpoints (via @action):
   GET    /api/invoicing/type/{invoiceType}/                       -> all projects for a type
   GET    /api/invoicing/project/{projectName}/type/{invoiceType}/ -> exact lookup
 
-Auto-calculated field (never send, always returned):
-  - netDue = netBilledWithoutVAT - netCollected
+Auto-calculated fields (never send, always returned):
+  - difference = gross_billed - gross_certified_billed
+  - certification_efficiency = (gross_certified_billed / gross_billed) * 100
 
 Scalable for future additions:
   - New invoice types: add to InvoicingInformation.InvoiceType enum only
@@ -39,9 +40,55 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from ..models.invoicing_information import InvoicingInformation
-from .invoicing_serializer import InvoicingInformationSerializer
+from .invoicing_serializer import (
+    InvoicingInformationSerializer,
+    _normalize_invoice_type,
+)
 
 logger = logging.getLogger(__name__)
+
+_STRIP_FIELDS = {
+    "difference",
+    "certification_efficiency",
+    "netDue",
+    "netBilledWithoutVAT",
+    "netCollected",
+    "id",
+    "created_at",
+    "updated_at",
+}
+
+_FIELD_ALIASES = {
+    "projectName": "project_name",
+    "invoiceType": "invoice_type",
+    "grossBilled": "gross_billed",
+    "grossCertifiedBilled": "gross_certified_billed",
+    "netBilledWithoutVAT": "gross_billed",
+    "netCollected": "gross_certified_billed",
+}
+
+
+def _normalise_payload(data: dict) -> dict:
+    if hasattr(data, "copy"):
+        data = data.copy()
+    else:
+        data = dict(data)
+
+    normalised = {}
+    for key, value in data.items():
+        if key in _STRIP_FIELDS:
+            continue
+        canonical = _FIELD_ALIASES.get(key, key)
+        normalised[canonical] = value
+
+    if "invoice_type" in normalised:
+        normalised["invoice_type"] = _normalize_invoice_type(
+            str(normalised["invoice_type"])
+        )
+    if "project_name" in normalised and isinstance(normalised["project_name"], str):
+        normalised["project_name"] = normalised["project_name"].strip()
+
+    return normalised
 
 # Cache settings
 _CACHE_KEY_LIST = "invoicing_list"
@@ -66,36 +113,28 @@ class InvoicingPagination(PageNumberPagination):
 
 _INV_POST_SCHEMA = openapi.Schema(
     type=openapi.TYPE_OBJECT,
-    required=["projectName", "invoiceType"],
+    required=["project_name", "invoice_type"],
     properties={
-        "projectName": openapi.Schema(
+        "project_name": openapi.Schema(
             type=openapi.TYPE_STRING,
             description="Project name",
-            example="PMC Smart City",
+            example="Thane Project",
         ),
-        "invoiceType": openapi.Schema(
+        "invoice_type": openapi.Schema(
             type=openapi.TYPE_STRING,
-            description='Invoice type: "PMC" or "Contractor"',
-            enum=["PMC", "Contractor"],
-            example="PMC",
+            description='Invoice type: "SCL" or "CONTRACTOR"',
+            enum=["SCL", "CONTRACTOR"],
+            example="SCL",
         ),
-        "grossBilled": openapi.Schema(
+        "gross_billed": openapi.Schema(
             type=openapi.TYPE_NUMBER,
-            description="Total amount billed including VAT (>= 0)",
+            description="Gross billed amount (>= 0)",
             example=120000000.00,
         ),
-        "netBilledWithoutVAT": openapi.Schema(
+        "gross_certified_billed": openapi.Schema(
             type=openapi.TYPE_NUMBER,
-            description="Net amount billed excluding VAT (>= 0)",
+            description="Gross certified billed amount (>= 0)",
             example=100000000.00,
-        ),
-        "netCollected": openapi.Schema(
-            type=openapi.TYPE_NUMBER,
-            description=(
-                "Amount actually collected "
-                "(>= 0, cannot exceed netBilledWithoutVAT)"
-            ),
-            example=80000000.00,
         ),
     },
 )
@@ -112,25 +151,27 @@ _INV_RESPONSE_SCHEMA = openapi.Schema(
             type=openapi.TYPE_OBJECT,
             properties={
                 "id": openapi.Schema(type=openapi.TYPE_INTEGER, example=1),
-                "projectName": openapi.Schema(
-                    type=openapi.TYPE_STRING, example="PMC Smart City"
+                "project_name": openapi.Schema(
+                    type=openapi.TYPE_STRING, example="Thane Project"
                 ),
-                "invoiceType": openapi.Schema(
-                    type=openapi.TYPE_STRING, example="PMC"
+                "invoice_type": openapi.Schema(
+                    type=openapi.TYPE_STRING, example="SCL"
                 ),
-                "grossBilled": openapi.Schema(
+                "gross_billed": openapi.Schema(
                     type=openapi.TYPE_NUMBER, example=120000000.00
                 ),
-                "netBilledWithoutVAT": openapi.Schema(
+                "gross_certified_billed": openapi.Schema(
                     type=openapi.TYPE_NUMBER, example=100000000.00
                 ),
-                "netCollected": openapi.Schema(
-                    type=openapi.TYPE_NUMBER, example=80000000.00
-                ),
-                "netDue": openapi.Schema(
+                "difference": openapi.Schema(
                     type=openapi.TYPE_NUMBER,
-                    description="Auto-calculated: netBilledWithoutVAT - netCollected",
+                    description="gross_billed - gross_certified_billed",
                     example=20000000.00,
+                ),
+                "certification_efficiency": openapi.Schema(
+                    type=openapi.TYPE_NUMBER,
+                    description="(gross_certified_billed / gross_billed) * 100",
+                    example=83.33,
                 ),
                 "created_at": openapi.Schema(
                     type=openapi.TYPE_STRING, example="2024-01-15T10:30:00Z"
@@ -159,29 +200,29 @@ def _build_queryset(
 
     Args:
         project_name : partial, case-insensitive project name filter
-        invoice_type : exact invoice type filter (PMC | Contractor)
-        search       : free-text search across projectName
+        invoice_type : exact invoice type filter (SCL | CONTRACTOR; legacy PMC/Contractor accepted)
+        search       : free-text search across project_name
     """
     qs = InvoicingInformation.objects.only(
         "id",
-        "projectName",
-        "invoiceType",
-        "grossBilled",
-        "netBilledWithoutVAT",
-        "netCollected",
-        "netDue",
+        "project_name",
+        "invoice_type",
+        "gross_billed",
+        "gross_certified_billed",
         "created_at",
         "updated_at",
     )
 
     if project_name:
-        qs = qs.filter(projectName__icontains=project_name.strip())
+        qs = qs.filter(project_name__icontains=project_name.strip())
 
     if invoice_type:
-        qs = qs.filter(invoiceType=invoice_type.strip())
+        qs = qs.filter(
+            invoice_type=_normalize_invoice_type(invoice_type.strip())
+        )
 
     if search:
-        qs = qs.filter(projectName__icontains=search.strip())
+        qs = qs.filter(project_name__icontains=search.strip())
 
     return qs
 
@@ -208,14 +249,13 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
     Invoicing Information ViewSet.
 
     Manages invoicing KPIs per project per invoice type.
-    One record per (projectName, invoiceType) pair.
+    One record per (project_name, invoice_type) pair.
 
-    The invoiceType field acts as a discriminator — the same API serves
-    both PMC and Contractor invoicing data. New types can be added to
-    the enum without any structural changes.
+    The invoice_type field acts as a discriminator — the same API serves
+    both SCL and CONTRACTOR invoicing data.
 
-    All calculated fields are auto-computed by the model on every save.
-    Clients only need to send: projectName, invoiceType, and the input values.
+    Calculated fields (difference, certification_efficiency) are computed at read time.
+    Clients send: project_name, invoice_type, gross_billed, gross_certified_billed.
     """
 
     queryset = InvoicingInformation.objects.all()
@@ -233,8 +273,8 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
 
         Supported query params:
           ?project_name=  — partial, case-insensitive project name filter
-          ?invoice_type=  — exact invoice type filter (PMC | Contractor)
-          ?search=        — free-text search across projectName
+          ?invoice_type=  — exact invoice type filter (SCL | CONTRACTOR)
+          ?search=        — free-text search across project_name
         """
         return _build_queryset(
             project_name=self.request.query_params.get("project_name"),
@@ -307,14 +347,14 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
         operation_summary="Create Invoice Record",
         operation_description=(
             "Create a new invoicing record for a project and invoice type.\n\n"
-            "**One record per (projectName, invoiceType) pair.**\n\n"
-            "**Auto-calculated field (do not send):**\n"
-            "- `netDue` = netBilledWithoutVAT − netCollected\n\n"
-            "**Constraint:** netCollected cannot exceed netBilledWithoutVAT.\n\n"
+            "**One record per (project_name, invoice_type) pair.**\n\n"
+            "**Auto-calculated (do not send):**\n"
+            "- `difference` = gross_billed − gross_certified_billed\n"
+            "- `certification_efficiency` = (gross_certified_billed / gross_billed) × 100\n\n"
             "**Example — create both types for the same project:**\n"
             "```\n"
-            'POST { "projectName": "PMC Smart City", "invoiceType": "PMC", ... }\n'
-            'POST { "projectName": "PMC Smart City", "invoiceType": "Contractor", ... }\n'
+            'POST { "project_name": "Thane Project", "invoice_type": "SCL", ... }\n'
+            'POST { "project_name": "Thane Project", "invoice_type": "CONTRACTOR", ... }\n'
             "```"
         ),
         request_body=_INV_POST_SCHEMA,
@@ -326,31 +366,20 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
     )
     def create(self, request, *args, **kwargs):
         """
-        Create or update an invoicing record (upsert by projectName + invoiceType).
+        Create or update an invoicing record (upsert by project_name + invoice_type).
 
-        If a record already exists for the given (projectName, invoiceType) pair
-        it is updated in-place rather than returning a 400/500 uniqueness error.
-        This matches the expected dashboard behaviour where the frontend always
-        POSTs the latest values for a project.
-
-        Auto-calculates netDue = netBilledWithoutVAT - netCollected.
+        If a record already exists for the given pair it is updated in-place.
         """
-        project_name = str(request.data.get("projectName", "")).strip()
-        invoice_type = str(request.data.get("invoiceType", "")).strip()
+        payload = _normalise_payload(request.data)
+        project_name = str(payload.get("project_name", "")).strip()
+        invoice_type = payload.get("invoice_type", "")
 
-        # Strip read-only / auto-calculated fields the frontend should not send
-        _READ_ONLY = {"netDue", "id", "created_at", "updated_at"}
-        payload = {k: v for k, v in request.data.items() if k not in _READ_ONLY}
-
-        # ------------------------------------------------------------------
-        # Upsert: if a record already exists for this pair, update it.
-        # ------------------------------------------------------------------
         existing = None
         if project_name and invoice_type:
             try:
                 existing = InvoicingInformation.objects.get(
-                    projectName__iexact=project_name,
-                    invoiceType=invoice_type,
+                    project_name__iexact=project_name,
+                    invoice_type=invoice_type,
                 )
             except InvoicingInformation.DoesNotExist:
                 pass
@@ -402,7 +431,7 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
             "Retrieve all invoicing records.\n\n"
             "**Supports filtering:**\n"
             "- `?project_name=` — partial, case-insensitive project name\n"
-            "- `?invoice_type=PMC` or `?invoice_type=Contractor`\n"
+            "- `?invoice_type=SCL` or `?invoice_type=CONTRACTOR`\n"
             "- `?search=` — free-text search across project names\n"
             "- Combine: `?project_name=Smart City&invoice_type=PMC`"
         ),
@@ -414,7 +443,7 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
             ),
             openapi.Parameter(
                 "invoice_type", openapi.IN_QUERY,
-                description='Filter by invoice type: "PMC" or "Contractor"',
+                description='Filter by invoice type: "SCL" or "CONTRACTOR"',
                 type=openapi.TYPE_STRING, required=False,
             ),
             openapi.Parameter(
@@ -517,7 +546,7 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
         operation_summary="Update Invoice Record",
         operation_description=(
             "Full or partial update of an invoicing record. "
-            "netDue is recalculated automatically after every update."
+            "difference and certification_efficiency are returned on every update."
         ),
         request_body=_INV_POST_SCHEMA,
         responses={
@@ -530,7 +559,6 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
     def update(self, request, *args, **kwargs):
         """
         Full update (PUT) of an invoicing record.
-        netDue is recomputed after update.
         """
         partial = kwargs.pop("partial", False)
 
@@ -542,8 +570,7 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
-        _READ_ONLY = {"netDue", "id", "created_at", "updated_at"}
-        payload = {k: v for k, v in request.data.items() if k not in _READ_ONLY}
+        payload = _normalise_payload(request.data)
 
         serializer = InvoicingInformationSerializer(
             instance, data=payload, partial=partial
@@ -598,8 +625,8 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
-        project_name = instance.projectName
-        invoice_type = instance.invoiceType
+        project_name = instance.project_name
+        invoice_type = instance.invoice_type
         instance.delete()
         self._invalidate_cache()
 
@@ -614,14 +641,14 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
 
     # -------------------------------------------------------------------------
     # GET /api/invoicing/project/{projectName}/
-    # Returns ALL invoice types for a given project (PMC + Contractor)
+    # Returns ALL invoice types for a given project (SCL + CONTRACTOR)
     # -------------------------------------------------------------------------
 
     @swagger_auto_schema(
         operation_summary="Get All Invoice Records by Project Name",
         operation_description=(
             "Retrieve all invoice type records for a given project.\n\n"
-            "Returns both PMC and Contractor records (if they exist).\n"
+            "Returns both SCL and CONTRACTOR records (if they exist).\n"
             "Useful for dashboard invoicing comparison tables."
         ),
         responses={
@@ -639,7 +666,7 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
     def get_by_project_name(self, request, projectName: str = None):
         """
         Retrieve all invoicing records for a project (all types).
-        Returns both PMC and Contractor records for the same project.
+        Returns both SCL and CONTRACTOR records for the same project.
         """
         if not projectName or not projectName.strip():
             return self._error("projectName is required.")
@@ -666,7 +693,7 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
         operation_summary="Get All Invoice Records by Invoice Type",
         operation_description=(
             "Retrieve all records for a specific invoice type across all projects.\n\n"
-            "Valid values: `PMC`, `Contractor`\n\n"
+            "Valid values: `SCL`, `CONTRACTOR` (legacy `PMC` / `Contractor` accepted)\n\n"
             "Useful for type-wise analytics and dashboard filtering."
         ),
         responses={
@@ -685,19 +712,20 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
     def get_by_invoice_type(self, request, invoiceType: str = None):
         """
         Retrieve all invoicing records for a specific invoice type.
-        Supports all projects filtered by PMC or Contractor.
+        Supports all projects filtered by SCL or CONTRACTOR.
         """
         if not invoiceType or not invoiceType.strip():
             return self._error("invoiceType is required.")
 
+        normalized = _normalize_invoice_type(invoiceType.strip())
         valid_types = [c.value for c in InvoicingInformation.InvoiceType]
-        if invoiceType.strip() not in valid_types:
+        if normalized not in valid_types:
             return self._error(
                 f"Invalid invoiceType '{invoiceType}'. "
                 f"Must be one of: {', '.join(valid_types)}."
             )
 
-        qs = _build_queryset(invoice_type=invoiceType.strip())
+        qs = _build_queryset(invoice_type=normalized)
 
         if not qs.exists():
             return self._error(
@@ -720,9 +748,9 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
         operation_description=(
             "Retrieve the exact invoicing record for a specific project + type.\n\n"
             "**Examples:**\n"
-            "- `GET /api/invoicing/project/PMC Smart City/type/PMC/`\n"
-            "- `GET /api/invoicing/project/PMC Smart City/type/Contractor/`\n\n"
-            "Ideal for dashboard KPI cards that display PMC and Contractor "
+            "- `GET /api/invoicing/project/Thane Project/type/SCL/`\n"
+            "- `GET /api/invoicing/project/Thane Project/type/CONTRACTOR/`\n\n"
+            "Ideal for dashboard KPI cards that display SCL and CONTRACTOR "
             "invoicing side-by-side."
         ),
         responses={
@@ -750,8 +778,9 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
         if not invoiceType or not invoiceType.strip():
             return self._error("invoiceType is required.")
 
+        normalized = _normalize_invoice_type(invoiceType.strip())
         valid_types = [c.value for c in InvoicingInformation.InvoiceType]
-        if invoiceType.strip() not in valid_types:
+        if normalized not in valid_types:
             return self._error(
                 f"Invalid invoiceType '{invoiceType}'. "
                 f"Must be one of: {', '.join(valid_types)}."
@@ -759,8 +788,8 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
 
         try:
             instance = InvoicingInformation.objects.get(
-                projectName__iexact=projectName.strip(),
-                invoiceType=invoiceType.strip(),
+                project_name__iexact=projectName.strip(),
+                invoice_type=normalized,
             )
         except InvoicingInformation.DoesNotExist:
             return self._error(

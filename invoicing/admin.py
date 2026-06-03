@@ -4,6 +4,7 @@ Django admin registration for the Invoicing app.
 
 from django.contrib import admin
 
+from .controllers.invoicing_metrics import metrics_from_record
 from .models.invoicing_information import InvoicingInformation
 
 
@@ -12,37 +13,43 @@ class InvoicingInformationAdmin(admin.ModelAdmin):
     """Admin view for Invoicing Information records."""
 
     list_display = [
-        "projectName",
-        "invoiceType",
-        "grossBilled",
-        "netBilledWithoutVAT",
-        "netCollected",
-        "netDue",
+        "project_name",
+        "invoice_type",
+        "gross_billed",
+        "gross_certified_billed",
+        "display_difference",
+        "display_certification_efficiency",
         "created_at",
         "updated_at",
     ]
-    list_filter = ["invoiceType", "created_at"]
-    search_fields = ["projectName"]
-    readonly_fields = ["netDue", "created_at", "updated_at"]
-    ordering = ["projectName", "invoiceType"]
+    list_filter = ["invoice_type", "created_at"]
+    search_fields = ["project_name"]
+    readonly_fields = [
+        "display_difference",
+        "display_certification_efficiency",
+        "created_at",
+        "updated_at",
+    ]
+    ordering = ["project_name", "invoice_type"]
 
     fieldsets = (
-        ("Project & Type", {"fields": ("projectName", "invoiceType")}),
+        ("Project & Type", {"fields": ("project_name", "invoice_type")}),
         (
             "Billing Information",
             {
                 "fields": (
-                    "grossBilled",
-                    "netBilledWithoutVAT",
-                    "netCollected",
+                    "gross_billed",
+                    "gross_certified_billed",
                 ),
             },
         ),
         (
-            "Auto-Calculated",
+            "Computed (read-only)",
             {
-                "fields": ("netDue",),
-                "description": "Calculated automatically on save. Cannot be edited directly.",
+                "fields": (
+                    "display_difference",
+                    "display_certification_efficiency",
+                ),
             },
         ),
         (
@@ -53,3 +60,11 @@ class InvoicingInformationAdmin(admin.ModelAdmin):
             },
         ),
     )
+
+    @admin.display(description="Difference")
+    def display_difference(self, obj):
+        return metrics_from_record(obj)["difference"]
+
+    @admin.display(description="Certification efficiency (%)")
+    def display_certification_efficiency(self, obj):
+        return metrics_from_record(obj)["certification_efficiency"]

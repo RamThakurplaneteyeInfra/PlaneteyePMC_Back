@@ -109,7 +109,8 @@ urlpatterns = [
     # Drawings Management API
     path('api/', include('drawings.urls')),
 
-    # Correspondence & Delivery Status API
+    # Correspondence document tracking API
+    # → /api/correspondence-documents/  (+ /dashboard/)
     path('api/', include('correspondence.urls')),
 
     # Planned vs Earned Value API

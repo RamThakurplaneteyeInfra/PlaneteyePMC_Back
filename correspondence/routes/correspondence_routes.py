@@ -1,28 +1,29 @@
 """
-Correspondence URL routes.
+Correspondence document routes.
 
-Uses DRF DefaultRouter to auto-generate standard REST endpoints:
-
-  POST   /api/correspondence/                          -> create
-  GET    /api/correspondence/                          -> list
-  GET    /api/correspondence/{id}/                     -> retrieve
-  PUT    /api/correspondence/{id}/                     -> update (full)
-  PATCH  /api/correspondence/{id}/                     -> partial update
-  DELETE /api/correspondence/{id}/                     -> destroy
-  GET    /api/correspondence/project/{projectName}/                    -> project summary (legacy)
-  GET    /api/correspondence/project/{projectName}/month/{m}/year/{y}/
-  GET    /api/correspondence/project/{projectName}/summary/
-  GET    /api/correspondence/project/{projectName}/year/{year}/summary/
-  GET    /api/correspondence/project/{projectName}/dashboard/
+  POST   /api/correspondence-documents/
+  GET    /api/correspondence-documents/
+  GET    /api/correspondence-documents/{id}/
+  PATCH  /api/correspondence-documents/{id}/
+  DELETE /api/correspondence-documents/{id}/
+  GET    /api/correspondence-documents/dashboard/?project_name=&month=&year=
 """
 
 from rest_framework.routers import DefaultRouter
 
-from ..controllers.correspondence_controller import CorrespondenceViewSet
+from ..controllers.correspondence_controller import CorrespondenceDocumentViewSet
 
-# Register the ViewSet — the router generates all standard URL patterns
 router = DefaultRouter()
-router.register(r"correspondence", CorrespondenceViewSet, basename="correspondence")
+router.register(
+    r"correspondence-documents",
+    CorrespondenceDocumentViewSet,
+    basename="correspondence-documents",
+)
+# Legacy frontend path (same ViewSet as correspondence-documents)
+router.register(
+    r"correspondence",
+    CorrespondenceDocumentViewSet,
+    basename="correspondence",
+)
 
-# urlpatterns is imported by correspondence/urls.py
 urlpatterns = router.urls

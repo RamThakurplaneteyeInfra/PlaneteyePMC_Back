@@ -1,17 +1,15 @@
 """
 Correspondence app URL configuration.
 
-All routes are defined in routes/correspondence_routes.py and included here
-so backend/urls.py only needs a single include().
+  POST   /api/correspondence-documents/
+  GET    /api/correspondence-documents/
+  GET    /api/correspondence-documents/{id}/
+  PATCH  /api/correspondence-documents/{id}/
+  DELETE /api/correspondence-documents/{id}/
+  GET    /api/correspondence-documents/dashboard/?project_name=&month=&year=
 
-Final URL structure (when mounted at /api/ in backend/urls.py):
-  POST   /api/correspondence/
-  GET    /api/correspondence/
-  GET    /api/correspondence/{id}/
-  PUT    /api/correspondence/{id}/
-  PATCH  /api/correspondence/{id}/
-  DELETE /api/correspondence/{id}/
-  GET    /api/correspondence/project/{projectName}/
+Legacy aliases (same handlers):
+  /api/correspondence/  →  /api/correspondence-documents/
 """
 
 from django.urls import include, path

@@ -1,17 +1,8 @@
 """
 Invoicing Information Serializer.
 
-Handles input validation and output formatting for InvoicingInformation records.
-
-Calculated field is always read-only — derived by the model's save():
-  - netDue = netBilledWithoutVAT - netCollected
-
-Validation rules:
-  - projectName        : required, non-blank string
-  - invoiceType        : required, must be one of InvoicingInformation.InvoiceType choices
-  - grossBilled        : Decimal >= 0
-  - netBilledWithoutVAT: Decimal >= 0
-  - netCollected       : Decimal >= 0, must not exceed netBilledWithoutVAT
+Writable: project_name, invoice_type, gross_billed, gross_certified_billed
+Computed: difference, certification_efficiency
 """
 
 from decimal import Decimal
@@ -19,36 +10,51 @@ from decimal import Decimal
 from rest_framework import serializers
 
 from ..models.invoicing_information import InvoicingInformation
+from .invoicing_metrics import metrics_from_record
 
-# Reusable zero constant
 _ZERO = Decimal("0.00")
 
 
+def _normalize_invoice_type(value: str) -> str:
+    if not value:
+        return value
+    normalized = value.strip().upper()
+    if normalized == "PMC":
+        return InvoicingInformation.InvoiceType.SCL
+    if normalized == "CONTRACTOR":
+        return InvoicingInformation.InvoiceType.CONTRACTOR
+    if normalized == "SCL":
+        return InvoicingInformation.InvoiceType.SCL
+    return value.strip()
+
+
 class InvoicingInformationSerializer(serializers.ModelSerializer):
-    """
-    Full serializer for InvoicingInformation model.
+    difference = serializers.SerializerMethodField()
+    certification_efficiency = serializers.SerializerMethodField()
 
-    Read-only fields (auto-calculated by the model on every save):
-      - id
-      - netDue
-      - created_at
-      - updated_at
-
-    Writable fields:
-      - projectName         (required)
-      - invoiceType         (required, enum: PMC | Contractor)
-      - grossBilled         (>= 0)
-      - netBilledWithoutVAT (>= 0)
-      - netCollected        (>= 0, must not exceed netBilledWithoutVAT)
-    """
+    # Legacy read aliases
+    projectName = serializers.SerializerMethodField()
+    invoiceType = serializers.SerializerMethodField()
+    grossBilled = serializers.SerializerMethodField()
+    grossCertifiedBilled = serializers.SerializerMethodField()
+    netBilledWithoutVAT = serializers.SerializerMethodField()
+    netCollected = serializers.SerializerMethodField()
+    netDue = serializers.SerializerMethodField()
 
     class Meta:
         model = InvoicingInformation
         fields = [
             "id",
+            "project_name",
             "projectName",
+            "invoice_type",
             "invoiceType",
+            "gross_billed",
             "grossBilled",
+            "gross_certified_billed",
+            "grossCertifiedBilled",
+            "difference",
+            "certification_efficiency",
             "netBilledWithoutVAT",
             "netCollected",
             "netDue",
@@ -57,86 +63,97 @@ class InvoicingInformationSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "id",
+            "projectName",
+            "invoiceType",
+            "grossBilled",
+            "grossCertifiedBilled",
+            "difference",
+            "certification_efficiency",
+            "netBilledWithoutVAT",
+            "netCollected",
             "netDue",
             "created_at",
             "updated_at",
         ]
 
-    # -------------------------------------------------------------------------
-    # Field-level validation
-    # -------------------------------------------------------------------------
+    def get_projectName(self, obj) -> str:
+        return obj.project_name
 
-    def validate_projectName(self, value: str) -> str:
-        """Strip whitespace and reject blank project names."""
-        if not value or not value.strip():
-            raise serializers.ValidationError("projectName cannot be blank.")
-        return value.strip()
+    def get_invoiceType(self, obj) -> str:
+        return obj.invoice_type
 
-    def validate_invoiceType(self, value: str) -> str:
-        """Validate invoiceType is one of the allowed enum values."""
-        valid = [c.value for c in InvoicingInformation.InvoiceType]
-        if value not in valid:
+    def get_grossBilled(self, obj):
+        return obj.gross_billed
+
+    def get_grossCertifiedBilled(self, obj):
+        return obj.gross_certified_billed
+
+    def get_difference(self, obj) -> Decimal:
+        return metrics_from_record(obj)["difference"]
+
+    def get_certification_efficiency(self, obj) -> Decimal:
+        return metrics_from_record(obj)["certification_efficiency"]
+
+    def get_netBilledWithoutVAT(self, obj):
+        return obj.gross_billed
+
+    def get_netCollected(self, obj):
+        return obj.gross_certified_billed
+
+    def get_netDue(self, obj) -> Decimal:
+        return self.get_difference(obj)
+
+    def to_internal_value(self, data):
+        if hasattr(data, "copy"):
+            data = data.copy()
+        else:
+            data = dict(data)
+
+        if "projectName" in data and "project_name" not in data:
+            data["project_name"] = data["projectName"]
+        if "invoiceType" in data and "invoice_type" not in data:
+            data["invoice_type"] = data["invoiceType"]
+        if "grossBilled" in data and "gross_billed" not in data:
+            data["gross_billed"] = data["grossBilled"]
+        if "grossCertifiedBilled" in data and "gross_certified_billed" not in data:
+            data["gross_certified_billed"] = data["grossCertifiedBilled"]
+        if "netBilledWithoutVAT" in data and "gross_billed" not in data:
+            data["gross_billed"] = data["netBilledWithoutVAT"]
+        if "netCollected" in data and "gross_certified_billed" not in data:
+            data["gross_certified_billed"] = data["netCollected"]
+
+        if "invoice_type" in data:
+            data["invoice_type"] = _normalize_invoice_type(str(data["invoice_type"]))
+
+        return super().to_internal_value(data)
+
+    def validate_project_name(self, value: str) -> str:
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("project_name cannot be blank.")
+        return value
+
+    def validate_invoice_type(self, value: str) -> str:
+        value = _normalize_invoice_type(value)
+        allowed = {
+            InvoicingInformation.InvoiceType.SCL,
+            InvoicingInformation.InvoiceType.CONTRACTOR,
+        }
+        if value not in allowed:
             raise serializers.ValidationError(
-                f"invoiceType must be one of: {', '.join(valid)}. Got '{value}'."
+                "invoice_type must be SCL or CONTRACTOR."
             )
         return value
 
-    def _validate_non_negative_decimal(
-        self, value: Decimal, field_name: str
-    ) -> Decimal:
-        """Reusable helper: ensure Decimal field is >= 0."""
+    def _validate_non_negative(self, value: Decimal, field_name: str) -> Decimal:
         if value is not None and value < 0:
             raise serializers.ValidationError(
                 f"{field_name} must be >= 0. Negative values are not allowed."
             )
         return value if value is not None else _ZERO
 
-    def validate_grossBilled(self, value: Decimal) -> Decimal:
-        return self._validate_non_negative_decimal(value, "grossBilled")
+    def validate_gross_billed(self, value: Decimal) -> Decimal:
+        return self._validate_non_negative(value, "gross_billed")
 
-    def validate_netBilledWithoutVAT(self, value: Decimal) -> Decimal:
-        return self._validate_non_negative_decimal(value, "netBilledWithoutVAT")
-
-    def validate_netCollected(self, value: Decimal) -> Decimal:
-        return self._validate_non_negative_decimal(value, "netCollected")
-
-    # -------------------------------------------------------------------------
-    # Cross-field validation
-    # -------------------------------------------------------------------------
-
-    def validate(self, attrs: dict) -> dict:
-        """
-        Cross-field validation:
-          netCollected must not exceed netBilledWithoutVAT.
-
-        For partial updates, fall back to existing instance values
-        so validation is accurate even when only one field is sent.
-
-        Note: uniqueness of (projectName, invoiceType) is enforced at the
-        controller level via upsert logic — not here — so POSTing an existing
-        pair updates the record rather than raising a validation error.
-        """
-        instance = self.instance  # None on create, existing object on update
-
-        # ── Resolve effective values (partial-update safe) ──────────────────
-        net_billed = attrs.get(
-            "netBilledWithoutVAT",
-            getattr(instance, "netBilledWithoutVAT", _ZERO) if instance else _ZERO,
-        )
-        net_collected = attrs.get(
-            "netCollected",
-            getattr(instance, "netCollected", _ZERO) if instance else _ZERO,
-        )
-
-        # ── netCollected <= netBilledWithoutVAT ──────────────────────────────
-        if net_collected > net_billed:
-            raise serializers.ValidationError(
-                {
-                    "netCollected": (
-                        f"netCollected ({net_collected}) cannot exceed "
-                        f"netBilledWithoutVAT ({net_billed})."
-                    )
-                }
-            )
-
-        return attrs
+    def validate_gross_certified_billed(self, value: Decimal) -> Decimal:
+        return self._validate_non_negative(value, "gross_certified_billed")
