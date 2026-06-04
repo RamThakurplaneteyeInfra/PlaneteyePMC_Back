@@ -39,11 +39,22 @@ ENV/
 # Scripts
 scripts/
 
-# IDE
+# IDE / agent tooling (not part of the Django app)
+.claude/
+.kilo/
 .vscode/
 .idea/
 *.swp
 *.swo
+
+# Ad-hoc local scripts and dumps (use manage.py test / pytest instead)
+/test_*.py
+/debug_*.py
+/quick_test_*.py
+/check_test_data.py
+/result.json
+/*_postman_collection.json
+/thane_project_dpr.json
 
 # OS
 .DS_Store

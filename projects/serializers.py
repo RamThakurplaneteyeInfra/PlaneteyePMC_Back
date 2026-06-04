@@ -1,4 +1,8 @@
 from rest_framework import serializers
+from .bottleneck_sync import (
+    bottlenecks_to_left_text,
+    sync_bottlenecks_from_dashboard,
+)
 from .models import Project, Site, ProjectDashboardData, ProjectLog, ProjectLogEntry
 
 class SiteSerializer(serializers.ModelSerializer):
@@ -367,20 +371,23 @@ class ProjectLogSerializer(serializers.ModelSerializer):
     def validate(self, data):
         entries_data = self.initial_data.get('entries', [])
         
-        # Validate row_order is unique per entry_type
-        seen_orders = {'issue_concern': set(), 'risk_action': set()}
-        
+        seen_orders = {
+            ProjectLogEntry.EntryType.ISSUE_CONCERN: set(),
+            ProjectLogEntry.EntryType.RISK_ACTION: set(),
+            ProjectLogEntry.EntryType.BOTTLENECK_DASHBOARD: set(),
+        }
+
         for entry in entries_data:
             entry_type = entry.get('entry_type')
             row_order = entry.get('row_order', 0)
-            
+
             if entry_type in seen_orders:
                 if row_order in seen_orders[entry_type]:
                     raise serializers.ValidationError(
                         f"Duplicate row_order {row_order} for entry_type {entry_type}"
                     )
                 seen_orders[entry_type].add(row_order)
-        
+
         return data
 
     def create(self, validated_data):
@@ -390,31 +397,45 @@ class ProjectLogSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         entries_data = self.initial_data.get('entries', [])
-        
-        # Delete existing entries and recreate (simple & reliable for this UI pattern)
+        request = self.context.get('request')
+        user = request.user if request and request.user.is_authenticated else None
+        project_id = instance.project_id
+
         instance.entries.all().delete()
-        
+
         for entry_data in entries_data:
+            entry_type = entry_data.get('entry_type')
+            left_text = entry_data.get('left_text', '')
+            right_text = entry_data.get('right_text', '')
+
+            if entry_type == ProjectLogEntry.EntryType.BOTTLENECK_DASHBOARD:
+                left_text = sync_bottlenecks_from_dashboard(
+                    project_id, left_text, user=user
+                )
+
             ProjectLogEntry.objects.create(
                 project_log=instance,
-                entry_type=entry_data.get('entry_type'),
-                left_text=entry_data.get('left_text', ''),
-                right_text=entry_data.get('right_text', ''),
-                row_order=entry_data.get('row_order', 0)
+                entry_type=entry_type,
+                left_text=left_text,
+                right_text=right_text,
+                row_order=entry_data.get('row_order', 0),
             )
-        
+
         instance.save()
         return instance
 
     def to_representation(self, instance):
-        """Ensure entries are properly ordered in response."""
+        """Ensure entries are properly ordered; refresh bottleneck JSON from DB."""
         representation = super().to_representation(instance)
         entries = representation.get('entries', [])
-        
-        # Sort by entry_type then row_order
+
+        for entry in entries:
+            if entry.get('entry_type') == ProjectLogEntry.EntryType.BOTTLENECK_DASHBOARD:
+                entry['left_text'] = bottlenecks_to_left_text(instance.project_id)
+
         sorted_entries = sorted(
-            entries, 
-            key=lambda x: (x.get('entry_type', ''), x.get('row_order', 0))
+            entries,
+            key=lambda x: (x.get('entry_type', ''), x.get('row_order', 0)),
         )
         representation['entries'] = sorted_entries
         return representation

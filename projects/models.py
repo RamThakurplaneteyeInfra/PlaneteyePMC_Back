@@ -296,6 +296,7 @@ class ProjectLogEntry(models.Model):
     class EntryType(models.TextChoices):
         ISSUE_CONCERN = 'issue_concern', 'Issue / Concern'
         RISK_ACTION = 'risk_action', 'Risk / Action'
+        BOTTLENECK_DASHBOARD = 'bottleneck_dashboard', 'Bottleneck Dashboard'
 
     project_log = models.ForeignKey(
         ProjectLog, 
@@ -303,7 +304,7 @@ class ProjectLogEntry(models.Model):
         related_name='entries'
     )
     entry_type = models.CharField(
-        max_length=20, 
+        max_length=32,
         choices=EntryType.choices,
         db_index=True
     )

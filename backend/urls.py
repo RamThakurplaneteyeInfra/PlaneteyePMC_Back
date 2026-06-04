@@ -143,6 +143,9 @@ urlpatterns = [
 
     # Site Progress Images (Cloudinary)
     path('api/', include('site_images.urls')),
+
+    # Bottleneck register (Issue / Concern / Risk / Action)
+    path('api/', include('bottlenecks.urls')),
 ]
 
 if settings.DEBUG:

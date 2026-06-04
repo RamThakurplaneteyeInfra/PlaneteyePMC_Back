@@ -79,6 +79,7 @@ INSTALLED_APPS = [
     'project_equipment',
     'project_dates',
     'site_images.apps.SiteImagesConfig',
+    'bottlenecks',
 ]
 
 MIDDLEWARE = [
