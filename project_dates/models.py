@@ -166,9 +166,9 @@ class ProjectDates(models.Model):
 
 class ProjectBGStatus(models.Model):
     """
-    Bank Guarantee (BG) Status — optional dates per project.
+    Bank Guarantee (BG) Status — optional due/updated dates per project.
 
-    One record per project. Both dates are optional.
+    One record per project. Statuses are calculated dynamically in serializers/helpers.
     """
 
     project = models.OneToOneField(
@@ -177,15 +177,25 @@ class ProjectBGStatus(models.Model):
         related_name="bg_status_record",
         help_text="Project this BG status belongs to",
     )
-    contractor_bg_date = models.DateField(
+    contractor_bg_due_date = models.DateField(
         null=True,
         blank=True,
-        help_text="Contractor bank guarantee date (optional)",
+        help_text="Contractor bank guarantee due date for the current monthly milestone",
     )
-    scl_bg_date = models.DateField(
+    contractor_bg_updated_date = models.DateField(
         null=True,
         blank=True,
-        help_text="SCL bank guarantee date (optional)",
+        help_text="Contractor bank guarantee updated date",
+    )
+    scl_bg_due_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="SCL bank guarantee due date for the current monthly milestone",
+    )
+    scl_bg_updated_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="SCL bank guarantee updated date",
     )
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)

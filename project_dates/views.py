@@ -43,7 +43,7 @@ from rest_framework.response import Response
 from projects.models import Project
 
 from .bg_serializers import ProjectBGStatusWriteSerializer
-from .bg_status import bg_status_dict, upsert_bg_status
+from .bg_status import BG_STATUSES, LEGACY_BG_FIELD_MAP, bg_status_dict, upsert_bg_status
 from .export import project_dates_csv_response, project_dates_rows
 from .filters import ProjectDatesFilter
 from .models import ProjectBGStatus, ProjectDates
@@ -65,6 +65,110 @@ class ProjectDatesPagination(PageNumberPagination):
 # =============================================================================
 # Swagger schema helpers
 # =============================================================================
+
+_BG_STATUS_SCHEMA = openapi.Schema(
+    type=openapi.TYPE_OBJECT,
+    properties={
+        "contractor_bg_date": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            format="date",
+            nullable=True,
+            description="Legacy alias for contractor_bg_updated_date",
+        ),
+        "contractor_bg_due_date": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            format="date",
+            nullable=True,
+            description="Contractor bank guarantee due date for the current monthly milestone",
+        ),
+        "contractor_bg_updated_date": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            format="date",
+            nullable=True,
+            description="Contractor bank guarantee updated date",
+        ),
+        "contractor_bg_status": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            enum=BG_STATUSES,
+            description=(
+                "UPDATED when contractor_bg_updated_date is on or before contractor_bg_due_date; "
+                "NOT_UPDATED when the due date has passed without an on-time update; "
+                "YET_TO_UPDATE when the due date has not arrived and no update exists."
+            ),
+        ),
+        "scl_bg_date": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            format="date",
+            nullable=True,
+            description="Legacy alias for scl_bg_updated_date",
+        ),
+        "scl_bg_due_date": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            format="date",
+            nullable=True,
+            description="SCL bank guarantee due date for the current monthly milestone",
+        ),
+        "scl_bg_updated_date": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            format="date",
+            nullable=True,
+            description="SCL bank guarantee updated date",
+        ),
+        "scl_bg_status": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            enum=BG_STATUSES,
+            description=(
+                "UPDATED when scl_bg_updated_date is on or before scl_bg_due_date; "
+                "NOT_UPDATED when the due date has passed without an on-time update; "
+                "YET_TO_UPDATE when the due date has not arrived and no update exists."
+            ),
+        ),
+    },
+)
+
+
+_BG_STATUS_WRITE_SCHEMA = openapi.Schema(
+    type=openapi.TYPE_OBJECT,
+    properties={
+        "contractor_bg_date": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            format="date",
+            nullable=True,
+            description="Legacy alias for contractor_bg_updated_date",
+        ),
+        "contractor_bg_due_date": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            format="date",
+            nullable=True,
+            description="Contractor bank guarantee due date for the current monthly milestone",
+        ),
+        "contractor_bg_updated_date": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            format="date",
+            nullable=True,
+            description="Contractor bank guarantee updated date",
+        ),
+        "scl_bg_date": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            format="date",
+            nullable=True,
+            description="Legacy alias for scl_bg_updated_date",
+        ),
+        "scl_bg_due_date": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            format="date",
+            nullable=True,
+            description="SCL bank guarantee due date for the current monthly milestone",
+        ),
+        "scl_bg_updated_date": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            format="date",
+            nullable=True,
+            description="SCL bank guarantee updated date",
+        ),
+    },
+)
+
 
 _PD_POST_SCHEMA = openapi.Schema(
     type=openapi.TYPE_OBJECT,
@@ -101,6 +205,7 @@ _PD_RESPONSE_SCHEMA = openapi.Schema(
                 "delay_days": openapi.Schema(type=openapi.TYPE_INTEGER, description="Forecast delay: (forecast_finish - contract_finish).days", example=92),
                 "eot_delay_days": openapi.Schema(type=openapi.TYPE_INTEGER, description="EOT extension: (eot_date - contract_finish).days", example=183),
                 "current_delay": openapi.Schema(type=openapi.TYPE_INTEGER, description="Live overdue counter: (today - contract_finish).days. Positive = overdue.", example=15),
+                "bg_status": _BG_STATUS_SCHEMA,
                 "created_at": openapi.Schema(type=openapi.TYPE_STRING, example="2026-05-01T10:00:00Z"),
                 "updated_at": openapi.Schema(type=openapi.TYPE_STRING, example="2026-05-28T12:00:00Z"),
             },
@@ -354,55 +459,26 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
         method="post",
         operation_summary="Create BG Status for a Project",
         operation_description=(
-            "Create or update optional bank guarantee dates. "
-            "Both fields are optional; returns 201 when a new record is created."
+            "Create or update optional bank guarantee due/updated dates. "
+            "Statuses are calculated dynamically from due dates, updated dates, and timezone.now().date(). "
+            "The legacy contractor_bg_date and scl_bg_date fields remain accepted as aliases for updated dates."
         ),
-        request_body=openapi.Schema(
-            type=openapi.TYPE_OBJECT,
-            properties={
-                "contractor_bg_date": openapi.Schema(
-                    type=openapi.TYPE_STRING, format="date", nullable=True
-                ),
-                "scl_bg_date": openapi.Schema(
-                    type=openapi.TYPE_STRING, format="date", nullable=True
-                ),
-            },
-        ),
-        responses={201: "BG Status created", 200: "BG Status updated", 404: "Project not found"},
+        request_body=_BG_STATUS_WRITE_SCHEMA,
+        responses={201: _BG_STATUS_SCHEMA, 200: _BG_STATUS_SCHEMA, 404: "Project not found"},
         tags=["Project Dates"],
     )
     @swagger_auto_schema(
         method="patch",
         operation_summary="Update BG Status for a Project (partial)",
-        request_body=openapi.Schema(
-            type=openapi.TYPE_OBJECT,
-            properties={
-                "contractor_bg_date": openapi.Schema(
-                    type=openapi.TYPE_STRING, format="date", nullable=True
-                ),
-                "scl_bg_date": openapi.Schema(
-                    type=openapi.TYPE_STRING, format="date", nullable=True
-                ),
-            },
-        ),
-        responses={200: "BG Status payload", 404: "Project not found"},
+        request_body=_BG_STATUS_WRITE_SCHEMA,
+        responses={200: _BG_STATUS_SCHEMA, 404: "Project not found"},
         tags=["Project Dates"],
     )
     @swagger_auto_schema(
         method="put",
         operation_summary="Update BG Status for a Project",
-        request_body=openapi.Schema(
-            type=openapi.TYPE_OBJECT,
-            properties={
-                "contractor_bg_date": openapi.Schema(
-                    type=openapi.TYPE_STRING, format="date", nullable=True
-                ),
-                "scl_bg_date": openapi.Schema(
-                    type=openapi.TYPE_STRING, format="date", nullable=True
-                ),
-            },
-        ),
-        responses={200: "BG Status payload", 404: "Project not found"},
+        request_body=_BG_STATUS_WRITE_SCHEMA,
+        responses={200: _BG_STATUS_SCHEMA, 404: "Project not found"},
         tags=["Project Dates"],
     )
     @action(
@@ -440,10 +516,17 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
 
         validated = serializer.validated_data
         update_data = {}
-        if "contractor_bg_date" in request.data:
-            update_data["contractor_bg_date"] = validated.get("contractor_bg_date")
-        if "scl_bg_date" in request.data:
-            update_data["scl_bg_date"] = validated.get("scl_bg_date")
+        for field in [
+            "contractor_bg_due_date",
+            "contractor_bg_updated_date",
+            "scl_bg_due_date",
+            "scl_bg_updated_date",
+        ]:
+            if field in request.data:
+                update_data[field] = validated.get(field)
+        for legacy_field, model_field in LEGACY_BG_FIELD_MAP.items():
+            if legacy_field in request.data:
+                update_data[model_field] = validated.get(model_field)
 
         existed = ProjectBGStatus.objects.filter(project=project).exists()
 
@@ -493,17 +576,7 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
                                 "project_name": openapi.Schema(type=openapi.TYPE_STRING, example="Thane Project"),
                                 "scl": openapi.Schema(type=openapi.TYPE_OBJECT, nullable=True),
                                 "contractor": openapi.Schema(type=openapi.TYPE_OBJECT, nullable=True),
-                                "bg_status": openapi.Schema(
-                                    type=openapi.TYPE_OBJECT,
-                                    properties={
-                                        "contractor_bg_date": openapi.Schema(
-                                            type=openapi.TYPE_STRING, nullable=True
-                                        ),
-                                        "scl_bg_date": openapi.Schema(
-                                            type=openapi.TYPE_STRING, nullable=True
-                                        ),
-                                    },
-                                ),
+                                "bg_status": _BG_STATUS_SCHEMA,
                             },
                         ),
                     },

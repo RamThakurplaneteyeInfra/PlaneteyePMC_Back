@@ -23,6 +23,7 @@ from .controllers.correspondence_metrics import (
     scl_delivered_metrics,
 )
 from .models.correspondence import CorrespondenceDocument
+from .models.scl_delivered_summary import SCLDeliveredCorrespondenceSummary
 
 
 class CorrespondenceMetricsTest(TestCase):
@@ -177,8 +178,11 @@ class CorrespondenceDocumentAPITest(APITestCase):
             "month": 6,
             "year": 2026,
             "view": "cumulative",
+            "client_received": 2,
             "client_delivered": 1,
+            "contractor_received": 3,
             "contractor_delivered": 1,
+            "other_agency_received": 4,
             "other_agency_delivered": 1,
         }
         data.update(overrides)
@@ -186,6 +190,9 @@ class CorrespondenceDocumentAPITest(APITestCase):
 
     def setUp(self):
         CorrespondenceDocument.objects.filter(
+            project_name__iexact="Thane Project"
+        ).delete()
+        SCLDeliveredCorrespondenceSummary.objects.filter(
             project_name__iexact="Thane Project"
         ).delete()
         authenticate_client(self.client)
@@ -352,14 +359,19 @@ class CorrespondenceDocumentAPITest(APITestCase):
             year=2026,
         )
         scl = scl_delivered_metrics(period_qs)
-        self.assertEqual(scl["client"], 1)
-        self.assertEqual(scl["contractor"], 1)
+        self.assertEqual(scl["client"]["received"], 1)
+        self.assertEqual(scl["client"]["delivered"], 1)
+        self.assertEqual(scl["client"]["pending"], 0)
+        self.assertEqual(scl["contractor"]["received"], 1)
+        self.assertEqual(scl["contractor"]["delivered"], 1)
         self.assertEqual(scl["total"], 2)
 
         dashboard = dashboard_response(
             "Thane Project", 6, 2026, period_qs, view=VIEW_MONTHLY
         )
-        self.assertEqual(dashboard["scl_delivered_correspondence"]["total"], 2)
+        self.assertEqual(
+            dashboard["scl_delivered_correspondence"]["totals"]["delivered"], 2
+        )
         self.assertEqual(len(dashboard["recent_documents"]), 2)
 
     def test_scl_delivered_post_creates_summary(self):
@@ -368,9 +380,18 @@ class CorrespondenceDocumentAPITest(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         scl = response.data["data"]["scl_delivered_correspondence"]
-        self.assertEqual(scl["client"], 1)
-        self.assertEqual(scl["contractor"], 1)
-        self.assertEqual(scl["other_agency"], 1)
+        self.assertEqual(scl["client"]["received"], 2)
+        self.assertEqual(scl["client"]["delivered"], 1)
+        self.assertEqual(scl["client"]["pending"], 1)
+        self.assertEqual(scl["contractor"]["received"], 3)
+        self.assertEqual(scl["contractor"]["delivered"], 1)
+        self.assertEqual(scl["contractor"]["pending"], 2)
+        self.assertEqual(scl["other_agency"]["received"], 4)
+        self.assertEqual(scl["other_agency"]["delivered"], 1)
+        self.assertEqual(scl["other_agency"]["pending"], 3)
+        self.assertEqual(scl["totals"]["received"], 9)
+        self.assertEqual(scl["totals"]["delivered"], 3)
+        self.assertEqual(scl["totals"]["pending"], 6)
         self.assertEqual(scl["total"], 3)
 
     def test_scl_delivered_post_upsert_then_patch(self):
@@ -382,7 +403,10 @@ class CorrespondenceDocumentAPITest(APITestCase):
         )
         self.assertEqual(patch.status_code, status.HTTP_200_OK)
         self.assertEqual(
-            patch.data["data"]["scl_delivered_correspondence"]["client"], 5
+            patch.data["data"]["scl_delivered_correspondence"]["client"]["delivered"], 5
+        )
+        self.assertEqual(
+            patch.data["data"]["scl_delivered_correspondence"]["client"]["pending"], 0
         )
 
     def test_scl_delivered_post_via_dashboard(self):
@@ -394,7 +418,7 @@ class CorrespondenceDocumentAPITest(APITestCase):
             (status.HTTP_200_OK, status.HTTP_201_CREATED),
         )
         self.assertEqual(
-            response.data["data"]["scl_delivered_correspondence"]["total"], 3
+            response.data["data"]["scl_delivered_correspondence"]["totals"]["delivered"], 3
         )
 
     def test_scl_delivered_post_via_short_url(self):
@@ -409,7 +433,7 @@ class CorrespondenceDocumentAPITest(APITestCase):
             (status.HTTP_200_OK, status.HTTP_201_CREATED),
         )
         self.assertEqual(
-            response.data["data"]["scl_delivered_correspondence"]["total"], 3
+            response.data["data"]["scl_delivered_correspondence"]["totals"]["delivered"], 3
         )
 
     def test_dashboard_returns_saved_scl_summary(self):
@@ -426,4 +450,77 @@ class CorrespondenceDocumentAPITest(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         scl = response.data["data"]["scl_delivered_correspondence"]
-        self.assertEqual(scl["total"], 3)
+        self.assertEqual(scl["totals"]["received"], 9)
+        self.assertEqual(scl["totals"]["delivered"], 3)
+        self.assertEqual(scl["totals"]["pending"], 6)
+
+    def test_scl_pending_when_received_exceeds_delivered(self):
+        response = self.client.post(
+            self.SCL_URL,
+            self._scl_payload(client_received=25, client_delivered=18),
+            format="json",
+        )
+        scl = response.data["data"]["scl_delivered_correspondence"]
+        self.assertEqual(scl["client"]["pending"], 7)
+
+    def test_scl_pending_when_received_equals_delivered(self):
+        response = self.client.post(
+            self.SCL_URL,
+            self._scl_payload(client_received=18, client_delivered=18),
+            format="json",
+        )
+        scl = response.data["data"]["scl_delivered_correspondence"]
+        self.assertEqual(scl["client"]["pending"], 0)
+
+    def test_scl_pending_never_negative_when_delivered_exceeds_received(self):
+        response = self.client.post(
+            self.SCL_URL,
+            self._scl_payload(client_received=10, client_delivered=18),
+            format="json",
+        )
+        scl = response.data["data"]["scl_delivered_correspondence"]
+        self.assertEqual(scl["client"]["pending"], 0)
+
+    def test_scl_null_values_are_treated_as_zero(self):
+        response = self.client.post(
+            self.SCL_URL,
+            self._scl_payload(
+                client_received=None,
+                client_delivered=None,
+                contractor_received=None,
+                contractor_delivered=None,
+                other_agency_received=None,
+                other_agency_delivered=None,
+            ),
+            format="json",
+        )
+        scl = response.data["data"]["scl_delivered_correspondence"]
+        self.assertEqual(scl["client"], {"received": 0, "delivered": 0, "pending": 0})
+        self.assertEqual(scl["totals"], {"received": 0, "delivered": 0, "pending": 0})
+
+    def test_scl_nested_payload_and_total_calculations(self):
+        response = self.client.post(
+            self.SCL_URL,
+            {
+                "project_name": "Thane Project",
+                "month": 6,
+                "year": 2026,
+                "scl_delivered_correspondence": {
+                    "client": {"received": 25, "delivered": 18},
+                    "contractor": {"received": 40, "delivered": 30},
+                    "other_agency": {"received": 15, "delivered": 10},
+                },
+            },
+            format="json",
+        )
+        scl = response.data["data"]["scl_delivered_correspondence"]
+        self.assertEqual(scl["client"], {"received": 25, "delivered": 18, "pending": 7})
+        self.assertEqual(
+            scl["contractor"],
+            {"received": 40, "delivered": 30, "pending": 10},
+        )
+        self.assertEqual(
+            scl["other_agency"],
+            {"received": 15, "delivered": 10, "pending": 5},
+        )
+        self.assertEqual(scl["totals"], {"received": 80, "delivered": 58, "pending": 22})

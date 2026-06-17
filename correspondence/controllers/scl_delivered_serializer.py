@@ -15,27 +15,36 @@ def _parse_count(value) -> int:
         raise serializers.ValidationError("Count must be a non-negative integer.")
 
 
-def extract_scl_counts(data: dict) -> tuple[int, int, int]:
-    """Read client / contractor / other_agency from flat or nested payload."""
+def _nested_value(nested: dict, category: str, metric: str):
+    value = nested.get(category)
+    if isinstance(value, dict):
+        return value.get(metric)
+    if metric == "delivered":
+        return value
+    return None
+
+
+def extract_scl_counts(data: dict) -> dict:
+    """Read SCL received/delivered counts from flat, nested, or legacy payloads."""
     nested = data.get("scl_delivered_correspondence") or {}
 
-    client = (
-        data.get("client")
-        if data.get("client") is not None
-        else data.get("client_delivered", nested.get("client"))
-    )
-    contractor = (
-        data.get("contractor")
-        if data.get("contractor") is not None
-        else data.get("contractor_delivered", nested.get("contractor"))
-    )
-    other_agency = (
-        data.get("other_agency")
-        if data.get("other_agency") is not None
-        else data.get("other_agency_delivered", nested.get("other_agency"))
-    )
+    counts = {}
+    for category in ("client", "contractor", "other_agency"):
+        received_key = f"{category}_received"
+        delivered_key = f"{category}_delivered"
+        legacy_delivered = data.get(category)
 
-    return _parse_count(client), _parse_count(contractor), _parse_count(other_agency)
+        received = data.get(received_key, _nested_value(nested, category, "received"))
+        delivered = data.get(
+            delivered_key,
+            _nested_value(nested, category, "delivered"),
+        )
+        if delivered is None:
+            delivered = legacy_delivered
+
+        counts[received_key] = _parse_count(received)
+        counts[delivered_key] = _parse_count(delivered)
+    return counts
 
 
 class SCLDeliveredCorrespondenceSerializer(serializers.Serializer):
@@ -43,9 +52,24 @@ class SCLDeliveredCorrespondenceSerializer(serializers.Serializer):
     month = serializers.IntegerField(min_value=1, max_value=12)
     year = serializers.IntegerField(min_value=2000, max_value=2100)
     view = serializers.CharField(required=False, default=VIEW_MONTHLY)
-    client = serializers.IntegerField(min_value=0, required=False, default=0)
-    contractor = serializers.IntegerField(min_value=0, required=False, default=0)
-    other_agency = serializers.IntegerField(min_value=0, required=False, default=0)
+    client_received = serializers.IntegerField(
+        min_value=0, required=False, default=0, allow_null=True
+    )
+    client_delivered = serializers.IntegerField(
+        min_value=0, required=False, default=0, allow_null=True
+    )
+    contractor_received = serializers.IntegerField(
+        min_value=0, required=False, default=0, allow_null=True
+    )
+    contractor_delivered = serializers.IntegerField(
+        min_value=0, required=False, default=0, allow_null=True
+    )
+    other_agency_received = serializers.IntegerField(
+        min_value=0, required=False, default=0, allow_null=True
+    )
+    other_agency_delivered = serializers.IntegerField(
+        min_value=0, required=False, default=0, allow_null=True
+    )
 
     def validate_project_name(self, value):
         value = (value or "").strip()
@@ -59,10 +83,7 @@ class SCLDeliveredCorrespondenceSerializer(serializers.Serializer):
     def validate(self, attrs):
         data = self.initial_data if hasattr(self, "initial_data") else attrs
         if isinstance(data, dict):
-            client, contractor, other_agency = extract_scl_counts(data)
-            attrs["client"] = client
-            attrs["contractor"] = contractor
-            attrs["other_agency"] = other_agency
+            attrs.update(extract_scl_counts(data))
         return attrs
 
     def to_representation(self, instance):

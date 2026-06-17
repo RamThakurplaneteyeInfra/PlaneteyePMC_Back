@@ -149,6 +149,27 @@ _DOC_POST_SCHEMA = openapi.Schema(
     },
 )
 
+_SCL_DELIVERED_SCHEMA = openapi.Schema(
+    type=openapi.TYPE_OBJECT,
+    required=["project_name", "month", "year"],
+    properties={
+        "project_name": openapi.Schema(type=openapi.TYPE_STRING, example="Thane Project"),
+        "month": openapi.Schema(type=openapi.TYPE_INTEGER, example=6),
+        "year": openapi.Schema(type=openapi.TYPE_INTEGER, example=2026),
+        "view": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            enum=[VIEW_MONTHLY, VIEW_CUMULATIVE],
+            example=VIEW_MONTHLY,
+        ),
+        "client_received": openapi.Schema(type=openapi.TYPE_INTEGER, example=25),
+        "client_delivered": openapi.Schema(type=openapi.TYPE_INTEGER, example=18),
+        "contractor_received": openapi.Schema(type=openapi.TYPE_INTEGER, example=40),
+        "contractor_delivered": openapi.Schema(type=openapi.TYPE_INTEGER, example=30),
+        "other_agency_received": openapi.Schema(type=openapi.TYPE_INTEGER, example=15),
+        "other_agency_delivered": openapi.Schema(type=openapi.TYPE_INTEGER, example=10),
+    },
+)
+
 
 class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
     """Monthly project-wise correspondence document CRUD + dashboard."""
@@ -410,6 +431,7 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
     @swagger_auto_schema(
         operation_summary="Save SCL delivered counts via dashboard",
         methods=["post", "put", "patch"],
+        request_body=_SCL_DELIVERED_SCHEMA,
         tags=["Correspondence Documents"],
     )
     @action(detail=False, methods=["get", "post", "put", "patch"], url_path="dashboard")
@@ -531,9 +553,16 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
 
         defaults = {
             "project_name": validated["project_name"],
-            "client": validated["client"],
-            "contractor": validated["contractor"],
-            "other_agency": validated["other_agency"],
+            "client_received": validated["client_received"],
+            "client_delivered": validated["client_delivered"],
+            "contractor_received": validated["contractor_received"],
+            "contractor_delivered": validated["contractor_delivered"],
+            "other_agency_received": validated["other_agency_received"],
+            "other_agency_delivered": validated["other_agency_delivered"],
+            # Keep legacy delivered-only columns in sync for old admin/data uses.
+            "client": validated["client_delivered"],
+            "contractor": validated["contractor_delivered"],
+            "other_agency": validated["other_agency_delivered"],
         }
 
         if existing:
@@ -593,9 +622,29 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
                         "year": parsed["year"],
                         "view": parsed["view"],
                         "scl_delivered_correspondence": {
-                            "client": 0,
-                            "contractor": 0,
-                            "other_agency": 0,
+                            "client": {
+                                "received": 0,
+                                "delivered": 0,
+                                "pending": 0,
+                            },
+                            "contractor": {
+                                "received": 0,
+                                "delivered": 0,
+                                "pending": 0,
+                            },
+                            "other_agency": {
+                                "received": 0,
+                                "delivered": 0,
+                                "pending": 0,
+                            },
+                            "totals": {
+                                "received": 0,
+                                "delivered": 0,
+                                "pending": 0,
+                            },
+                            "client_delivered": 0,
+                            "contractor_delivered": 0,
+                            "other_agency_delivered": 0,
                             "total": 0,
                         },
                     },
@@ -622,11 +671,13 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
     @swagger_auto_schema(
         operation_summary="Create or upsert SCL delivered correspondence counts",
         methods=["post"],
+        request_body=_SCL_DELIVERED_SCHEMA,
         tags=["Correspondence Documents"],
     )
     @swagger_auto_schema(
         operation_summary="Update SCL delivered correspondence counts",
         methods=["put", "patch"],
+        request_body=_SCL_DELIVERED_SCHEMA,
         tags=["Correspondence Documents"],
     )
     @action(

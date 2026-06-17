@@ -189,20 +189,51 @@ def scl_delivered_metrics(
     scl_qs = queryset.filter(
         flow_direction=CorrespondenceDocument.FLOW_OUTBOUND_SCL,
         sender=CorrespondenceDocument.SENDER_SCL,
-    ).filter(delivered_q)
+    )
 
-    counts = scl_qs.values("recipient_type").annotate(count=Count("id"))
-    by_recipient = {row["recipient_type"]: row["count"] for row in counts}
+    counts = scl_qs.values("recipient_type").annotate(
+        received=Count("id"),
+        delivered=Count("id", filter=delivered_q),
+    )
+    by_recipient = {
+        row["recipient_type"]: {
+            "received": row["received"],
+            "delivered": row["delivered"],
+            "pending": max(row["received"] - row["delivered"], 0),
+        }
+        for row in counts
+    }
 
-    client = by_recipient.get(CorrespondenceDocument.RECIPIENT_CLIENT, 0)
-    contractor = by_recipient.get(CorrespondenceDocument.RECIPIENT_CONTRACTOR, 0)
-    other_agency = by_recipient.get(CorrespondenceDocument.RECIPIENT_OTHER_AGENCY, 0)
+    empty = {"received": 0, "delivered": 0, "pending": 0}
+    client = by_recipient.get(CorrespondenceDocument.RECIPIENT_CLIENT, empty)
+    contractor = by_recipient.get(CorrespondenceDocument.RECIPIENT_CONTRACTOR, empty)
+    other_agency = by_recipient.get(
+        CorrespondenceDocument.RECIPIENT_OTHER_AGENCY,
+        empty,
+    )
+
+    total_received = (
+        client["received"] + contractor["received"] + other_agency["received"]
+    )
+    total_delivered = (
+        client["delivered"] + contractor["delivered"] + other_agency["delivered"]
+    )
+    total_pending = client["pending"] + contractor["pending"] + other_agency["pending"]
 
     return {
         "client": client,
         "contractor": contractor,
         "other_agency": other_agency,
-        "total": client + contractor + other_agency,
+        "totals": {
+            "received": total_received,
+            "delivered": total_delivered,
+            "pending": total_pending,
+        },
+        # Legacy aliases for delivered-only consumers.
+        "client_delivered": client["delivered"],
+        "contractor_delivered": contractor["delivered"],
+        "other_agency_delivered": other_agency["delivered"],
+        "total": total_delivered,
     }
 
 

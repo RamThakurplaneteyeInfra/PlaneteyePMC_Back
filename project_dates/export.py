@@ -22,7 +22,13 @@ EXPORT_COLUMNS = [
     "contractor_forecast_finish",
     "contractor_eot_date",
     "contractor_bg_date",
+    "contractor_bg_due_date",
+    "contractor_bg_updated_date",
+    "contractor_bg_status",
     "scl_bg_date",
+    "scl_bg_due_date",
+    "scl_bg_updated_date",
+    "scl_bg_status",
 ]
 
 
@@ -46,7 +52,13 @@ def project_dates_rows(queryset) -> list[dict]:
             "contractor_forecast_finish": "",
             "contractor_eot_date": "",
             "contractor_bg_date": "",
+            "contractor_bg_due_date": "",
+            "contractor_bg_updated_date": "",
+            "contractor_bg_status": "",
             "scl_bg_date": "",
+            "scl_bg_due_date": "",
+            "scl_bg_updated_date": "",
+            "scl_bg_status": "",
         }
     )
 
@@ -65,7 +77,13 @@ def project_dates_rows(queryset) -> list[dict]:
         project = Project.objects.filter(pk=pid).first()
         bg = bg_status_dict(project)
         row["contractor_bg_date"] = bg["contractor_bg_date"] or ""
+        row["contractor_bg_due_date"] = bg["contractor_bg_due_date"] or ""
+        row["contractor_bg_updated_date"] = bg["contractor_bg_updated_date"] or ""
+        row["contractor_bg_status"] = bg["contractor_bg_status"] or ""
         row["scl_bg_date"] = bg["scl_bg_date"] or ""
+        row["scl_bg_due_date"] = bg["scl_bg_due_date"] or ""
+        row["scl_bg_updated_date"] = bg["scl_bg_updated_date"] or ""
+        row["scl_bg_status"] = bg["scl_bg_status"] or ""
 
     return list(by_project.values())
 

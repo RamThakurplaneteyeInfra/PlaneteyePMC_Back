@@ -28,9 +28,17 @@ class SCLDeliveredCorrespondenceSummary(models.Model):
         default=VIEW_MONTHLY,
         db_index=True,
     )
+    # Legacy delivered-only counters retained for older rows/clients.
     client = models.PositiveIntegerField(default=0)
     contractor = models.PositiveIntegerField(default=0)
     other_agency = models.PositiveIntegerField(default=0)
+
+    client_received = models.PositiveIntegerField(default=0)
+    client_delivered = models.PositiveIntegerField(default=0)
+    contractor_received = models.PositiveIntegerField(default=0)
+    contractor_delivered = models.PositiveIntegerField(default=0)
+    other_agency_received = models.PositiveIntegerField(default=0)
+    other_agency_delivered = models.PositiveIntegerField(default=0)
 
     created_at = models.DateTimeField(default=timezone.now, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
@@ -48,14 +56,75 @@ class SCLDeliveredCorrespondenceSummary(models.Model):
 
     @property
     def total(self) -> int:
-        return self.client + self.contractor + self.other_agency
+        return self.total_delivered
+
+    @staticmethod
+    def pending(received: int | None, delivered: int | None) -> int:
+        return max(int(received or 0) - int(delivered or 0), 0)
+
+    @property
+    def client_pending(self) -> int:
+        return self.pending(self.client_received, self.client_delivered)
+
+    @property
+    def contractor_pending(self) -> int:
+        return self.pending(self.contractor_received, self.contractor_delivered)
+
+    @property
+    def other_agency_pending(self) -> int:
+        return self.pending(self.other_agency_received, self.other_agency_delivered)
+
+    @property
+    def total_received(self) -> int:
+        return (
+            self.client_received
+            + self.contractor_received
+            + self.other_agency_received
+        )
+
+    @property
+    def total_delivered(self) -> int:
+        return (
+            self.client_delivered
+            + self.contractor_delivered
+            + self.other_agency_delivered
+        )
+
+    @property
+    def total_pending(self) -> int:
+        return (
+            self.client_pending
+            + self.contractor_pending
+            + self.other_agency_pending
+        )
 
     def to_api_dict(self) -> dict:
         return {
-            "client": self.client,
-            "contractor": self.contractor,
-            "other_agency": self.other_agency,
-            "total": self.total,
+            "client": {
+                "received": self.client_received,
+                "delivered": self.client_delivered,
+                "pending": self.client_pending,
+            },
+            "contractor": {
+                "received": self.contractor_received,
+                "delivered": self.contractor_delivered,
+                "pending": self.contractor_pending,
+            },
+            "other_agency": {
+                "received": self.other_agency_received,
+                "delivered": self.other_agency_delivered,
+                "pending": self.other_agency_pending,
+            },
+            "totals": {
+                "received": self.total_received,
+                "delivered": self.total_delivered,
+                "pending": self.total_pending,
+            },
+            # Legacy aliases for delivered-only consumers.
+            "client_delivered": self.client_delivered,
+            "contractor_delivered": self.contractor_delivered,
+            "other_agency_delivered": self.other_agency_delivered,
+            "total": self.total_delivered,
         }
 
     def __str__(self):

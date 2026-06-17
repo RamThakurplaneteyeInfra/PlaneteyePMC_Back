@@ -44,8 +44,10 @@ class ProjectDatesAdmin(admin.ModelAdmin):
 class ProjectBGStatusAdmin(admin.ModelAdmin):
     list_display = [
         "project",
-        "contractor_bg_date",
-        "scl_bg_date",
+        "contractor_bg_due_date",
+        "contractor_bg_updated_date",
+        "scl_bg_due_date",
+        "scl_bg_updated_date",
         "created_at",
         "updated_at",
     ]
