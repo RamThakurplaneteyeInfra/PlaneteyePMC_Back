@@ -1,24 +1,45 @@
 """
-Drawing Summary URL routes.
+Drawing URL routes.
 
-  POST   /api/drawings/
-  GET    /api/drawings/
-  GET    /api/drawings/{id}/
-  PUT    /api/drawings/{id}/
-  PATCH  /api/drawings/{id}/
-  DELETE /api/drawings/{id}/
-  GET    /api/drawings/project/{projectName}/
-  GET    /api/drawings/project/{projectName}/month/{month}/year/{year}/
-  GET    /api/drawings/project/{projectName}/summary/
-  GET    /api/drawings/project/{projectName}/year/{year}/summary/
-  GET    /api/drawings/project/{projectName}/dashboard/
+Single source of truth: DrawingRegisterItem.
+
+  POST   /api/drawings/register/
+  GET    /api/drawings/register/
+  PATCH  /api/drawings/register/{id}/
+  DELETE /api/drawings/register/{id}/
+
+  GET    /api/drawings/project/{projectName}/summary/?month={m}&year={y}[&view=cumulative]
 """
 
-from rest_framework.routers import DefaultRouter
+from django.urls import path
 
 from ..controllers.drawing_controller import DrawingViewSet
+from ..controllers.drawing_register_controller import DrawingRegisterViewSet
 
-router = DefaultRouter()
-router.register(r"drawings", DrawingViewSet, basename="drawing")
+# DrawingViewSet exposes project_summary as a regular view method (no router needed).
+drawing_summary = DrawingViewSet.as_view({"get": "project_summary"})
 
-urlpatterns = router.urls
+drawing_register_list = DrawingRegisterViewSet.as_view({"get": "list", "post": "create"})
+drawing_register_detail = DrawingRegisterViewSet.as_view(
+    {
+        "get": "retrieve",
+        "patch": "partial_update",
+        "delete": "destroy",
+    }
+)
+
+urlpatterns = [
+    # Register CRUD
+    path("drawings/register/", drawing_register_list, name="drawing-register-list"),
+    path(
+        "drawings/register/<int:pk>/",
+        drawing_register_detail,
+        name="drawing-register-detail",
+    ),
+    # KPI summary — computed from register records
+    path(
+        "drawings/project/<str:projectName>/summary/",
+        drawing_summary,
+        name="drawing-project-summary",
+    ),
+]

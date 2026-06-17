@@ -22,7 +22,7 @@ RUN apt-get update \
 COPY requirements.txt /app/
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt \
-    && python -c "import cloudinary; print('cloudinary', cloudinary.VERSION)"
+    && python -c "import boto3, cloudinary; print('boto3', boto3.__version__); print('cloudinary', cloudinary.VERSION)"
 
 # Copy project
 COPY . /app/

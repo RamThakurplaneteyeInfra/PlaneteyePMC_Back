@@ -19,10 +19,40 @@ class CorrespondenceDocument(models.Model):
 
     TYPE_CLIENT = "CLIENT"
     TYPE_CONTRACTOR = "CONTRACTOR"
+    TYPE_OTHER_AGENCY = "OTHER_AGENCY"
 
     CORRESPONDENCE_TYPE_CHOICES = [
         (TYPE_CLIENT, "CLIENT"),
         (TYPE_CONTRACTOR, "CONTRACTOR"),
+        (TYPE_OTHER_AGENCY, "OTHER_AGENCY"),
+    ]
+
+    RECIPIENT_CLIENT = "CLIENT"
+    RECIPIENT_CONTRACTOR = "CONTRACTOR"
+    RECIPIENT_OTHER_AGENCY = "OTHER_AGENCY"
+
+    RECIPIENT_TYPE_CHOICES = [
+        (RECIPIENT_CLIENT, "Client"),
+        (RECIPIENT_CONTRACTOR, "Contractor"),
+        (RECIPIENT_OTHER_AGENCY, "Other Agency"),
+    ]
+
+    FLOW_INBOUND = "INBOUND"
+    FLOW_OUTBOUND_SCL = "OUTBOUND_SCL"
+
+    FLOW_DIRECTION_CHOICES = [
+        (FLOW_INBOUND, "Inbound"),
+        (FLOW_OUTBOUND_SCL, "SCL Outbound"),
+    ]
+
+    SENDER_SCL = "SCL"
+    SENDER_CLIENT = "CLIENT"
+    SENDER_CONTRACTOR = "CONTRACTOR"
+
+    SENDER_CHOICES = [
+        (SENDER_SCL, "SCL"),
+        (SENDER_CLIENT, "Client"),
+        (SENDER_CONTRACTOR, "Contractor"),
     ]
 
     STATUS_PENDING = "PENDING"
@@ -78,6 +108,28 @@ class CorrespondenceDocument(models.Model):
         db_index=True,
         help_text="Auto-calculated: PENDING, DELIVERED_ON_TIME, DELIVERED_LATE",
     )
+    flow_direction = models.CharField(
+        max_length=20,
+        choices=FLOW_DIRECTION_CHOICES,
+        default=FLOW_INBOUND,
+        db_index=True,
+        help_text="INBOUND = received tracking; OUTBOUND_SCL = sent by SCL",
+    )
+    sender = models.CharField(
+        max_length=20,
+        choices=SENDER_CHOICES,
+        default=SENDER_CLIENT,
+        db_index=True,
+        help_text="Document sender (SCL for outbound correspondence)",
+    )
+    recipient_type = models.CharField(
+        max_length=20,
+        choices=RECIPIENT_TYPE_CHOICES,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Recipient for SCL outbound documents",
+    )
 
     created_at = models.DateTimeField(
         default=timezone.now,
@@ -111,12 +163,15 @@ class CorrespondenceDocument(models.Model):
         month: int,
         year: int,
         correspondence_type: str,
+        flow_direction: str | None = None,
     ) -> int:
+        flow_direction = flow_direction or cls.FLOW_INBOUND
         agg = cls.objects.filter(
             project_name__iexact=(project_name or "").strip(),
             month=month,
             year=year,
             correspondence_type=correspondence_type,
+            flow_direction=flow_direction,
         ).aggregate(max_sr=Max("sr_no"))
         return int(agg["max_sr"] or 0) + 1
 
@@ -129,13 +184,23 @@ class CorrespondenceDocument(models.Model):
         if self.year is not None and not (2000 <= self.year <= 2100):
             errors["year"] = "year must be between 2000 and 2100."
 
-        if self.correspondence_type and self.correspondence_type not in {
+        allowed_types = {
             self.TYPE_CLIENT,
             self.TYPE_CONTRACTOR,
-        }:
+            self.TYPE_OTHER_AGENCY,
+        }
+        if self.correspondence_type and self.correspondence_type not in allowed_types:
             errors["correspondence_type"] = (
-                "correspondence_type must be CLIENT or CONTRACTOR."
+                "correspondence_type must be CLIENT, CONTRACTOR, or OTHER_AGENCY."
             )
+
+        if self.flow_direction == self.FLOW_OUTBOUND_SCL:
+            if self.sender != self.SENDER_SCL:
+                errors["sender"] = "Outbound SCL documents must have sender SCL."
+            if not self.recipient_type:
+                errors["recipient_type"] = (
+                    "recipient_type is required for SCL outbound documents."
+                )
 
         if self.sr_no is not None and self.sr_no < 1:
             errors["sr_no"] = "sr_no must be >= 1."
@@ -171,9 +236,24 @@ class CorrespondenceDocument(models.Model):
         else:
             self.delivered_status = self.STATUS_DELIVERED_LATE
 
+    def _apply_sender_defaults(self):
+        """Derive sender/recipient defaults from flow for inbound records."""
+        if self.flow_direction == self.FLOW_OUTBOUND_SCL:
+            self.sender = self.SENDER_SCL
+            if self.recipient_type and not self.correspondence_type:
+                self.correspondence_type = self.recipient_type
+            elif self.recipient_type:
+                self.correspondence_type = self.recipient_type
+            return
+        self.sender = self.correspondence_type
+        self.recipient_type = None
+        if self.correspondence_type == self.TYPE_OTHER_AGENCY:
+            self.correspondence_type = self.TYPE_CLIENT
+
     def save(self, *args, **kwargs):
         if self.project_name:
             self.project_name = self.project_name.strip()
+        self._apply_sender_defaults()
         self._apply_deadline_and_delivered_status()
         self.full_clean()
         super().save(*args, **kwargs)
@@ -201,9 +281,10 @@ class CorrespondenceDocument(models.Model):
                     "month",
                     "year",
                     "correspondence_type",
+                    "flow_direction",
                     "sr_no",
                 ],
-                name="corr_doc_unique_project_period_type_sr",
+                name="corr_doc_unique_project_period_flow_sr",
             )
         ]
         indexes = [

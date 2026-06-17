@@ -10,6 +10,7 @@ class SiteProgressImageAdmin(admin.ModelAdmin):
         "project_name",
         "month",
         "year",
+        "storage_backend",
         "cloudinary_public_id",
         "uploaded_by",
         "created_at",

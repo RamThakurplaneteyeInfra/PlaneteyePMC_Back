@@ -1,5 +1,5 @@
 """
-Site Progress Images API — Cloudinary-backed gallery.
+Site Progress Images API — AWS S3 primary, Cloudinary fallback.
 """
 
 import logging
@@ -19,9 +19,9 @@ from .serializers import (
     SiteProgressImageSerializer,
     SiteProgressImageUploadSerializer,
 )
-from .services.cloudinary_service import (
+from .services.image_storage import (
     build_upload_folder,
-    check_cloudinary_ready,
+    check_storage_ready,
     delete_image,
     upload_image,
 )
@@ -84,12 +84,12 @@ def _flatten_errors(errors) -> dict:
 
 class SiteProgressImageViewSet(viewsets.ModelViewSet):
     """
-    Site photos stored in Cloudinary.
+    Site photos stored in AWS S3 (Cloudinary fallback).
 
     POST   /api/site-images/          — multi-image upload (multipart)
     GET    /api/site-images/          — paginated gallery
     GET    /api/site-images/{id}/
-    DELETE /api/site-images/{id}/     — removes Cloudinary asset + DB row
+    DELETE /api/site-images/{id}/     — removes storage asset + DB row
     """
 
     queryset = SiteProgressImage.objects.all()
@@ -149,18 +149,12 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
         tags=["Site Images"],
     )
     def create(self, request, *args, **kwargs):
-        ready, cloudinary_message = check_cloudinary_ready()
+        ready, storage_message = check_storage_ready()
         if not ready:
-            http_status = status.HTTP_503_SERVICE_UNAVAILABLE
-            if "not installed" in cloudinary_message.lower():
-                return self._error(
-                    "Cloudinary Python package is not installed",
-                    errors=cloudinary_message,
-                    http_status=http_status,
-                )
             return self._error(
-                cloudinary_message,
-                http_status=http_status,
+                "Image storage is not configured (AWS S3 or Cloudinary required)",
+                errors=storage_message,
+                http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
         files = _collect_upload_files(request)
@@ -196,7 +190,7 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
         year = meta_serializer.validated_data["year"]
         folder = build_upload_folder(project_name, year, month)
 
-        uploaded_public_ids: list[str] = []
+        uploaded_assets: list[tuple[str, str]] = []
         created_records: list[SiteProgressImage] = []
 
         try:
@@ -207,33 +201,47 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
                     except ValueError as exc:
                         raise ValueError(str(exc)) from exc
 
-                    uploaded_public_ids.append(result["public_id"])
+                    storage_key = result["public_id"]
+                    storage_backend = result.get(
+                        "storage_backend",
+                        SiteProgressImage.STORAGE_S3,
+                    )
+                    uploaded_assets.append((storage_key, storage_backend))
                     record = SiteProgressImage.objects.create(
                         project_name=project_name,
                         month=month,
                         year=year,
                         image_url=result["secure_url"],
-                        cloudinary_public_id=result["public_id"],
+                        cloudinary_public_id=storage_key,
+                        storage_backend=storage_backend,
                         uploaded_by=request.user if request.user.is_authenticated else None,
                     )
                     created_records.append(record)
         except ValueError as exc:
-            for pid in uploaded_public_ids:
+            for storage_key, storage_backend in uploaded_assets:
                 try:
-                    delete_image(pid)
+                    delete_image(storage_key, storage_backend)
                 except Exception:
-                    logger.exception("Failed to roll back Cloudinary asset %s", pid)
+                    logger.exception(
+                        "Failed to roll back %s asset %s",
+                        storage_backend,
+                        storage_key,
+                    )
             return self._error("Validation failed", errors={"images": str(exc)})
         except RuntimeError as exc:
-            for pid in uploaded_public_ids:
+            for storage_key, storage_backend in uploaded_assets:
                 try:
-                    delete_image(pid)
+                    delete_image(storage_key, storage_backend)
                 except Exception:
-                    logger.exception("Failed to roll back Cloudinary asset %s", pid)
+                    logger.exception(
+                        "Failed to roll back %s asset %s",
+                        storage_backend,
+                        storage_key,
+                    )
             msg = str(exc)
             if "configuration missing" in msg.lower():
                 return self._error(
-                    "Cloudinary configuration missing",
+                    "Image storage configuration missing",
                     http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
                 )
             return self._error(
@@ -242,11 +250,15 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         except Exception as exc:
-            for pid in uploaded_public_ids:
+            for storage_key, storage_backend in uploaded_assets:
                 try:
-                    delete_image(pid)
+                    delete_image(storage_key, storage_backend)
                 except Exception:
-                    logger.exception("Failed to roll back Cloudinary asset %s", pid)
+                    logger.exception(
+                        "Failed to roll back %s asset %s",
+                        storage_backend,
+                        storage_key,
+                    )
             logger.exception("Site image upload failed: %s", exc)
             return self._error(
                 "Failed to upload images",
@@ -259,6 +271,7 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
                 "id": record.id,
                 "image_url": record.image_url,
                 "public_id": record.cloudinary_public_id,
+                "storage_backend": record.storage_backend,
             }
             for record in created_records
         ]
@@ -319,13 +332,19 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
-        public_id = instance.cloudinary_public_id
+        storage_key = instance.cloudinary_public_id
+        storage_backend = instance.storage_backend
         try:
-            delete_image(public_id)
+            delete_image(storage_key, storage_backend)
         except Exception as exc:
-            logger.exception("Cloudinary delete failed for %s: %s", public_id, exc)
+            logger.exception(
+                "%s delete failed for %s: %s",
+                storage_backend,
+                storage_key,
+                exc,
+            )
             return self._error(
-                "Failed to delete image from Cloudinary",
+                f"Failed to delete image from {storage_backend}",
                 errors=str(exc),
                 http_status=status.HTTP_502_BAD_GATEWAY,
             )

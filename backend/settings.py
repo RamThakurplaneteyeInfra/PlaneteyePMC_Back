@@ -17,11 +17,11 @@ import os
 from dotenv import load_dotenv
 import dj_database_url
 
-# Load environment variables from .env file
-load_dotenv()
-
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load .env from project root (not cwd — reliable when runserver cwd varies)
+load_dotenv(BASE_DIR / ".env")
 
 
 # Quick-start development settings - unsuitable for production
@@ -332,12 +332,32 @@ EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER)
 
 # ==============================
-# CLOUDINARY (Site Progress Images)
+# CLOUDINARY (Site Progress Images — fallback; disabled when SITE_IMAGE_S3_ONLY=True)
 # Credentials only — SDK config lives in core/cloudinary_config.py
 # ==============================
-CLOUDINARY_CLOUD_NAME = os.environ.get('CLOUDINARY_CLOUD_NAME', '')
-CLOUDINARY_API_KEY = os.environ.get('CLOUDINARY_API_KEY', '')
-CLOUDINARY_API_SECRET = os.environ.get('CLOUDINARY_API_SECRET', '')
+SITE_IMAGE_S3_ONLY = os.environ.get('SITE_IMAGE_S3_ONLY', 'False').lower() == 'true'
+
+if SITE_IMAGE_S3_ONLY:
+    CLOUDINARY_CLOUD_NAME = ''
+    CLOUDINARY_API_KEY = ''
+    CLOUDINARY_API_SECRET = ''
+else:
+    CLOUDINARY_CLOUD_NAME = os.environ.get('CLOUDINARY_CLOUD_NAME', '')
+    CLOUDINARY_API_KEY = os.environ.get('CLOUDINARY_API_KEY', '')
+    CLOUDINARY_API_SECRET = os.environ.get('CLOUDINARY_API_SECRET', '')
+
+# ==============================
+# AWS S3 (Site Progress Images — primary storage)
+# Set credentials via environment variables only (never commit secrets).
+# ==============================
+AWS_ACCESS_KEY_ID = os.environ.get('AWS_ACCESS_KEY_ID', '')
+AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY', '')
+AWS_STORAGE_BUCKET_NAME = os.environ.get('AWS_STORAGE_BUCKET_NAME', 'pmcproject')
+AWS_S3_REGION_NAME = os.environ.get('AWS_S3_REGION_NAME', 'ap-south-1')
+AWS_S3_UPLOAD_PREFIX = os.environ.get('AWS_S3_UPLOAD_PREFIX', 'upload')
+AWS_S3_CUSTOM_DOMAIN = os.environ.get('AWS_S3_CUSTOM_DOMAIN', '')
+# Primary: s3 | cloudinary (falls back to the other unless SITE_IMAGE_S3_ONLY=True)
+SITE_IMAGE_STORAGE_PRIMARY = os.environ.get('SITE_IMAGE_STORAGE_PRIMARY', 's3')
 
 
 

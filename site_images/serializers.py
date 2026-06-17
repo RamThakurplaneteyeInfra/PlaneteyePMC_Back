@@ -23,6 +23,7 @@ class SiteProgressImageSerializer(serializers.ModelSerializer):
             "year",
             "image_url",
             "cloudinary_public_id",
+            "storage_backend",
             "uploaded_by",
             "uploaded_by_username",
             "created_at",

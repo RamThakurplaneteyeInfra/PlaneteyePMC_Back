@@ -15,8 +15,13 @@ Legacy alias (backward compatible):
   /api/project-quality-status/  → same ViewSet
 """
 
+from django.urls import path
 from rest_framework.routers import DefaultRouter
 
+from ..controllers.frequency_chart_controller import (
+    FrequencyChartRegisterViewSet,
+    FrequencyChartViewSet,
+)
 from ..controllers.quality_status_controller import ProjectQualityStatusViewSet
 
 router = DefaultRouter()
@@ -24,6 +29,11 @@ router.register(
     r"project-quality",
     ProjectQualityStatusViewSet,
     basename="project-quality",
+)
+router.register(
+    r"frequency-chart",
+    FrequencyChartViewSet,
+    basename="frequency-chart",
 )
 
 legacy_router = DefaultRouter()
@@ -33,4 +43,27 @@ legacy_router.register(
     basename="project-quality-status",
 )
 
-urlpatterns = router.urls + legacy_router.urls
+frequency_register_list = FrequencyChartRegisterViewSet.as_view(
+    {"get": "list", "post": "create"}
+)
+frequency_register_detail = FrequencyChartRegisterViewSet.as_view(
+    {
+        "get": "retrieve",
+        "put": "update",
+        "patch": "partial_update",
+        "delete": "destroy",
+    }
+)
+
+urlpatterns = [
+    path(
+        "frequency-chart/register/",
+        frequency_register_list,
+        name="frequency-chart-register-list",
+    ),
+    path(
+        "frequency-chart/register/<int:pk>/",
+        frequency_register_detail,
+        name="frequency-chart-register-detail",
+    ),
+] + router.urls + legacy_router.urls

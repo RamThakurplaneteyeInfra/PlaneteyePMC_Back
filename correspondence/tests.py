@@ -12,9 +12,15 @@ from rest_framework.test import APITestCase
 from core.test_auth import authenticate_client
 
 from .controllers.correspondence_metrics import (
+    VIEW_CUMULATIVE,
+    VIEW_MONTHLY,
     compute_delivery_efficiency,
+    dashboard_response,
+    filter_by_period,
     metrics_from_counts,
     metrics_from_queryset,
+    period_date_range,
+    scl_delivered_metrics,
 )
 from .models.correspondence import CorrespondenceDocument
 
@@ -62,6 +68,16 @@ class CorrespondenceMetricsTest(TestCase):
         m = metrics_from_counts(received=8, on_time=5, late_deliveries=2, pending=1)
         self.assertEqual(m["delivered"], 7)
         self.assertEqual(m["on_time"] + m["late_deliveries"], m["delivered"])
+
+    def test_period_date_range_cumulative(self):
+        from_date, to_date = period_date_range(2026, 6, VIEW_CUMULATIVE)
+        self.assertEqual(from_date.isoformat(), "2026-01-01")
+        self.assertEqual(to_date.isoformat(), "2026-06-30")
+
+    def test_period_date_range_monthly(self):
+        from_date, to_date = period_date_range(2026, 6, VIEW_MONTHLY)
+        self.assertEqual(from_date.isoformat(), "2026-06-01")
+        self.assertEqual(to_date.isoformat(), "2026-06-30")
 
 
 class CorrespondenceDocumentModelTest(TestCase):
@@ -153,6 +169,20 @@ class CorrespondenceQuerysetMetricsTest(TestCase):
 class CorrespondenceDocumentAPITest(APITestCase):
     LIST_URL = "/api/correspondence-documents/"
     DASHBOARD_URL = "/api/correspondence-documents/dashboard/"
+    SCL_URL = "/api/correspondence-documents/scl-delivered-correspondence/"
+
+    def _scl_payload(self, **overrides):
+        data = {
+            "project_name": "Thane Project",
+            "month": 6,
+            "year": 2026,
+            "view": "cumulative",
+            "client_delivered": 1,
+            "contractor_delivered": 1,
+            "other_agency_delivered": 1,
+        }
+        data.update(overrides)
+        return data
 
     def setUp(self):
         CorrespondenceDocument.objects.filter(
@@ -240,3 +270,160 @@ class CorrespondenceDocumentAPITest(APITestCase):
         self.assertEqual(client["late_deliveries"], 1)
         self.assertEqual(client["delivered"], 1)
         self.assertEqual(client["pending"], 0)
+
+    def test_dashboard_monthly_includes_view_metadata(self):
+        self.client.post(self.LIST_URL, self._payload(), format="json")
+        response = self.client.get(
+            self.DASHBOARD_URL,
+            {"project_name": "Thane Project", "month": 6, "year": 2026},
+        )
+        data = response.data["data"]
+        self.assertEqual(data["view"], "monthly")
+        self.assertEqual(data["from_date"], "2026-06-01")
+        self.assertEqual(data["to_date"], "2026-06-30")
+        self.assertIn("scl_delivered_correspondence", data)
+        self.assertIn("recent_documents", data)
+
+    def test_dashboard_cumulative_aggregates_year_to_date(self):
+        CorrespondenceDocument.objects.filter(
+            project_name__iexact="Thane Project"
+        ).delete()
+        self.client.post(
+            self.LIST_URL,
+            {
+                **self._payload(delivery_date="2026-01-05"),
+                "month": 1,
+                "year": 2026,
+                "received_date": "2026-01-01",
+            },
+            format="json",
+        )
+        self.client.post(self.LIST_URL, self._payload(), format="json")
+
+        response = self.client.get(
+            self.DASHBOARD_URL,
+            {
+                "project_name": "Thane Project",
+                "month": 6,
+                "year": 2026,
+                "view": "cumulative",
+            },
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data["data"]
+        self.assertEqual(data["view"], "cumulative")
+        self.assertEqual(data["from_date"], "2026-01-01")
+        self.assertEqual(data["client"]["received"], 2)
+
+    def test_scl_delivered_correspondence_counts(self):
+        CorrespondenceDocument.objects.filter(
+            project_name__iexact="Thane Project"
+        ).delete()
+        CorrespondenceDocument.objects.create(
+            project_name="Thane Project",
+            month=6,
+            year=2026,
+            correspondence_type=CorrespondenceDocument.TYPE_CLIENT,
+            flow_direction=CorrespondenceDocument.FLOW_OUTBOUND_SCL,
+            sender=CorrespondenceDocument.SENDER_SCL,
+            recipient_type=CorrespondenceDocument.RECIPIENT_CLIENT,
+            sr_no=1,
+            description="SCL to client",
+            received_date=date(2026, 6, 1),
+            delivered_date=date(2026, 6, 3),
+        )
+        CorrespondenceDocument.objects.create(
+            project_name="Thane Project",
+            month=6,
+            year=2026,
+            correspondence_type=CorrespondenceDocument.TYPE_CONTRACTOR,
+            flow_direction=CorrespondenceDocument.FLOW_OUTBOUND_SCL,
+            sender=CorrespondenceDocument.SENDER_SCL,
+            recipient_type=CorrespondenceDocument.RECIPIENT_CONTRACTOR,
+            sr_no=1,
+            description="SCL to contractor",
+            received_date=date(2026, 6, 2),
+            delivered_date=date(2026, 6, 4),
+        )
+        period_qs = filter_by_period(
+            CorrespondenceDocument.objects.all(),
+            project_name="Thane Project",
+            month=6,
+            year=2026,
+        )
+        scl = scl_delivered_metrics(period_qs)
+        self.assertEqual(scl["client"], 1)
+        self.assertEqual(scl["contractor"], 1)
+        self.assertEqual(scl["total"], 2)
+
+        dashboard = dashboard_response(
+            "Thane Project", 6, 2026, period_qs, view=VIEW_MONTHLY
+        )
+        self.assertEqual(dashboard["scl_delivered_correspondence"]["total"], 2)
+        self.assertEqual(len(dashboard["recent_documents"]), 2)
+
+    def test_scl_delivered_post_creates_summary(self):
+        response = self.client.post(
+            self.SCL_URL, self._scl_payload(), format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        scl = response.data["data"]["scl_delivered_correspondence"]
+        self.assertEqual(scl["client"], 1)
+        self.assertEqual(scl["contractor"], 1)
+        self.assertEqual(scl["other_agency"], 1)
+        self.assertEqual(scl["total"], 3)
+
+    def test_scl_delivered_post_upsert_then_patch(self):
+        self.client.post(self.SCL_URL, self._scl_payload(), format="json")
+        patch = self.client.patch(
+            self.SCL_URL,
+            self._scl_payload(client_delivered=5),
+            format="json",
+        )
+        self.assertEqual(patch.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            patch.data["data"]["scl_delivered_correspondence"]["client"], 5
+        )
+
+    def test_scl_delivered_post_via_dashboard(self):
+        response = self.client.post(
+            self.DASHBOARD_URL, self._scl_payload(), format="json"
+        )
+        self.assertIn(
+            response.status_code,
+            (status.HTTP_200_OK, status.HTTP_201_CREATED),
+        )
+        self.assertEqual(
+            response.data["data"]["scl_delivered_correspondence"]["total"], 3
+        )
+
+    def test_scl_delivered_post_via_short_url(self):
+        """Frontend posts to /scl-delivered/ (not scl-delivered-correspondence/)."""
+        response = self.client.post(
+            "/api/correspondence-documents/scl-delivered/",
+            self._scl_payload(),
+            format="json",
+        )
+        self.assertIn(
+            response.status_code,
+            (status.HTTP_200_OK, status.HTTP_201_CREATED),
+        )
+        self.assertEqual(
+            response.data["data"]["scl_delivered_correspondence"]["total"], 3
+        )
+
+    def test_dashboard_returns_saved_scl_summary(self):
+        self.client.post(self.SCL_URL, self._scl_payload(), format="json")
+        self.client.post(self.LIST_URL, self._payload(), format="json")
+        response = self.client.get(
+            self.DASHBOARD_URL,
+            {
+                "project_name": "Thane Project",
+                "month": 6,
+                "year": 2026,
+                "view": "cumulative",
+            },
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        scl = response.data["data"]["scl_delivered_correspondence"]
+        self.assertEqual(scl["total"], 3)

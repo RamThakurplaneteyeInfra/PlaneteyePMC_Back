@@ -25,6 +25,8 @@ from datetime import date
 from rest_framework import serializers
 
 from projects.models import Project
+
+from .bg_status import bg_status_dict
 from .models import ProjectDates
 
 
@@ -85,6 +87,9 @@ class ProjectDatesSerializer(serializers.ModelSerializer):
             "0 = contract finish is today."
         ),
     )
+    bg_status = serializers.SerializerMethodField(
+        help_text="Optional bank guarantee dates for the project (not tied to date_type).",
+    )
 
     class Meta:
         model = ProjectDates
@@ -105,6 +110,7 @@ class ProjectDatesSerializer(serializers.ModelSerializer):
             "delay_days",
             "eot_delay_days",
             "current_delay",
+            "bg_status",
             "created_at",
             "updated_at",
         ]
@@ -118,6 +124,7 @@ class ProjectDatesSerializer(serializers.ModelSerializer):
             "delay_days",
             "eot_delay_days",
             "current_delay",
+            "bg_status",
             "created_at",
             "updated_at",
         ]
@@ -203,6 +210,11 @@ class ProjectDatesSerializer(serializers.ModelSerializer):
         if obj.contract_finish:
             return (date.today() - obj.contract_finish).days
         return 0
+
+    def get_bg_status(self, obj) -> dict:
+        """BG Status dates for the project (same on SCL and CONTRACTOR rows)."""
+        project = obj.project if obj.project_id else None
+        return bg_status_dict(project)
 
     # -------------------------------------------------------------------------
     # Cross-field validation

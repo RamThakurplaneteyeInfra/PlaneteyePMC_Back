@@ -23,11 +23,16 @@ from rest_framework.response import Response
 
 from ..models.correspondence import CorrespondenceDocument
 from .correspondence_metrics import (
+    VIEW_CUMULATIVE,
+    VIEW_MONTHLY,
+    dashboard_response,
     filter_by_period,
-    monthly_dashboard_response,
-    metrics_from_queryset,
+    get_scl_delivered_summary,
+    normalize_view,
 )
 from .correspondence_serializer import CorrespondenceDocumentSerializer
+from .scl_delivered_serializer import SCLDeliveredCorrespondenceSerializer
+from ..models.scl_delivered_summary import SCLDeliveredCorrespondenceSummary
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +156,7 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
     queryset = CorrespondenceDocument.objects.all()
     serializer_class = CorrespondenceDocumentSerializer
     pagination_class = CorrespondencePagination
-    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+    http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
 
     def get_queryset(self):
         qs = CorrespondenceDocument.objects.all()
@@ -378,7 +383,8 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
         )
 
     @swagger_auto_schema(
-        operation_summary="Monthly dashboard (CLIENT + CONTRACTOR)",
+        operation_summary="Correspondence dashboard (monthly or cumulative)",
+        methods=["get"],
         manual_parameters=[
             openapi.Parameter(
                 "project_name",
@@ -392,20 +398,33 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
             openapi.Parameter(
                 "year", openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True
             ),
+            openapi.Parameter(
+                "view",
+                openapi.IN_QUERY,
+                type=openapi.TYPE_STRING,
+                enum=[VIEW_MONTHLY, VIEW_CUMULATIVE],
+            ),
         ],
         tags=["Correspondence Documents"],
     )
-    @action(detail=False, methods=["get"], url_path="dashboard")
+    @swagger_auto_schema(
+        operation_summary="Save SCL delivered counts via dashboard",
+        methods=["post", "put", "patch"],
+        tags=["Correspondence Documents"],
+    )
+    @action(detail=False, methods=["get", "post", "put", "patch"], url_path="dashboard")
     def dashboard(self, request):
         """
-        Monthly dashboard for project_name + month + year.
+        Dashboard for project_name + month + year.
 
-        Returns received, delivered, pending, on_time, late_deliveries,
-        status_breakdown, and delivery_efficiency per type.
-
-        delivered = on_time + late_deliveries
-        delivery_efficiency = (on_time / delivered) * 100
+        GET: statistics (view=monthly|cumulative).
+        POST/PUT/PATCH: save SCL delivered correspondence counts (same body as
+        /scl-delivered-correspondence/).
         """
+        if request.method != "GET":
+            allow_create = request.method == "POST"
+            return self._save_scl_delivered(request, allow_create=allow_create)
+
         project_name = (request.query_params.get("project_name") or "").strip()
         if not project_name:
             return self._error("project_name query parameter is required.")
@@ -422,34 +441,210 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
         if not (2000 <= year_int <= 2100):
             return self._error("year must be between 2000 and 2100.")
 
+        view = normalize_view(request.query_params.get("view"))
+
         period_qs = filter_by_period(
             CorrespondenceDocument.objects.all(),
             project_name=project_name,
             month=month_int,
             year=year_int,
+            view=view,
         )
 
         if not period_qs.exists():
+            view_label = "year-to-date" if view == VIEW_CUMULATIVE else "month"
             return self._error(
                 f"No correspondence documents for '{project_name}' "
-                f"in {month_int:02d}/{year_int}.",
+                f"in the selected {view_label} ({month_int:02d}/{year_int}).",
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
-        client_qs = period_qs.filter(
-            correspondence_type=CorrespondenceDocument.TYPE_CLIENT
-        )
-        contractor_qs = period_qs.filter(
-            correspondence_type=CorrespondenceDocument.TYPE_CONTRACTOR
+        data = dashboard_response(
+            project_name,
+            month_int,
+            year_int,
+            period_qs,
+            view=view,
         )
 
+        view_label = "cumulative" if view == VIEW_CUMULATIVE else "monthly"
         return self._success(
-            f"Correspondence dashboard for '{project_name}' "
+            f"Correspondence {view_label} dashboard for '{project_name}' "
             f"({month_int:02d}/{year_int}) retrieved successfully",
-            monthly_dashboard_response(
-                project_name, month_int, year_int, client_qs, contractor_qs
-            ),
+            data,
         )
+
+    def _parse_scl_request(self, request, *, from_query: bool = False):
+        """Parse SCL delivered params from query string or JSON body."""
+        source = request.query_params if from_query else request.data
+        project_name = (source.get("project_name") or source.get("projectName") or "").strip()
+        if not project_name:
+            return None, self._error("project_name is required.")
+
+        month_int, err = _parse_int_param(source.get("month"), "month")
+        if err:
+            return None, self._error(err)
+        year_int, err = _parse_int_param(source.get("year"), "year")
+        if err:
+            return None, self._error(err)
+
+        if not (1 <= month_int <= 12):
+            return None, self._error("month must be between 1 and 12.")
+        if not (2000 <= year_int <= 2100):
+            return None, self._error("year must be between 2000 and 2100.")
+
+        view = normalize_view(source.get("view", VIEW_MONTHLY))
+        return {
+            "project_name": project_name,
+            "month": month_int,
+            "year": year_int,
+            "view": view,
+            "raw": source,
+        }, None
+
+    def _save_scl_delivered(self, request, *, allow_create: bool = True):
+        data = request.data
+        project_name = (data.get("project_name") or data.get("projectName") or "").strip()
+        if not project_name:
+            return self._error("project_name is required.")
+
+        serializer = SCLDeliveredCorrespondenceSerializer(data=data)
+        if not serializer.is_valid():
+            return self._error(
+                "Validation failed",
+                errors=_flatten_errors(serializer.errors),
+            )
+
+        validated = serializer.validated_data
+        existing = SCLDeliveredCorrespondenceSummary.objects.filter(
+            project_name__iexact=validated["project_name"],
+            month=validated["month"],
+            year=validated["year"],
+            view=validated["view"],
+        ).first()
+
+        if not allow_create and existing is None:
+            return self._error(
+                "SCL delivered correspondence record not found. Use POST to create.",
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+
+        defaults = {
+            "project_name": validated["project_name"],
+            "client": validated["client"],
+            "contractor": validated["contractor"],
+            "other_agency": validated["other_agency"],
+        }
+
+        if existing:
+            for key, value in defaults.items():
+                setattr(existing, key, value)
+            existing.save()
+            instance = existing
+            created = False
+        else:
+            instance = SCLDeliveredCorrespondenceSummary.objects.create(
+                month=validated["month"],
+                year=validated["year"],
+                view=validated["view"],
+                **defaults,
+            )
+            created = True
+
+        self._invalidate_list_cache()
+        payload = SCLDeliveredCorrespondenceSerializer(instance).data
+        message = (
+            "SCL delivered correspondence created successfully"
+            if created
+            else "SCL delivered correspondence updated successfully"
+        )
+        return self._success(
+            message,
+            payload,
+            http_status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    def _handle_scl_delivered_correspondence(self, request):
+        """
+        SCL Delivered Correspondence — save/load counts by recipient.
+
+        POST  → create or upsert counts
+        PUT   → update existing (404 if missing)
+        PATCH → partial update existing (404 if missing)
+        GET   → retrieve stored counts
+        """
+        if request.method == "GET":
+            parsed, error = self._parse_scl_request(request, from_query=True)
+            if error:
+                return error
+
+            summary = get_scl_delivered_summary(
+                parsed["project_name"],
+                parsed["month"],
+                parsed["year"],
+                parsed["view"],
+            )
+            if summary is None:
+                return self._success(
+                    "No SCL delivered correspondence record found",
+                    {
+                        "project_name": parsed["project_name"],
+                        "month": parsed["month"],
+                        "year": parsed["year"],
+                        "view": parsed["view"],
+                        "scl_delivered_correspondence": {
+                            "client": 0,
+                            "contractor": 0,
+                            "other_agency": 0,
+                            "total": 0,
+                        },
+                    },
+                )
+            return self._success(
+                "SCL delivered correspondence retrieved successfully",
+                SCLDeliveredCorrespondenceSerializer(summary).data,
+            )
+
+        allow_create = request.method == "POST"
+        return self._save_scl_delivered(request, allow_create=allow_create)
+
+    @swagger_auto_schema(
+        operation_summary="Get SCL delivered correspondence counts",
+        methods=["get"],
+        manual_parameters=[
+            openapi.Parameter("project_name", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True),
+            openapi.Parameter("month", openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter("year", openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter("view", openapi.IN_QUERY, type=openapi.TYPE_STRING, enum=[VIEW_MONTHLY, VIEW_CUMULATIVE]),
+        ],
+        tags=["Correspondence Documents"],
+    )
+    @swagger_auto_schema(
+        operation_summary="Create or upsert SCL delivered correspondence counts",
+        methods=["post"],
+        tags=["Correspondence Documents"],
+    )
+    @swagger_auto_schema(
+        operation_summary="Update SCL delivered correspondence counts",
+        methods=["put", "patch"],
+        tags=["Correspondence Documents"],
+    )
+    @action(
+        detail=False,
+        methods=["get", "post", "put", "patch"],
+        url_path="scl-delivered-correspondence",
+    )
+    def scl_delivered_correspondence(self, request):
+        return self._handle_scl_delivered_correspondence(request)
+
+    @action(
+        detail=False,
+        methods=["get", "post", "put", "patch"],
+        url_path="scl-delivered",
+    )
+    def scl_delivered(self, request):
+        """Frontend alias for scl-delivered-correspondence."""
+        return self._handle_scl_delivered_correspondence(request)
 
 
 # Backward-compatible alias

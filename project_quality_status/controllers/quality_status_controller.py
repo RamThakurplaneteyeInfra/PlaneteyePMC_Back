@@ -131,6 +131,7 @@ class ProjectQualityStatusViewSet(viewsets.ModelViewSet):
     queryset = ProjectQualityStatus.objects.all()
     serializer_class = ProjectQualityStatusSerializer
     pagination_class = QualityStatusPagination
+    lookup_value_regex = r"\d+"
 
     def get_queryset(self):
         qs = ProjectQualityStatus.objects.all()

@@ -10,11 +10,28 @@ from django.db import models
 class SiteProgressImage(models.Model):
     """One uploaded site photo for a project month."""
 
+    STORAGE_S3 = "s3"
+    STORAGE_CLOUDINARY = "cloudinary"
+    STORAGE_CHOICES = [
+        (STORAGE_S3, "AWS S3"),
+        (STORAGE_CLOUDINARY, "Cloudinary"),
+    ]
+
     project_name = models.CharField(max_length=255, db_index=True)
     month = models.PositiveSmallIntegerField(db_index=True)
     year = models.PositiveSmallIntegerField(db_index=True)
     image_url = models.URLField(max_length=500)
-    cloudinary_public_id = models.CharField(max_length=500, unique=True)
+    cloudinary_public_id = models.CharField(
+        max_length=500,
+        unique=True,
+        help_text="Storage key (S3 object key or Cloudinary public_id)",
+    )
+    storage_backend = models.CharField(
+        max_length=20,
+        choices=STORAGE_CHOICES,
+        default=STORAGE_CLOUDINARY,
+        db_index=True,
+    )
     uploaded_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,

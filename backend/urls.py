@@ -141,7 +141,7 @@ urlpatterns = [
     # Project Dates (SCL & Contractor) API
     path('api/', include('project_dates.urls')),
 
-    # Site Progress Images (Cloudinary)
+    # Site Progress Images (S3 + Cloudinary fallback)
     path('api/', include('site_images.urls')),
 
     # Bottleneck register (Issue / Concern / Risk / Action)

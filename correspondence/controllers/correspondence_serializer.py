@@ -39,6 +39,7 @@ def _normalize_correspondence_type(value: str) -> str:
     if normalized in (
         CorrespondenceDocument.TYPE_CLIENT,
         CorrespondenceDocument.TYPE_CONTRACTOR,
+        CorrespondenceDocument.TYPE_OTHER_AGENCY,
     ):
         return normalized
     return value.strip()
@@ -61,6 +62,9 @@ class CorrespondenceDocumentSerializer(serializers.ModelSerializer):
             "year",
             "correspondence_type",
             "party_type",
+            "flow_direction",
+            "sender",
+            "recipient_type",
             "sr_no",
             "description",
             "received_date",
@@ -76,6 +80,7 @@ class CorrespondenceDocumentSerializer(serializers.ModelSerializer):
             "id",
             "projectName",
             "party_type",
+            "sender",
             "sr_no",
             "deadline_date",
             "delivered_status",
@@ -84,6 +89,10 @@ class CorrespondenceDocumentSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        extra_kwargs = {
+            "flow_direction": {"required": False},
+            "recipient_type": {"required": False, "allow_null": True},
+        }
 
     def get_projectName(self, obj) -> str:
         return obj.project_name
@@ -136,14 +145,39 @@ class CorrespondenceDocumentSerializer(serializers.ModelSerializer):
         allowed = {
             CorrespondenceDocument.TYPE_CLIENT,
             CorrespondenceDocument.TYPE_CONTRACTOR,
+            CorrespondenceDocument.TYPE_OTHER_AGENCY,
         }
         if value not in allowed:
             raise serializers.ValidationError(
-                "correspondence_type must be CLIENT or CONTRACTOR."
+                "correspondence_type must be CLIENT, CONTRACTOR, or OTHER_AGENCY."
             )
         return value
 
     def validate(self, attrs):
+        flow = attrs.get(
+            "flow_direction",
+            self.instance.flow_direction if self.instance else CorrespondenceDocument.FLOW_INBOUND,
+        )
+        recipient = attrs.get(
+            "recipient_type",
+            self.instance.recipient_type if self.instance else None,
+        )
+
+        if flow == CorrespondenceDocument.FLOW_OUTBOUND_SCL:
+            if not recipient:
+                raise serializers.ValidationError(
+                    {
+                        "recipient_type": (
+                            "recipient_type is required for SCL outbound documents."
+                        )
+                    }
+                )
+            attrs["correspondence_type"] = recipient
+            attrs["sender"] = CorrespondenceDocument.SENDER_SCL
+
+        return self._validate_dates(attrs)
+
+    def _validate_dates(self, attrs):
         instance = self.instance
         received = attrs.get(
             "received_date",
@@ -179,10 +213,14 @@ class CorrespondenceDocumentSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
+        flow = validated_data.get(
+            "flow_direction", CorrespondenceDocument.FLOW_INBOUND
+        )
         validated_data["sr_no"] = CorrespondenceDocument.next_sr_no(
             validated_data["project_name"],
             validated_data["month"],
             validated_data["year"],
             validated_data["correspondence_type"],
+            flow_direction=flow,
         )
         return CorrespondenceDocument.objects.create(**validated_data)

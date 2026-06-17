@@ -4,7 +4,7 @@ Django admin registration for the Project Dates app.
 
 from django.contrib import admin
 
-from .models import ProjectDates
+from .models import ProjectBGStatus, ProjectDates
 
 
 @admin.register(ProjectDates)
@@ -38,3 +38,17 @@ class ProjectDatesAdmin(admin.ModelAdmin):
         ),
         ("Timestamps", {"fields": ("created_at", "updated_at"), "classes": ("collapse",)}),
     )
+
+
+@admin.register(ProjectBGStatus)
+class ProjectBGStatusAdmin(admin.ModelAdmin):
+    list_display = [
+        "project",
+        "contractor_bg_date",
+        "scl_bg_date",
+        "created_at",
+        "updated_at",
+    ]
+    search_fields = ["project__name"]
+    readonly_fields = ["created_at", "updated_at"]
+    ordering = ["project__name"]

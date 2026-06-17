@@ -162,3 +162,38 @@ class ProjectDates(models.Model):
                 name="pd_date_type_idx",
             ),
         ]
+
+
+class ProjectBGStatus(models.Model):
+    """
+    Bank Guarantee (BG) Status — optional dates per project.
+
+    One record per project. Both dates are optional.
+    """
+
+    project = models.OneToOneField(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="bg_status_record",
+        help_text="Project this BG status belongs to",
+    )
+    contractor_bg_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Contractor bank guarantee date (optional)",
+    )
+    scl_bg_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="SCL bank guarantee date (optional)",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Project BG Status"
+        verbose_name_plural = "Project BG Status Records"
+
+    def __str__(self) -> str:
+        project_name = self.project.name if self.project_id else "Unknown"
+        return f"{project_name} — BG Status"

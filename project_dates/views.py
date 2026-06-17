@@ -13,7 +13,10 @@ Endpoints:
   DELETE /api/project-dates/{id}/                         -> destroy
 
 Custom endpoint:
-  GET    /api/project-dates/project/{projectName}/        -> both SCL + CONTRACTOR for a project
+  GET    /api/project-dates/project/{projectName}/        -> both SCL + CONTRACTOR + BG Status for a project
+  GET    /api/project-dates/project/{projectName}/bg-status/  -> BG Status only
+  POST   /api/project-dates/project/{projectName}/bg-status/  -> create/upsert BG dates
+  PATCH  /api/project-dates/project/{projectName}/bg-status/  -> upsert BG dates (partial)
 
 Filtering:
   ?project_name=Thane Project   (partial, case-insensitive)
@@ -37,8 +40,13 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
+from projects.models import Project
+
+from .bg_serializers import ProjectBGStatusWriteSerializer
+from .bg_status import bg_status_dict, upsert_bg_status
+from .export import project_dates_csv_response, project_dates_rows
 from .filters import ProjectDatesFilter
-from .models import ProjectDates
+from .models import ProjectBGStatus, ProjectDates
 from .serializers import ProjectDatesSerializer
 
 logger = logging.getLogger(__name__)
@@ -122,6 +130,7 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
     queryset = ProjectDates.objects.select_related("project").all()
     serializer_class = ProjectDatesSerializer
     pagination_class = ProjectDatesPagination
+    lookup_value_regex = r"\d+"
 
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = ProjectDatesFilter
@@ -220,6 +229,11 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
     )
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
+
+        if request.query_params.get("export", "").lower() == "csv":
+            rows = project_dates_rows(queryset)
+            return project_dates_csv_response(rows)
+
         page = self.paginate_queryset(queryset)
 
         if page is not None:
@@ -327,6 +341,133 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
         return self._success(f"Project dates record for '{label}' deleted successfully", {})
 
     # -------------------------------------------------------------------------
+    # BG STATUS  GET/POST/PATCH /api/project-dates/project/{projectName}/bg-status/
+    # -------------------------------------------------------------------------
+
+    @swagger_auto_schema(
+        method="get",
+        operation_summary="Get BG Status for a Project",
+        responses={200: "BG Status payload", 404: "Project not found"},
+        tags=["Project Dates"],
+    )
+    @swagger_auto_schema(
+        method="post",
+        operation_summary="Create BG Status for a Project",
+        operation_description=(
+            "Create or update optional bank guarantee dates. "
+            "Both fields are optional; returns 201 when a new record is created."
+        ),
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                "contractor_bg_date": openapi.Schema(
+                    type=openapi.TYPE_STRING, format="date", nullable=True
+                ),
+                "scl_bg_date": openapi.Schema(
+                    type=openapi.TYPE_STRING, format="date", nullable=True
+                ),
+            },
+        ),
+        responses={201: "BG Status created", 200: "BG Status updated", 404: "Project not found"},
+        tags=["Project Dates"],
+    )
+    @swagger_auto_schema(
+        method="patch",
+        operation_summary="Update BG Status for a Project (partial)",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                "contractor_bg_date": openapi.Schema(
+                    type=openapi.TYPE_STRING, format="date", nullable=True
+                ),
+                "scl_bg_date": openapi.Schema(
+                    type=openapi.TYPE_STRING, format="date", nullable=True
+                ),
+            },
+        ),
+        responses={200: "BG Status payload", 404: "Project not found"},
+        tags=["Project Dates"],
+    )
+    @swagger_auto_schema(
+        method="put",
+        operation_summary="Update BG Status for a Project",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                "contractor_bg_date": openapi.Schema(
+                    type=openapi.TYPE_STRING, format="date", nullable=True
+                ),
+                "scl_bg_date": openapi.Schema(
+                    type=openapi.TYPE_STRING, format="date", nullable=True
+                ),
+            },
+        ),
+        responses={200: "BG Status payload", 404: "Project not found"},
+        tags=["Project Dates"],
+    )
+    @action(
+        detail=False,
+        methods=["get", "post", "patch", "put"],
+        url_path=r"project/(?P<projectName>[^/.]+)/bg-status",
+        url_name="project-bg-status",
+    )
+    def project_bg_status(self, request, projectName: str = None):
+        """GET/POST/PATCH/PUT optional BG dates for a project (independent of schedule records)."""
+        if not projectName or not projectName.strip():
+            return self._error("projectName is required.")
+
+        try:
+            project = Project.objects.get(name__iexact=projectName.strip())
+        except Project.DoesNotExist:
+            return self._error(
+                f"No project found with name '{projectName.strip()}'",
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if request.method == "GET":
+            return self._success(
+                f"BG Status for '{project.name}' retrieved successfully",
+                bg_status_dict(project),
+            )
+
+        serializer = ProjectBGStatusWriteSerializer(
+            data=request.data,
+            partial=True,
+            context={"project": project},
+        )
+        if not serializer.is_valid():
+            return self._error("Validation failed", errors=serializer.errors)
+
+        validated = serializer.validated_data
+        update_data = {}
+        if "contractor_bg_date" in request.data:
+            update_data["contractor_bg_date"] = validated.get("contractor_bg_date")
+        if "scl_bg_date" in request.data:
+            update_data["scl_bg_date"] = validated.get("scl_bg_date")
+
+        existed = ProjectBGStatus.objects.filter(project=project).exists()
+
+        try:
+            upsert_bg_status(project, update_data)
+        except Exception as exc:
+            logger.error(f"ProjectBGStatus upsert error: {exc}")
+            return self._error(
+                "Failed to save BG Status",
+                errors=str(exc),
+                http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        created = not existed and ProjectBGStatus.objects.filter(project=project).exists()
+        if request.method == "POST" and created:
+            message = f"BG Status for '{project.name}' created successfully"
+            http_status = status.HTTP_201_CREATED
+        else:
+            message = f"BG Status for '{project.name}' saved successfully"
+            http_status = status.HTTP_200_OK
+
+        return self._success(message, bg_status_dict(project), http_status=http_status)
+
+    # -------------------------------------------------------------------------
     # BY PROJECT  GET /api/project-dates/project/{projectName}/
     # Returns both SCL and CONTRACTOR records together in one response
     # -------------------------------------------------------------------------
@@ -352,6 +493,17 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
                                 "project_name": openapi.Schema(type=openapi.TYPE_STRING, example="Thane Project"),
                                 "scl": openapi.Schema(type=openapi.TYPE_OBJECT, nullable=True),
                                 "contractor": openapi.Schema(type=openapi.TYPE_OBJECT, nullable=True),
+                                "bg_status": openapi.Schema(
+                                    type=openapi.TYPE_OBJECT,
+                                    properties={
+                                        "contractor_bg_date": openapi.Schema(
+                                            type=openapi.TYPE_STRING, nullable=True
+                                        ),
+                                        "scl_bg_date": openapi.Schema(
+                                            type=openapi.TYPE_STRING, nullable=True
+                                        ),
+                                    },
+                                ),
                             },
                         ),
                     },
@@ -408,13 +560,24 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
         contractor_record = by_type.get(ProjectDates.DATE_TYPE_CONTRACTOR)
 
         # Use the actual project name from whichever record exists
-        actual_name = (scl_record or contractor_record).project.name
+        project = (scl_record or contractor_record).project
+        actual_name = project.name
+
+        payload = {
+            "project_name": actual_name,
+            "scl": ProjectDatesSerializer(scl_record).data if scl_record else None,
+            "contractor": ProjectDatesSerializer(contractor_record).data if contractor_record else None,
+            "bg_status": bg_status_dict(project),
+        }
+
+        if request.query_params.get("export", "").lower() == "csv":
+            rows = project_dates_rows(records)
+            return project_dates_csv_response(
+                rows,
+                filename=f"project_dates_{actual_name.replace(' ', '_')}.csv",
+            )
 
         return self._success(
             f"Project dates for '{actual_name}' retrieved successfully",
-            {
-                "project_name": actual_name,
-                "scl": ProjectDatesSerializer(scl_record).data if scl_record else None,
-                "contractor": ProjectDatesSerializer(contractor_record).data if contractor_record else None,
-            },
+            payload,
         )

@@ -5,6 +5,23 @@ Django admin registration for the Correspondence app.
 from django.contrib import admin
 
 from .models.correspondence import CorrespondenceDocument
+from .models.scl_delivered_summary import SCLDeliveredCorrespondenceSummary
+
+
+@admin.register(SCLDeliveredCorrespondenceSummary)
+class SCLDeliveredCorrespondenceSummaryAdmin(admin.ModelAdmin):
+    list_display = [
+        "project_name",
+        "month",
+        "year",
+        "view",
+        "client",
+        "contractor",
+        "other_agency",
+        "updated_at",
+    ]
+    list_filter = ["view", "year", "month"]
+    search_fields = ["project_name"]
 
 
 @admin.register(CorrespondenceDocument)
