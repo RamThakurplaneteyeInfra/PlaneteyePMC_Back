@@ -30,6 +30,7 @@ class ManpowerRecordViewSet(viewsets.ModelViewSet):
 
     queryset = ManpowerRecord.objects.all()
     serializer_class = ManpowerRecordSerializer
+    http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
 
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_class = ManpowerRecordFilter

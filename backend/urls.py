@@ -90,13 +90,12 @@ urlpatterns = [
     # Budget vs Cost Performance (EVM)
     path('api/', include('budget_performance.urls')),
     path('api/', include('equipment.urls')),
+    path('api/', include('manpower_management.urls')),
     path('api/', include('manpower.urls')),
     path('api/', include('cashflow.urls')),
     path('api/', include('cost_performance.urls')),
     # Plant & Machinery Site Asset Inventory Management API
     path('api/', include('plant_machinery.urls')),
-    # Manpower Management System API
-    path('api/', include('manpower_management.urls')),
     # Health & Safety API (monthly records + analytics)
     # → /api/health-safety/                    — monthly CRUD + aggregation
     # → /api/health-safety/status/             — analytics calculator
