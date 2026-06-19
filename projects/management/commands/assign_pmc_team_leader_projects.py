@@ -43,7 +43,7 @@ TL_PROJECT_MAPPINGS = [
     ("pmc_tl19", "JK-PKG 3"),
     ("pmc_tl20", "AOC Center Hyderabad"),
     ("pmc_tl21", "Uppal Hyderabad"),
-    ("pmc_tl22", "Avisa G+22, Mahim"),
+    ("pmc_tl22", "Avissa G+40, Mahim"),
     ("pmc_tl23", "Shivalik Building Santacruz"),
 ]
 
