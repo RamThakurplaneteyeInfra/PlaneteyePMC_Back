@@ -26,7 +26,7 @@ from rest_framework import serializers
 
 from projects.models import Project
 
-from .bg_status import bg_status_dict
+from .bg_status import bg_status_payload
 from .models import ProjectDates
 
 
@@ -212,9 +212,9 @@ class ProjectDatesSerializer(serializers.ModelSerializer):
         return 0
 
     def get_bg_status(self, obj) -> dict:
-        """BG Status dates for the project (same on SCL and CONTRACTOR rows)."""
+        """Multi-entry BG Status for the project (same on SCL and CONTRACTOR rows)."""
         project = obj.project if obj.project_id else None
-        return bg_status_dict(project)
+        return bg_status_payload(project)
 
     # -------------------------------------------------------------------------
     # Cross-field validation

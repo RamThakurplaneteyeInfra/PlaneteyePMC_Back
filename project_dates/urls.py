@@ -11,7 +11,8 @@ Final URL structure (when mounted at /api/ in backend/urls.py):
   GET    /api/project-dates/project/{projectName}/
   GET    /api/project-dates/project/{projectName}/bg-status/
   POST   /api/project-dates/project/{projectName}/bg-status/
-  PATCH  /api/project-dates/project/{projectName}/bg-status/
+  PATCH  /api/project-dates/bg-status/{id}/
+  DELETE /api/project-dates/bg-status/{id}/
   GET    /api/project-dates/?export=csv
 """
 

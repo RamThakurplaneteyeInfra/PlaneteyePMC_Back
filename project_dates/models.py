@@ -164,11 +164,79 @@ class ProjectDates(models.Model):
         ]
 
 
+class BGStatus(models.Model):
+    """
+    Bank Guarantee (BG) entry — multiple records per ProjectDates row.
+
+    Status is never stored; it is calculated dynamically from due_date and updated_date.
+    """
+
+    BG_TYPE_CONTRACTOR = "CONTRACTOR"
+    BG_TYPE_SCL = "SCL"
+
+    BG_TYPE_CHOICES = [
+        (BG_TYPE_CONTRACTOR, "Contractor"),
+        (BG_TYPE_SCL, "SCL"),
+    ]
+
+    project_date = models.ForeignKey(
+        ProjectDates,
+        on_delete=models.CASCADE,
+        related_name="bg_statuses",
+        db_index=True,
+        help_text="Parent project dates record (SCL or CONTRACTOR)",
+    )
+    bg_type = models.CharField(
+        max_length=20,
+        choices=BG_TYPE_CHOICES,
+        db_index=True,
+        help_text="Contractor or SCL bank guarantee",
+    )
+    bg_name = models.CharField(
+        max_length=255,
+        help_text="Display name for this bank guarantee",
+    )
+    due_date = models.DateField(
+        help_text="Bank guarantee due date",
+    )
+    updated_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Date the bank guarantee was last updated",
+    )
+    remarks = models.TextField(
+        blank=True,
+        help_text="Optional notes",
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["id"]
+        verbose_name = "BG Status"
+        verbose_name_plural = "BG Status Entries"
+        indexes = [
+            models.Index(
+                fields=["project_date", "bg_type"],
+                name="pd_bg_project_date_type_idx",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        project_name = (
+            self.project_date.project.name
+            if self.project_date_id and self.project_date.project_id
+            else "Unknown"
+        )
+        return f"{project_name} — {self.bg_name} [{self.bg_type}]"
+
+
 class ProjectBGStatus(models.Model):
     """
-    Bank Guarantee (BG) Status — optional due/updated dates per project.
+    DEPRECATED — legacy single BG record per project.
 
-    One record per project. Statuses are calculated dynamically in serializers/helpers.
+    Replaced by :model:`BGStatus` (many rows per project via ProjectDates).
+    Retained for backward compatibility; do not use for new writes.
     """
 
     project = models.OneToOneField(

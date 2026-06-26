@@ -13,10 +13,11 @@ Endpoints:
   DELETE /api/project-dates/{id}/                         -> destroy
 
 Custom endpoint:
-  GET    /api/project-dates/project/{projectName}/        -> both SCL + CONTRACTOR + BG Status for a project
-  GET    /api/project-dates/project/{projectName}/bg-status/  -> BG Status only
-  POST   /api/project-dates/project/{projectName}/bg-status/  -> create/upsert BG dates
-  PATCH  /api/project-dates/project/{projectName}/bg-status/  -> upsert BG dates (partial)
+  GET    /api/project-dates/project/{projectName}/        -> both SCL + CONTRACTOR + BG lists
+  GET    /api/project-dates/project/{projectName}/bg-status/  -> BG Status lists + summary
+  POST   /api/project-dates/project/{projectName}/bg-status/  -> create BG entry
+  PATCH  /api/project-dates/bg-status/{id}/             -> update BG entry
+  DELETE /api/project-dates/bg-status/{id}/             -> delete BG entry
 
 Filtering:
   ?project_name=Thane Project   (partial, case-insensitive)
@@ -31,6 +32,7 @@ Ordering:
 import logging
 
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db.models import Prefetch
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
@@ -42,11 +44,15 @@ from rest_framework.response import Response
 
 from projects.models import Project
 
-from .bg_serializers import ProjectBGStatusWriteSerializer
-from .bg_status import BG_STATUSES, LEGACY_BG_FIELD_MAP, bg_status_dict, upsert_bg_status
+from .bg_serializers import (
+    BGStatusCreateSerializer,
+    BGStatusSerializer,
+    BGStatusUpdateSerializer,
+)
+from .bg_status import BG_STATUSES, bg_status_payload
 from .export import project_dates_csv_response, project_dates_rows
 from .filters import ProjectDatesFilter
-from .models import ProjectBGStatus, ProjectDates
+from .models import BGStatus, ProjectDates
 from .serializers import ProjectDatesSerializer
 
 logger = logging.getLogger(__name__)
@@ -66,106 +72,83 @@ class ProjectDatesPagination(PageNumberPagination):
 # Swagger schema helpers
 # =============================================================================
 
-_BG_STATUS_SCHEMA = openapi.Schema(
+_BG_ENTRY_SCHEMA = openapi.Schema(
     type=openapi.TYPE_OBJECT,
     properties={
-        "contractor_bg_date": openapi.Schema(
+        "id": openapi.Schema(type=openapi.TYPE_INTEGER, example=1),
+        "bg_type": openapi.Schema(type=openapi.TYPE_STRING, enum=["CONTRACTOR", "SCL"]),
+        "bg_name": openapi.Schema(type=openapi.TYPE_STRING, example="Performance BG"),
+        "due_date": openapi.Schema(type=openapi.TYPE_STRING, format="date", example="2026-06-15"),
+        "updated_date": openapi.Schema(
             type=openapi.TYPE_STRING,
             format="date",
             nullable=True,
-            description="Legacy alias for contractor_bg_updated_date",
+            example="2026-06-14",
         ),
-        "contractor_bg_due_date": openapi.Schema(
-            type=openapi.TYPE_STRING,
-            format="date",
-            nullable=True,
-            description="Contractor bank guarantee due date for the current monthly milestone",
-        ),
-        "contractor_bg_updated_date": openapi.Schema(
-            type=openapi.TYPE_STRING,
-            format="date",
-            nullable=True,
-            description="Contractor bank guarantee updated date",
-        ),
-        "contractor_bg_status": openapi.Schema(
-            type=openapi.TYPE_STRING,
-            enum=BG_STATUSES,
-            description=(
-                "UPDATED when contractor_bg_updated_date is on or before contractor_bg_due_date; "
-                "NOT_UPDATED when the due date has passed without an on-time update; "
-                "YET_TO_UPDATE when the due date has not arrived and no update exists."
-            ),
-        ),
-        "scl_bg_date": openapi.Schema(
-            type=openapi.TYPE_STRING,
-            format="date",
-            nullable=True,
-            description="Legacy alias for scl_bg_updated_date",
-        ),
-        "scl_bg_due_date": openapi.Schema(
-            type=openapi.TYPE_STRING,
-            format="date",
-            nullable=True,
-            description="SCL bank guarantee due date for the current monthly milestone",
-        ),
-        "scl_bg_updated_date": openapi.Schema(
-            type=openapi.TYPE_STRING,
-            format="date",
-            nullable=True,
-            description="SCL bank guarantee updated date",
-        ),
-        "scl_bg_status": openapi.Schema(
-            type=openapi.TYPE_STRING,
-            enum=BG_STATUSES,
-            description=(
-                "UPDATED when scl_bg_updated_date is on or before scl_bg_due_date; "
-                "NOT_UPDATED when the due date has passed without an on-time update; "
-                "YET_TO_UPDATE when the due date has not arrived and no update exists."
-            ),
-        ),
+        "status": openapi.Schema(type=openapi.TYPE_STRING, enum=BG_STATUSES),
+        "remarks": openapi.Schema(type=openapi.TYPE_STRING, example=""),
     },
 )
 
-
-_BG_STATUS_WRITE_SCHEMA = openapi.Schema(
+_BG_SUMMARY_SCHEMA = openapi.Schema(
     type=openapi.TYPE_OBJECT,
     properties={
-        "contractor_bg_date": openapi.Schema(
+        "total_bg": openapi.Schema(type=openapi.TYPE_INTEGER, example=3),
+        "updated": openapi.Schema(type=openapi.TYPE_INTEGER, example=1),
+        "yet_to_update": openapi.Schema(type=openapi.TYPE_INTEGER, example=1),
+        "not_updated": openapi.Schema(type=openapi.TYPE_INTEGER, example=1),
+        "compliance_percentage": openapi.Schema(type=openapi.TYPE_NUMBER, example=33.33),
+    },
+)
+
+_BG_STATUS_SCHEMA = openapi.Schema(
+    type=openapi.TYPE_OBJECT,
+    properties={
+        "contractor_bg": openapi.Schema(
+            type=openapi.TYPE_ARRAY,
+            items=_BG_ENTRY_SCHEMA,
+        ),
+        "scl_bg": openapi.Schema(
+            type=openapi.TYPE_ARRAY,
+            items=_BG_ENTRY_SCHEMA,
+        ),
+        "bg_summary": _BG_SUMMARY_SCHEMA,
+    },
+)
+
+_BG_STATUS_CREATE_SCHEMA = openapi.Schema(
+    type=openapi.TYPE_OBJECT,
+    required=["bg_type", "bg_name", "due_date"],
+    properties={
+        "bg_type": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            enum=["CONTRACTOR", "SCL"],
+            example="CONTRACTOR",
+        ),
+        "bg_name": openapi.Schema(type=openapi.TYPE_STRING, example="Performance BG"),
+        "due_date": openapi.Schema(type=openapi.TYPE_STRING, format="date", example="2026-06-15"),
+        "updated_date": openapi.Schema(
             type=openapi.TYPE_STRING,
             format="date",
             nullable=True,
-            description="Legacy alias for contractor_bg_updated_date",
+            example="2026-06-14",
         ),
-        "contractor_bg_due_date": openapi.Schema(
+        "remarks": openapi.Schema(type=openapi.TYPE_STRING, example="Updated successfully"),
+    },
+)
+
+_BG_STATUS_UPDATE_SCHEMA = openapi.Schema(
+    type=openapi.TYPE_OBJECT,
+    properties={
+        "bg_name": openapi.Schema(type=openapi.TYPE_STRING, example="Performance BG"),
+        "due_date": openapi.Schema(type=openapi.TYPE_STRING, format="date", example="2026-06-15"),
+        "updated_date": openapi.Schema(
             type=openapi.TYPE_STRING,
             format="date",
             nullable=True,
-            description="Contractor bank guarantee due date for the current monthly milestone",
+            example="2026-06-16",
         ),
-        "contractor_bg_updated_date": openapi.Schema(
-            type=openapi.TYPE_STRING,
-            format="date",
-            nullable=True,
-            description="Contractor bank guarantee updated date",
-        ),
-        "scl_bg_date": openapi.Schema(
-            type=openapi.TYPE_STRING,
-            format="date",
-            nullable=True,
-            description="Legacy alias for scl_bg_updated_date",
-        ),
-        "scl_bg_due_date": openapi.Schema(
-            type=openapi.TYPE_STRING,
-            format="date",
-            nullable=True,
-            description="SCL bank guarantee due date for the current monthly milestone",
-        ),
-        "scl_bg_updated_date": openapi.Schema(
-            type=openapi.TYPE_STRING,
-            format="date",
-            nullable=True,
-            description="SCL bank guarantee updated date",
-        ),
+        "remarks": openapi.Schema(type=openapi.TYPE_STRING, example="Renewed"),
     },
 )
 
@@ -232,7 +215,12 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
       eot_duration             = (eot_date - contract_finish).days
     """
 
-    queryset = ProjectDates.objects.select_related("project").all()
+    queryset = ProjectDates.objects.select_related("project").prefetch_related(
+        Prefetch(
+            "bg_statuses",
+            queryset=BGStatus.objects.order_by("id"),
+        )
+    )
     serializer_class = ProjectDatesSerializer
     pagination_class = ProjectDatesPagination
     lookup_value_regex = r"\d+"
@@ -446,49 +434,40 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
         return self._success(f"Project dates record for '{label}' deleted successfully", {})
 
     # -------------------------------------------------------------------------
-    # BG STATUS  GET/POST/PATCH /api/project-dates/project/{projectName}/bg-status/
+    # BG STATUS  GET/POST /api/project-dates/project/{projectName}/bg-status/
+    #            PATCH/DELETE /api/project-dates/bg-status/{id}/
     # -------------------------------------------------------------------------
 
     @swagger_auto_schema(
         method="get",
         operation_summary="Get BG Status for a Project",
-        responses={200: "BG Status payload", 404: "Project not found"},
+        operation_description=(
+            "Returns all Contractor and SCL bank guarantee entries for a project "
+            "with dynamically calculated status and compliance summary."
+        ),
+        responses={200: _BG_STATUS_SCHEMA, 404: "Project not found"},
         tags=["Project Dates"],
     )
     @swagger_auto_schema(
         method="post",
-        operation_summary="Create BG Status for a Project",
+        operation_summary="Create BG Status Entry",
         operation_description=(
-            "Create or update optional bank guarantee due/updated dates. "
-            "Statuses are calculated dynamically from due dates, updated dates, and timezone.now().date(). "
-            "The legacy contractor_bg_date and scl_bg_date fields remain accepted as aliases for updated dates."
+            "Create a new bank guarantee entry. Each request adds a new row; "
+            "existing BG entries are never overwritten.\n\n"
+            "Requires a matching SCL or CONTRACTOR project dates record for the given `bg_type`."
         ),
-        request_body=_BG_STATUS_WRITE_SCHEMA,
-        responses={201: _BG_STATUS_SCHEMA, 200: _BG_STATUS_SCHEMA, 404: "Project not found"},
-        tags=["Project Dates"],
-    )
-    @swagger_auto_schema(
-        method="patch",
-        operation_summary="Update BG Status for a Project (partial)",
-        request_body=_BG_STATUS_WRITE_SCHEMA,
-        responses={200: _BG_STATUS_SCHEMA, 404: "Project not found"},
-        tags=["Project Dates"],
-    )
-    @swagger_auto_schema(
-        method="put",
-        operation_summary="Update BG Status for a Project",
-        request_body=_BG_STATUS_WRITE_SCHEMA,
-        responses={200: _BG_STATUS_SCHEMA, 404: "Project not found"},
+        request_body=_BG_STATUS_CREATE_SCHEMA,
+        responses={201: _BG_ENTRY_SCHEMA, 400: "Validation error", 404: "Project not found"},
         tags=["Project Dates"],
     )
     @action(
         detail=False,
-        methods=["get", "post", "patch", "put"],
+        methods=["get", "post"],
         url_path=r"project/(?P<projectName>[^/.]+)/bg-status",
         url_name="project-bg-status",
     )
     def project_bg_status(self, request, projectName: str = None):
-        """GET/POST/PATCH/PUT optional BG dates for a project (independent of schedule records)."""
+        """GET all BG entries or POST a new BG entry for a project."""
         if not projectName or not projectName.strip():
             return self._error("projectName is required.")
 
@@ -503,52 +482,93 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
         if request.method == "GET":
             return self._success(
                 f"BG Status for '{project.name}' retrieved successfully",
-                bg_status_dict(project),
+                bg_status_payload(project),
             )
 
-        serializer = ProjectBGStatusWriteSerializer(
+        serializer = BGStatusCreateSerializer(
             data=request.data,
-            partial=True,
             context={"project": project},
         )
         if not serializer.is_valid():
             return self._error("Validation failed", errors=serializer.errors)
 
-        validated = serializer.validated_data
-        update_data = {}
-        for field in [
-            "contractor_bg_due_date",
-            "contractor_bg_updated_date",
-            "scl_bg_due_date",
-            "scl_bg_updated_date",
-        ]:
-            if field in request.data:
-                update_data[field] = validated.get(field)
-        for legacy_field, model_field in LEGACY_BG_FIELD_MAP.items():
-            if legacy_field in request.data:
-                update_data[model_field] = validated.get(model_field)
-
-        existed = ProjectBGStatus.objects.filter(project=project).exists()
-
         try:
-            upsert_bg_status(project, update_data)
+            instance = serializer.save()
         except Exception as exc:
-            logger.error(f"ProjectBGStatus upsert error: {exc}")
+            logger.error(f"BGStatus create error: {exc}")
             return self._error(
-                "Failed to save BG Status",
+                "Failed to create BG Status entry",
                 errors=str(exc),
                 http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        created = not existed and ProjectBGStatus.objects.filter(project=project).exists()
-        if request.method == "POST" and created:
-            message = f"BG Status for '{project.name}' created successfully"
-            http_status = status.HTTP_201_CREATED
-        else:
-            message = f"BG Status for '{project.name}' saved successfully"
-            http_status = status.HTTP_200_OK
+        return self._success(
+            f"BG Status entry for '{project.name}' created successfully",
+            BGStatusSerializer(instance).data,
+            http_status=status.HTTP_201_CREATED,
+        )
 
-        return self._success(message, bg_status_dict(project), http_status=http_status)
+    @swagger_auto_schema(
+        method="patch",
+        operation_summary="Update BG Status Entry",
+        operation_description="Partially update a single bank guarantee entry by ID.",
+        request_body=_BG_STATUS_UPDATE_SCHEMA,
+        responses={200: _BG_ENTRY_SCHEMA, 400: "Validation error", 404: "Not found"},
+        tags=["Project Dates"],
+    )
+    @swagger_auto_schema(
+        method="delete",
+        operation_summary="Delete BG Status Entry",
+        operation_description="Delete a single bank guarantee entry by ID.",
+        responses={200: "Deleted", 404: "Not found"},
+        tags=["Project Dates"],
+    )
+    @action(
+        detail=False,
+        methods=["patch", "delete"],
+        url_path=r"bg-status/(?P<bgId>\d+)",
+        url_name="bg-status-by-id",
+    )
+    def bg_status_by_id(self, request, bgId: str = None):
+        """PATCH or DELETE a single BG entry."""
+        try:
+            instance = BGStatus.objects.select_related(
+                "project_date",
+                "project_date__project",
+            ).get(pk=bgId)
+        except BGStatus.DoesNotExist:
+            return self._error(
+                "BG Status entry not found",
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if request.method == "DELETE":
+            label = instance.bg_name
+            instance.delete()
+            return self._success(f"BG Status entry '{label}' deleted successfully", {})
+
+        serializer = BGStatusUpdateSerializer(
+            instance,
+            data=request.data,
+            partial=True,
+        )
+        if not serializer.is_valid():
+            return self._error("Validation failed", errors=serializer.errors)
+
+        try:
+            updated = serializer.save()
+        except Exception as exc:
+            logger.error(f"BGStatus update error: {exc}")
+            return self._error(
+                "Failed to update BG Status entry",
+                errors=str(exc),
+                http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return self._success(
+            "BG Status entry updated successfully",
+            BGStatusSerializer(updated).data,
+        )
 
     # -------------------------------------------------------------------------
     # BY PROJECT  GET /api/project-dates/project/{projectName}/
@@ -576,7 +596,15 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
                                 "project_name": openapi.Schema(type=openapi.TYPE_STRING, example="Thane Project"),
                                 "scl": openapi.Schema(type=openapi.TYPE_OBJECT, nullable=True),
                                 "contractor": openapi.Schema(type=openapi.TYPE_OBJECT, nullable=True),
-                                "bg_status": _BG_STATUS_SCHEMA,
+                                "contractor_bg": openapi.Schema(
+                                    type=openapi.TYPE_ARRAY,
+                                    items=_BG_ENTRY_SCHEMA,
+                                ),
+                                "scl_bg": openapi.Schema(
+                                    type=openapi.TYPE_ARRAY,
+                                    items=_BG_ENTRY_SCHEMA,
+                                ),
+                                "bg_summary": _BG_SUMMARY_SCHEMA,
                             },
                         ),
                     },
@@ -617,6 +645,12 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
         records = (
             ProjectDates.objects
             .select_related("project")
+            .prefetch_related(
+                Prefetch(
+                    "bg_statuses",
+                    queryset=BGStatus.objects.order_by("id"),
+                )
+            )
             .filter(project__name__iexact=project_name)
         )
 
@@ -636,11 +670,15 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
         project = (scl_record or contractor_record).project
         actual_name = project.name
 
+        bg_payload = bg_status_payload(project)
+
         payload = {
             "project_name": actual_name,
             "scl": ProjectDatesSerializer(scl_record).data if scl_record else None,
             "contractor": ProjectDatesSerializer(contractor_record).data if contractor_record else None,
-            "bg_status": bg_status_dict(project),
+            "contractor_bg": bg_payload["contractor_bg"],
+            "scl_bg": bg_payload["scl_bg"],
+            "bg_summary": bg_payload["bg_summary"],
         }
 
         if request.query_params.get("export", "").lower() == "csv":

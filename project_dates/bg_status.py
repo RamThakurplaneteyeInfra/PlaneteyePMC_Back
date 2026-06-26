@@ -1,4 +1,4 @@
-"""BG Status helpers — optional bank guarantee dates per project."""
+"""BG Status helpers — multi-entry bank guarantee management per project."""
 
 from datetime import date
 
@@ -6,7 +6,7 @@ from django.utils import timezone
 
 from projects.models import Project
 
-from .models import ProjectBGStatus
+from .models import BGStatus, ProjectDates
 
 BG_STATUS_UPDATED = "UPDATED"
 BG_STATUS_NOT_UPDATED = "NOT_UPDATED"
@@ -18,20 +18,18 @@ BG_STATUSES = [
     BG_STATUS_YET_TO_UPDATE,
 ]
 
-EMPTY_BG_STATUS = {
-    "contractor_bg_date": None,
-    "contractor_bg_due_date": None,
-    "contractor_bg_updated_date": None,
-    "contractor_bg_status": BG_STATUS_YET_TO_UPDATE,
-    "scl_bg_date": None,
-    "scl_bg_due_date": None,
-    "scl_bg_updated_date": None,
-    "scl_bg_status": BG_STATUS_YET_TO_UPDATE,
+EMPTY_BG_SUMMARY = {
+    "total_bg": 0,
+    "updated": 0,
+    "yet_to_update": 0,
+    "not_updated": 0,
+    "compliance_percentage": 0.0,
 }
 
-LEGACY_BG_FIELD_MAP = {
-    "contractor_bg_date": "contractor_bg_updated_date",
-    "scl_bg_date": "scl_bg_updated_date",
+EMPTY_BG_PAYLOAD = {
+    "contractor_bg": [],
+    "scl_bg": [],
+    "bg_summary": dict(EMPTY_BG_SUMMARY),
 }
 
 
@@ -44,75 +42,110 @@ def calculate_bg_status(
     updated_date: date | None,
     today: date | None = None,
 ) -> str:
-    """Calculate monthly BG compliance status from due and updated dates."""
+    """
+    Calculate BG compliance status from due and updated dates.
+
+    Rules:
+      - UPDATED: updated_date is set and updated_date <= due_date
+      - YET_TO_UPDATE: updated_date is null and today < due_date
+      - NOT_UPDATED: updated_date is null and today > due_date,
+        or updated_date is set but updated_date > due_date
+    """
     if today is None:
         today = timezone.now().date()
-
-    if updated_date is not None and due_date is not None:
-        if updated_date <= due_date:
-            return BG_STATUS_UPDATED
-        return BG_STATUS_NOT_UPDATED
 
     if due_date is None:
         return BG_STATUS_YET_TO_UPDATE
 
-    if updated_date is None:
-        if due_date >= today:
-            return BG_STATUS_YET_TO_UPDATE
+    if updated_date is not None:
+        if updated_date <= due_date:
+            return BG_STATUS_UPDATED
         return BG_STATUS_NOT_UPDATED
 
+    if today < due_date:
+        return BG_STATUS_YET_TO_UPDATE
+
+    if today > due_date:
+        return BG_STATUS_NOT_UPDATED
+
+    # Due date is today and no update yet
     return BG_STATUS_NOT_UPDATED
 
 
-def bg_status_dict(project: Project | None, today: date | None = None) -> dict:
-    """Return BG Status payload for a project (null values when unset)."""
-    if project is None:
-        return dict(EMPTY_BG_STATUS)
-
-    bg = ProjectBGStatus.objects.filter(project_id=project.id).first()
-    if bg is None:
-        return dict(EMPTY_BG_STATUS)
+def calculate_bg_summary(
+    entries,
+    today: date | None = None,
+) -> dict:
+    """Aggregate compliance counts across BG entries."""
+    statuses = [
+        calculate_bg_status(entry.due_date, entry.updated_date, today=today)
+        for entry in entries
+    ]
+    total = len(statuses)
+    updated = sum(1 for s in statuses if s == BG_STATUS_UPDATED)
+    yet_to_update = sum(1 for s in statuses if s == BG_STATUS_YET_TO_UPDATE)
+    not_updated = sum(1 for s in statuses if s == BG_STATUS_NOT_UPDATED)
+    compliance = round((updated / total) * 100, 2) if total else 0.0
 
     return {
-        "contractor_bg_date": _date_to_str(bg.contractor_bg_updated_date),
-        "contractor_bg_due_date": _date_to_str(bg.contractor_bg_due_date),
-        "contractor_bg_updated_date": _date_to_str(bg.contractor_bg_updated_date),
-        "contractor_bg_status": calculate_bg_status(
-            bg.contractor_bg_due_date,
-            bg.contractor_bg_updated_date,
-            today=today,
-        ),
-        "scl_bg_date": _date_to_str(bg.scl_bg_updated_date),
-        "scl_bg_due_date": _date_to_str(bg.scl_bg_due_date),
-        "scl_bg_updated_date": _date_to_str(bg.scl_bg_updated_date),
-        "scl_bg_status": calculate_bg_status(
-            bg.scl_bg_due_date,
-            bg.scl_bg_updated_date,
-            today=today,
-        ),
+        "total_bg": total,
+        "updated": updated,
+        "yet_to_update": yet_to_update,
+        "not_updated": not_updated,
+        "compliance_percentage": compliance,
     }
 
 
-def upsert_bg_status(project: Project, data: dict) -> ProjectBGStatus:
-    """Create or partially update BG Status for a project."""
-    bg, _ = ProjectBGStatus.objects.get_or_create(project=project)
-    updated = False
+def _serialize_bg_entry(entry: BGStatus, today: date | None = None) -> dict:
+    return {
+        "id": entry.id,
+        "bg_type": entry.bg_type,
+        "bg_name": entry.bg_name,
+        "due_date": _date_to_str(entry.due_date),
+        "updated_date": _date_to_str(entry.updated_date),
+        "status": calculate_bg_status(entry.due_date, entry.updated_date, today=today),
+        "remarks": entry.remarks or "",
+    }
 
-    for raw_field, model_field in LEGACY_BG_FIELD_MAP.items():
-        if raw_field in data:
-            setattr(bg, model_field, data[raw_field])
-            updated = True
 
-    for field in [
-        "contractor_bg_due_date",
-        "contractor_bg_updated_date",
-        "scl_bg_due_date",
-        "scl_bg_updated_date",
-    ]:
-        if field in data:
-            setattr(bg, field, data[field])
-            updated = True
+def get_bg_entries_for_project(project: Project | None):
+    """Return all BG entries for a project with project_date prefetched."""
+    if project is None:
+        return BGStatus.objects.none()
+    return (
+        BGStatus.objects.filter(project_date__project_id=project.id)
+        .select_related("project_date", "project_date__project")
+        .order_by("id")
+    )
 
-    if updated:
-        bg.save()
-    return bg
+
+def bg_status_payload(project: Project | None, today: date | None = None) -> dict:
+    """Return multi-entry BG payload for a project."""
+    if project is None:
+        return dict(EMPTY_BG_PAYLOAD)
+
+    entries = list(get_bg_entries_for_project(project))
+    contractor_bg = [
+        _serialize_bg_entry(entry, today=today)
+        for entry in entries
+        if entry.bg_type == BGStatus.BG_TYPE_CONTRACTOR
+    ]
+    scl_bg = [
+        _serialize_bg_entry(entry, today=today)
+        for entry in entries
+        if entry.bg_type == BGStatus.BG_TYPE_SCL
+    ]
+
+    return {
+        "contractor_bg": contractor_bg,
+        "scl_bg": scl_bg,
+        "bg_summary": calculate_bg_summary(entries, today=today),
+    }
+
+
+def get_project_date_for_bg(project: Project, bg_type: str) -> ProjectDates | None:
+    """Resolve the ProjectDates row for a BG type."""
+    return ProjectDates.objects.filter(
+        project_id=project.id,
+        date_type=bg_type,
+    ).first()

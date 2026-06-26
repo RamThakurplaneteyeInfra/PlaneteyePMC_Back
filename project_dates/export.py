@@ -1,4 +1,4 @@
-"""CSV export for Project Dates including BG Status."""
+"""CSV export for Project Dates including BG Status summary."""
 
 import csv
 import io
@@ -8,7 +8,7 @@ from django.http import HttpResponse
 
 from projects.models import Project
 
-from .bg_status import bg_status_dict
+from .bg_status import bg_status_payload
 from .models import ProjectDates
 
 EXPORT_COLUMNS = [
@@ -21,14 +21,13 @@ EXPORT_COLUMNS = [
     "contractor_contract_finish",
     "contractor_forecast_finish",
     "contractor_eot_date",
-    "contractor_bg_date",
-    "contractor_bg_due_date",
-    "contractor_bg_updated_date",
-    "contractor_bg_status",
-    "scl_bg_date",
-    "scl_bg_due_date",
-    "scl_bg_updated_date",
-    "scl_bg_status",
+    "bg_total",
+    "bg_updated",
+    "bg_yet_to_update",
+    "bg_not_updated",
+    "bg_compliance_percentage",
+    "contractor_bg_count",
+    "scl_bg_count",
 ]
 
 
@@ -51,14 +50,13 @@ def project_dates_rows(queryset) -> list[dict]:
             "contractor_contract_finish": "",
             "contractor_forecast_finish": "",
             "contractor_eot_date": "",
-            "contractor_bg_date": "",
-            "contractor_bg_due_date": "",
-            "contractor_bg_updated_date": "",
-            "contractor_bg_status": "",
-            "scl_bg_date": "",
-            "scl_bg_due_date": "",
-            "scl_bg_updated_date": "",
-            "scl_bg_status": "",
+            "bg_total": 0,
+            "bg_updated": 0,
+            "bg_yet_to_update": 0,
+            "bg_not_updated": 0,
+            "bg_compliance_percentage": 0.0,
+            "contractor_bg_count": 0,
+            "scl_bg_count": 0,
         }
     )
 
@@ -75,15 +73,15 @@ def project_dates_rows(queryset) -> list[dict]:
 
     for pid, row in by_project.items():
         project = Project.objects.filter(pk=pid).first()
-        bg = bg_status_dict(project)
-        row["contractor_bg_date"] = bg["contractor_bg_date"] or ""
-        row["contractor_bg_due_date"] = bg["contractor_bg_due_date"] or ""
-        row["contractor_bg_updated_date"] = bg["contractor_bg_updated_date"] or ""
-        row["contractor_bg_status"] = bg["contractor_bg_status"] or ""
-        row["scl_bg_date"] = bg["scl_bg_date"] or ""
-        row["scl_bg_due_date"] = bg["scl_bg_due_date"] or ""
-        row["scl_bg_updated_date"] = bg["scl_bg_updated_date"] or ""
-        row["scl_bg_status"] = bg["scl_bg_status"] or ""
+        bg = bg_status_payload(project)
+        summary = bg["bg_summary"]
+        row["bg_total"] = summary["total_bg"]
+        row["bg_updated"] = summary["updated"]
+        row["bg_yet_to_update"] = summary["yet_to_update"]
+        row["bg_not_updated"] = summary["not_updated"]
+        row["bg_compliance_percentage"] = summary["compliance_percentage"]
+        row["contractor_bg_count"] = len(bg["contractor_bg"])
+        row["scl_bg_count"] = len(bg["scl_bg"])
 
     return list(by_project.values())
 

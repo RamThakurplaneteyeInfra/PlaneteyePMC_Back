@@ -1,121 +1,99 @@
-"""Serializer for optional BG Status dates."""
+"""Serializers for multi-entry BG Status."""
 
 from rest_framework import serializers
 
 from projects.models import Project
 
-from .bg_status import (
-    LEGACY_BG_FIELD_MAP,
-    calculate_bg_status,
-)
-from .models import ProjectBGStatus
+from .bg_status import calculate_bg_status
+from .models import BGStatus, ProjectDates
 
 
 def _date_to_str(value):
     return value.isoformat() if value else None
 
 
-class ProjectBGStatusSerializer(serializers.ModelSerializer):
-    project_name = serializers.SerializerMethodField(read_only=True)
-    contractor_bg_date = serializers.SerializerMethodField(read_only=True)
-    contractor_bg_status = serializers.SerializerMethodField(read_only=True)
-    scl_bg_date = serializers.SerializerMethodField(read_only=True)
-    scl_bg_status = serializers.SerializerMethodField(read_only=True)
+class BGStatusSerializer(serializers.ModelSerializer):
+    """Read serializer — status is calculated dynamically."""
+
+    due_date = serializers.DateField(format="%Y-%m-%d")
+    updated_date = serializers.DateField(format="%Y-%m-%d", allow_null=True, required=False)
+    status = serializers.SerializerMethodField()
 
     class Meta:
-        model = ProjectBGStatus
+        model = BGStatus
         fields = [
             "id",
-            "project_name",
-            "contractor_bg_date",
-            "contractor_bg_due_date",
-            "contractor_bg_updated_date",
-            "contractor_bg_status",
-            "scl_bg_date",
-            "scl_bg_due_date",
-            "scl_bg_updated_date",
-            "scl_bg_status",
-            "created_at",
-            "updated_at",
+            "bg_type",
+            "bg_name",
+            "due_date",
+            "updated_date",
+            "status",
+            "remarks",
         ]
-        read_only_fields = [
-            "id",
-            "project_name",
-            "contractor_bg_date",
-            "contractor_bg_status",
-            "scl_bg_date",
-            "scl_bg_status",
-            "created_at",
-            "updated_at",
-        ]
-        extra_kwargs = {
-            "contractor_bg_due_date": {"required": False, "allow_null": True},
-            "contractor_bg_updated_date": {"required": False, "allow_null": True},
-            "scl_bg_due_date": {"required": False, "allow_null": True},
-            "scl_bg_updated_date": {"required": False, "allow_null": True},
-        }
+        read_only_fields = fields
 
-    def get_project_name(self, obj) -> str:
-        return obj.project.name if obj.project_id else ""
+    def get_status(self, obj) -> str:
+        today = self.context.get("today")
+        return calculate_bg_status(obj.due_date, obj.updated_date, today=today)
 
-    def get_contractor_bg_date(self, obj) -> str | None:
-        return _date_to_str(obj.contractor_bg_updated_date)
 
-    def get_contractor_bg_status(self, obj) -> str:
-        return calculate_bg_status(obj.contractor_bg_due_date, obj.contractor_bg_updated_date)
+class BGStatusCreateSerializer(serializers.Serializer):
+    """Create a new BG entry for a project (does not overwrite existing rows)."""
 
-    def get_scl_bg_date(self, obj) -> str | None:
-        return _date_to_str(obj.scl_bg_updated_date)
-
-    def get_scl_bg_status(self, obj) -> str:
-        return calculate_bg_status(obj.scl_bg_due_date, obj.scl_bg_updated_date)
+    bg_type = serializers.ChoiceField(choices=BGStatus.BG_TYPE_CHOICES)
+    bg_name = serializers.CharField(max_length=255)
+    due_date = serializers.DateField()
+    updated_date = serializers.DateField(required=False, allow_null=True)
+    remarks = serializers.CharField(required=False, allow_blank=True, default="")
 
     def validate(self, attrs):
-        return attrs
-
-
-class ProjectBGStatusWriteSerializer(serializers.Serializer):
-    """Upsert BG dates by project name — all fields optional."""
-
-    project_name = serializers.CharField(required=False, allow_blank=True)
-    contractor_bg_date = serializers.DateField(required=False, allow_null=True)
-    contractor_bg_due_date = serializers.DateField(required=False, allow_null=True)
-    contractor_bg_updated_date = serializers.DateField(required=False, allow_null=True)
-    scl_bg_date = serializers.DateField(required=False, allow_null=True)
-    scl_bg_due_date = serializers.DateField(required=False, allow_null=True)
-    scl_bg_updated_date = serializers.DateField(required=False, allow_null=True)
-
-    def validate(self, attrs):
-        project_name = (attrs.get("project_name") or "").strip()
-        if not project_name and not self.context.get("project"):
+        project = self.context.get("project")
+        if project is None:
             raise serializers.ValidationError(
-                {"project_name": "project_name is required."}
+                {"project": "Project context is required."}
             )
-        if project_name:
-            try:
-                attrs["project"] = Project.objects.get(name__iexact=project_name)
-            except Project.DoesNotExist:
-                raise serializers.ValidationError(
-                    {"project_name": f"No project found with name '{project_name}'."}
-                )
-        elif self.context.get("project"):
-            attrs["project"] = self.context["project"]
 
-        for legacy_field, model_field in LEGACY_BG_FIELD_MAP.items():
-            if legacy_field in attrs and model_field in attrs:
-                if attrs[legacy_field] != attrs[model_field]:
-                    raise serializers.ValidationError(
-                        {
-                            legacy_field: (
-                                f"{legacy_field} is a legacy alias for "
-                                f"{model_field}; do not send conflicting values."
-                            )
-                        }
+        bg_type = attrs["bg_type"]
+        project_date = ProjectDates.objects.filter(
+            project_id=project.id,
+            date_type=bg_type,
+        ).first()
+        if project_date is None:
+            raise serializers.ValidationError(
+                {
+                    "bg_type": (
+                        f"No {bg_type} project dates record exists for this project. "
+                        f"Create the {bg_type} schedule record first."
                     )
-                attrs.pop(legacy_field)
+                }
+            )
 
-        for legacy_field, model_field in LEGACY_BG_FIELD_MAP.items():
-            if legacy_field in attrs:
-                attrs[model_field] = attrs.pop(legacy_field)
-
+        attrs["project_date"] = project_date
         return attrs
+
+    def create(self, validated_data):
+        project_date = validated_data.pop("project_date")
+        remarks = validated_data.pop("remarks", "")
+        return BGStatus.objects.create(
+            project_date=project_date,
+            remarks=remarks,
+            **validated_data,
+        )
+
+
+class BGStatusUpdateSerializer(serializers.ModelSerializer):
+    """Partial update for a single BG entry."""
+
+    due_date = serializers.DateField(required=False)
+    updated_date = serializers.DateField(required=False, allow_null=True)
+    bg_name = serializers.CharField(max_length=255, required=False)
+    remarks = serializers.CharField(required=False, allow_blank=True)
+
+    class Meta:
+        model = BGStatus
+        fields = [
+            "bg_name",
+            "due_date",
+            "updated_date",
+            "remarks",
+        ]
