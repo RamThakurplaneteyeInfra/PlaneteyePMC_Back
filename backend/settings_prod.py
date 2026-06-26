@@ -107,18 +107,12 @@ SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = 'DENY'
 
-# ================= CORS =================
-CORS_ALLOW_ALL_ORIGINS = False
-CORS_ALLOW_CREDENTIALS = True
-_cors_env = os.environ.get('CORS_ALLOWED_ORIGINS', '')
-CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_env.split(',') if o.strip()]
-if _render_external and _render_external not in CORS_ALLOWED_ORIGINS:
-    CORS_ALLOWED_ORIGINS.append(_render_external)
-
+# ================= CORS — allow all origins =================
+CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOWED_ORIGIN_REGEXES = [
-    r'^https://.*\.onrender\.com$',
-    r'^https://.*\.devtunnels\.ms$',
+    r"^.+$",  # match any non-empty Origin (http/https, any host/port)
 ]
+CORS_ALLOW_CREDENTIALS = True
 
 # ================= CHANNELS =================
 CHANNEL_LAYERS = {

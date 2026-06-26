@@ -188,13 +188,13 @@ MEDIA_ROOT = BASE_DIR / 'media'
 BASE_URL = os.environ.get('RENDER_EXTERNAL_URL', os.environ.get('BASE_URL', 'http://localhost:8000'))
 
 # -----------------------------------------------------------------------------
-# CORS — allow requests from any browser origin (development / open API)
-# Using regex echoes the request Origin so Access-Control-Allow-Credentials works.
-# (CORS_ALLOW_ALL_ORIGINS=True sends * which breaks credentialed cross-origin calls.)
+# CORS — allow all origins (*)
+# CORS_ALLOW_ALL_ORIGINS=True; regex below supports credentialed requests
+# (browser forbids Access-Control-Allow-Origin: * with credentials).
 # -----------------------------------------------------------------------------
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOWED_ORIGIN_REGEXES = [
-    r"^.+$",  # match any non-empty Origin (http/https, any host/port)
+    r"^.+$",  # any Origin
 ]
 CORS_ALLOW_CREDENTIALS = True
 
