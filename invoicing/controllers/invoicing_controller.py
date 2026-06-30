@@ -36,8 +36,16 @@ from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+
+from accounts.permissions import IsAuthenticatedProjectRBAC
+from accounts.rbac import RBACDomain
+from accounts.rbac_checks import (
+    apply_project_rbac_to_queryset,
+    enforce_instance_write,
+    enforce_project_access_by_name,
+    enforce_project_write_by_name,
+)
 
 from ..models.invoicing_information import InvoicingInformation
 from .invoicing_serializer import (
@@ -261,6 +269,8 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
     queryset = InvoicingInformation.objects.all()
     serializer_class = InvoicingInformationSerializer
     pagination_class = InvoicingPagination
+    permission_classes = [IsAuthenticatedProjectRBAC]
+    rbac_domain = RBACDomain.BILLING
 
     # -------------------------------------------------------------------------
     # Queryset
@@ -275,11 +285,12 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
           ?invoice_type=  — exact invoice type filter (SCL | CONTRACTOR)
           ?search=        — free-text search across project_name
         """
-        return _build_queryset(
+        qs = _build_queryset(
             project_name=self.request.query_params.get("project_name"),
             invoice_type=self.request.query_params.get("invoice_type"),
             search=self.request.query_params.get("search"),
         )
+        return apply_project_rbac_to_queryset(qs, self.request, "project_name")
 
     # -------------------------------------------------------------------------
     # Response helpers
@@ -371,6 +382,9 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
         """
         payload = _normalise_payload(request.data)
         project_name = str(payload.get("project_name", "")).strip()
+        enforce_project_write_by_name(
+            request.user, project_name, RBACDomain.BILLING
+        )
         invoice_type = payload.get("invoice_type", "")
 
         existing = None
@@ -569,6 +583,8 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
+        enforce_instance_write(request.user, instance, RBACDomain.BILLING)
+
         payload = _normalise_payload(request.data)
 
         serializer = InvoicingInformationSerializer(
@@ -624,6 +640,8 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
+        enforce_instance_write(request.user, instance, RBACDomain.BILLING)
+
         project_name = instance.project_name
         invoice_type = instance.invoice_type
         instance.delete()
@@ -670,7 +688,13 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
         if not projectName or not projectName.strip():
             return self._error("projectName is required.")
 
-        qs = _build_queryset(project_name=projectName)
+        enforce_project_access_by_name(request.user, projectName.strip())
+
+        qs = apply_project_rbac_to_queryset(
+            _build_queryset(project_name=projectName),
+            request,
+            "project_name",
+        )
 
         if not qs.exists():
             return self._error(
@@ -724,7 +748,11 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
                 f"Must be one of: {', '.join(valid_types)}."
             )
 
-        qs = _build_queryset(invoice_type=normalized)
+        qs = apply_project_rbac_to_queryset(
+            _build_queryset(invoice_type=normalized),
+            request,
+            "project_name",
+        )
 
         if not qs.exists():
             return self._error(
@@ -784,6 +812,8 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
                 f"Invalid invoiceType '{invoiceType}'. "
                 f"Must be one of: {', '.join(valid_types)}."
             )
+
+        enforce_project_access_by_name(request.user, projectName.strip())
 
         try:
             instance = InvoicingInformation.objects.get(

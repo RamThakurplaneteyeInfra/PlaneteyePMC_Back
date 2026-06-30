@@ -12,6 +12,14 @@ from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
+from accounts.permissions import IsAuthenticatedProjectRBAC
+from accounts.rbac import RBACDomain
+from accounts.rbac_checks import (
+    apply_project_rbac_to_queryset,
+    enforce_project_access_by_name,
+    enforce_project_write_by_name,
+)
+
 from .models import CashFlow
 from .serializers import (
     CashFlowInputSerializer,
@@ -84,6 +92,8 @@ class CashFlowViewSet(viewsets.ModelViewSet):
     queryset = CashFlow.objects.all()
     serializer_class = CashFlowSerializer
     pagination_class = CashFlowPagination
+    permission_classes = [IsAuthenticatedProjectRBAC]
+    rbac_domain = RBACDomain.BILLING
     http_method_names = ["get", "post", "head", "options"]
 
     def get_queryset(self):
@@ -121,9 +131,7 @@ class CashFlowViewSet(viewsets.ModelViewSet):
                                 "WHEN 'Oct' THEN 10 WHEN 'Nov' THEN 11 WHEN 'Dec' THEN 12 END"
                 }
             ).order_by('project_name', 'sort_year', 'sort_month')
-        else:
-            # For retrieve/detail view: return full queryset without filtering
-            return qs
+        return apply_project_rbac_to_queryset(qs, self.request, "project_name")
 
     def _get_cache_key(self, request):
         """Generate cache key based on project_name filter."""
@@ -144,6 +152,10 @@ class CashFlowViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         ser = CashFlowInputSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
+        project_name = str(ser.validated_data.get("project_name", "")).strip()
+        enforce_project_write_by_name(
+            request.user, project_name, RBACDomain.BILLING
+        )
         instance = ser.save()
 
         # Cache invalidation: clear relevant cache keys after creation
@@ -289,6 +301,8 @@ class CashFlowViewSet(viewsets.ModelViewSet):
                 {"detail": "Query parameter project_name is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        enforce_project_access_by_name(request.user, pn)
 
         # Check cache first
         cache_key = self._get_dashboard_cache_key(pn)

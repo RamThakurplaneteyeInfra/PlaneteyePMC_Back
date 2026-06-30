@@ -34,6 +34,14 @@ class Project(models.Model):
     # User Assignments
     pmc_head = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='pmc_projects')
     team_lead = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='lead_projects')
+    site_engineer = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='primary_site_engineer_projects',
+        help_text="Primary Site Engineer for this project (one per project)",
+    )
     site_engineers = models.ManyToManyField(User, blank=True, related_name='assigned_projects')
     # Separate fields for different site engineer types
     billing_site_engineer = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='billing_engineer_projects')

@@ -23,7 +23,10 @@ from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import IsAuthenticated
+from accounts.permissions import IsAuthenticatedProjectRBAC
+from accounts.rbac import RBACDomain, filter_queryset_by_project_access
+from accounts.rbac_checks import enforce_project_write_by_name
 from rest_framework.response import Response
 
 from ..models.project_quality_status import ProjectQualityStatus
@@ -132,6 +135,8 @@ class ProjectQualityStatusViewSet(viewsets.ModelViewSet):
     serializer_class = ProjectQualityStatusSerializer
     pagination_class = QualityStatusPagination
     lookup_value_regex = r"\d+"
+    permission_classes = [IsAuthenticatedProjectRBAC]
+    rbac_domain = RBACDomain.QAQC
 
     def get_queryset(self):
         qs = ProjectQualityStatus.objects.all()
@@ -157,6 +162,10 @@ class ProjectQualityStatusViewSet(viewsets.ModelViewSet):
         search = self.request.query_params.get("search")
         if search:
             qs = qs.filter(projectName__icontains=search.strip())
+
+        user = getattr(self.request, "user", None)
+        if user and user.is_authenticated:
+            qs = filter_queryset_by_project_access(qs, user, "projectName")
 
         return qs.order_by("projectName", "year", "month")
 
@@ -216,6 +225,9 @@ class ProjectQualityStatusViewSet(viewsets.ModelViewSet):
 
         if not serializer.is_valid():
             return self._error("Validation failed", errors=serializer.errors)
+
+        project_name = payload.get("projectName") or payload.get("project_name")
+        enforce_project_write_by_name(request.user, project_name, RBACDomain.QAQC)
 
         try:
             instance = serializer.save()

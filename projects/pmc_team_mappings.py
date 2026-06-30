@@ -1,0 +1,27 @@
+"""Shared PMC Team Leader ↔ project name mappings (23 projects)."""
+
+TL_PROJECT_MAPPINGS: list[tuple[str, str]] = [
+    ("pmc_tl1", "KHB Multiplex, Kengeri (A-3462)"),
+    ("pmc_tl2", "SWB Shillong PKG -1"),
+    ("pmc_tl3", "SWB Shillong PKG -II"),
+    ("pmc_tl4", "SWB Shillong PKG – III"),
+    ("pmc_tl5", "G3 Building – Girgaon (MMRCL)"),
+    ("pmc_tl6", "K3 Building – Kalbadevi (MMRCL)"),
+    ("pmc_tl7", "KBR Park -I Flyover – Hyderabad (GHMC)"),
+    ("pmc_tl8", "KBR Park -II Flyover – Hyderabad (GHMC)"),
+    ("pmc_tl9", "FOX SAGAR – Hyderabad"),
+    ("pmc_tl10", "Mayapur Flyover"),
+    ("pmc_tl11", "Nongstoin-Rambrai Road, Meghalaya (NHIDCL)"),
+    ("pmc_tl12", "Multi-Modal Transit Hub – Thane (TSCL)"),
+    ("pmc_tl13", "4-Lane ROB – Rawanfonda, Margao, Goa (GSIDC)"),
+    ("pmc_tl14", "New Promenade – Margao, Goa (GSIDC)"),
+    ("pmc_tl15", "Police HSG at MIDC Metro Station (MMRCL)"),
+    ("pmc_tl16", "Chembur (M-Four Atlas)"),
+    ("pmc_tl17", "JK PKG -1"),
+    ("pmc_tl18", "JK-PKG -2"),
+    ("pmc_tl19", "JK-PKG 3"),
+    ("pmc_tl20", "AOC Center Hyderabad"),
+    ("pmc_tl21", "Uppal Hyderabad"),
+    ("pmc_tl22", "Avissa G+40, Mahim"),
+    ("pmc_tl23", "Shivalik Building Santacruz"),
+]

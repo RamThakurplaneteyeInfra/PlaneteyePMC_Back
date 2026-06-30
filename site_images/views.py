@@ -11,9 +11,12 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, MultiPartParser
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from accounts.permissions import IsAuthenticatedProjectRBAC
+from accounts.rbac import RBACDomain, filter_queryset_by_project_access
+from accounts.rbac_checks import enforce_project_write_by_name
 from .models import SiteProgressImage
 from .serializers import (
     SiteProgressImageSerializer,
@@ -97,6 +100,8 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
     pagination_class = SiteImagePagination
     parser_classes = [MultiPartParser, FormParser]
     http_method_names = ["get", "post", "delete", "head", "options"]
+    permission_classes = [IsAuthenticatedProjectRBAC]
+    rbac_domain = RBACDomain.ENGINEERING
 
     def get_queryset(self):
         qs = SiteProgressImage.objects.all()
@@ -117,6 +122,10 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
                 qs = qs.filter(year=int(year))
             except ValueError:
                 pass
+
+        user = getattr(self.request, "user", None)
+        if user and user.is_authenticated:
+            qs = filter_queryset_by_project_access(qs, user, "project_name")
 
         return qs.order_by("-created_at")
 
@@ -170,6 +179,12 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
                 "Validation failed",
                 errors=_flatten_errors(meta_serializer.errors),
             )
+
+        enforce_project_write_by_name(
+            request.user,
+            meta_serializer.validated_data.get("project_name"),
+            RBACDomain.ENGINEERING,
+        )
 
         try:
             SiteProgressImageUploadSerializer.validate_files(files)

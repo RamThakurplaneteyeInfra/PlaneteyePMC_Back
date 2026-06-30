@@ -10,6 +10,9 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from accounts.rbac import RBACDomain, get_user_assigned_projects_qs, is_admin_user
+from accounts.permissions import IsAuthenticatedProjectRBAC
+
 from .models import Project, ProjectDashboardData, Site, ProjectLog, ProjectLogEntry
 from .serializers import (
     ProjectDashboardDataSerializer,
@@ -29,6 +32,8 @@ class ProjectViewSet(viewsets.ModelViewSet):
     """
     queryset = Project.objects.all()
     serializer_class = ProjectSerializer
+    permission_classes = [IsAuthenticatedProjectRBAC]
+    rbac_domain = RBACDomain.GENERAL
     def get_queryset(self):
         """
         Get filtered queryset based on user role and permissions.
@@ -43,6 +48,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
             'dashboard_data',
             'pmc_head',
             'team_lead',
+            'site_engineer',
             'billing_site_engineer',
             'qaqc_site_engineer',
             'created_by'
@@ -52,42 +58,26 @@ class ProjectViewSet(viewsets.ModelViewSet):
             'site_engineers'
         )
 
-        # Return all projects for unauthenticated users
         user = self.request.user
         if not user.is_authenticated:
             return base_queryset.order_by('-created_at')
 
-        # Return all projects for PMC Head and Coordinator, or filter by assignment for others
-        if user.groups.filter(name__in=['PMC Head', 'CEO', 'Coordinator']).exists() or user.is_superuser:
+        if is_admin_user(user):
             return base_queryset.order_by('-created_at')
 
-        # For Site Engineers, show active/planning projects they are assigned to OR all active projects
-        if user.groups.filter(name__in=['Site Engineer', 'Billing Site Engineer', 'QAQC Site Engineer']).exists():
-            # First, get projects explicitly assigned to this site engineer
-            assigned_projects = base_queryset.filter(
-                Q(team_lead=user) |
-                Q(site_engineers=user) |
-                Q(billing_site_engineer=user) |
-                Q(qaqc_site_engineer=user) |
-                Q(coordinators=user) |
-                Q(pmc_head=user)
-            ).distinct()
-
-            # If no assigned projects, show active/planning projects so they can submit DPRs
-            if not assigned_projects.exists():
-                return base_queryset.filter(
-                    status__in=['active', 'planning']
-                ).order_by('-created_at')
-
-            return assigned_projects.order_by('-created_at')
-
-        # For other roles (Team Lead, Coordinator), show projects they are assigned to
-        return base_queryset.filter(
-            Q(team_lead=user) |
-            Q(site_engineers=user) |
-            Q(coordinators=user) |
-            Q(pmc_head=user)
-        ).distinct().order_by('-created_at')
+        return get_user_assigned_projects_qs(user).select_related(
+            'dashboard_data',
+            'pmc_head',
+            'team_lead',
+            'site_engineer',
+            'billing_site_engineer',
+            'qaqc_site_engineer',
+            'created_by',
+        ).prefetch_related(
+            'sites',
+            'coordinators',
+            'site_engineers',
+        ).order_by('-created_at')
 
     def _has_group_permission(self, user, group_names: List[str]) -> bool:
         """Check if user has any of the specified groups or is superuser."""

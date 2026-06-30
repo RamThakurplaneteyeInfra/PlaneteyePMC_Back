@@ -14,6 +14,13 @@ from rest_framework import status, viewsets
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
+from accounts.permissions import IsAuthenticatedProjectRBAC
+from accounts.rbac import RBACDomain
+from accounts.rbac_checks import (
+    apply_project_rbac_to_queryset,
+    enforce_project_write_by_name,
+)
+
 from .models import BudgetCostPerformance
 from .serializers import (
     BudgetCostPerformanceInputSerializer,
@@ -69,6 +76,8 @@ class BudgetCostPerformanceViewSet(viewsets.ModelViewSet):
     queryset = BudgetCostPerformance.objects.all()
     serializer_class = BudgetCostPerformanceSerializer
     pagination_class = BudgetPerformancePagination
+    permission_classes = [IsAuthenticatedProjectRBAC]
+    rbac_domain = RBACDomain.FINANCIAL
     http_method_names = ["get", "post", "head", "options"]
 
     def get_queryset(self):
@@ -88,13 +97,10 @@ class BudgetCostPerformanceViewSet(viewsets.ModelViewSet):
             if pn:
                 qs = qs.filter(project_name__iexact=pn.strip())
 
-            # Safe limit to prevent large dataset issues (latest 50 records)
-            # Keep ordering by -created_at for dashboard relevance
+            qs = apply_project_rbac_to_queryset(qs, self.request, "project_name")
             return qs.order_by("-created_at")[:50]
-        else:
-            # For retrieve/detail view: return full queryset without filtering or limits
-            # This ensures GET by ID works for any record
-            return qs
+
+        return apply_project_rbac_to_queryset(qs, self.request, "project_name")
 
     def _get_cache_key(self, request):
         """Generate cache key based on project_name filter."""
@@ -171,6 +177,12 @@ class BudgetCostPerformanceViewSet(viewsets.ModelViewSet):
         """
         input_serializer = BudgetCostPerformanceInputSerializer(data=request.data)
         input_serializer.is_valid(raise_exception=True)
+        project_name = str(
+            input_serializer.validated_data.get("project_name", "")
+        ).strip()
+        enforce_project_write_by_name(
+            request.user, project_name, RBACDomain.FINANCIAL
+        )
         instance = input_serializer.save()
 
         # Cache invalidation: clear relevant cache keys

@@ -1,0 +1,79 @@
+"""Raise PermissionDenied when RBAC rules block an action."""
+
+from rest_framework.exceptions import PermissionDenied
+
+from .rbac import (
+    RBACDomain,
+    project_from_instance,
+    resolve_project,
+    user_can_write_domain,
+    user_has_project_access,
+    user_has_project_name_access,
+    filter_queryset_by_project_access,
+)
+from .utils import get_user_role
+
+
+def apply_project_rbac_to_queryset(queryset, request, project_name_field="project_name"):
+    """Filter queryset to projects the user is assigned to (admins see all)."""
+    user = getattr(request, "user", None)
+    if user and user.is_authenticated:
+        return filter_queryset_by_project_access(queryset, user, project_name_field)
+    return queryset
+
+
+def enforce_project_access(user, project, *, message: str | None = None) -> None:
+    if not user_has_project_access(user, project):
+        raise PermissionDenied(message or "You do not have access to this project.")
+
+
+def enforce_project_access_by_name(
+    user,
+    project_name: str | None,
+    *,
+    message: str | None = None,
+) -> None:
+    if not user_has_project_name_access(user, project_name):
+        raise PermissionDenied(
+            message or "You do not have access to this project."
+        )
+
+
+def enforce_project_write(
+    user,
+    project,
+    domain: str = RBACDomain.GENERAL,
+    *,
+    message: str | None = None,
+) -> None:
+    enforce_project_access(user, project)
+    if not user_can_write_domain(user, project, domain):
+        raise PermissionDenied(
+            message
+            or f"You do not have permission to modify {domain} data for this project."
+        )
+
+
+def enforce_project_write_by_name(
+    user,
+    project_name: str | None,
+    domain: str = RBACDomain.GENERAL,
+) -> None:
+    project = resolve_project(project_name)
+    if project is None:
+        raise PermissionDenied("Project not found or access denied.")
+    enforce_project_write(user, project, domain)
+
+
+def enforce_instance_write(user, instance, domain: str = RBACDomain.GENERAL) -> None:
+    project = project_from_instance(instance)
+    enforce_project_write(user, project, domain)
+
+
+def site_engineer_cannot_delete_approved_dpr(user, instance) -> None:
+    """Site Engineer may not delete approved DPR records."""
+    if get_user_role(user) != "Site Engineer":
+        return
+    status_value = getattr(instance, "status", None)
+    if status_value in ("approved", "APPROVED"):
+        raise PermissionDenied("Site Engineers cannot delete approved DPR records.")

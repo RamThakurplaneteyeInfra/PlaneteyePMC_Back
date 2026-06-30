@@ -12,6 +12,14 @@ from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
+from accounts.permissions import IsAuthenticatedProjectRBAC
+from accounts.rbac import RBACDomain
+from accounts.rbac_checks import (
+    apply_project_rbac_to_queryset,
+    enforce_project_access_by_name,
+    enforce_project_write_by_name,
+)
+
 from .models import ProjectCostPerformance
 from .serializers import (
     EVMDashboardInputSerializer,
@@ -73,6 +81,8 @@ _POST_SCHEMA = openapi.Schema(
 class ProjectCostPerformanceViewSet(viewsets.ModelViewSet):
     queryset = ProjectCostPerformance.objects.all()
     serializer_class = ProjectCostPerformanceSerializer
+    permission_classes = [IsAuthenticatedProjectRBAC]
+    rbac_domain = RBACDomain.FINANCIAL
     http_method_names = ["get", "post", "head", "options"]
     pagination_class = PageNumberPagination
 
@@ -83,7 +93,7 @@ class ProjectCostPerformanceViewSet(viewsets.ModelViewSet):
         pn = self.request.query_params.get("project_name")
         if pn:
             qs = qs.filter(project__name__icontains=pn.strip())
-        return qs
+        return apply_project_rbac_to_queryset(qs, self.request, "project__name")
 
     @swagger_auto_schema(
         tags=swagger_tags,
@@ -100,6 +110,10 @@ class ProjectCostPerformanceViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         ser = ProjectCostPerformanceInputSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
+        project_name = str(ser.validated_data.get("project_name", "")).strip()
+        enforce_project_write_by_name(
+            request.user, project_name, RBACDomain.FINANCIAL
+        )
         instance = ser.save()
 
         # Cache invalidation
@@ -201,6 +215,8 @@ class ProjectCostPerformanceViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        enforce_project_access_by_name(request.user, pn)
+
         cache_key = f"cost_performance_dashboard:{pn}"
         data = cache.get(cache_key)
         if data is not None:
@@ -286,6 +302,9 @@ class ProjectCostPerformanceViewSet(viewsets.ModelViewSet):
         """
         ser = EVMDashboardInputSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
+
+        project_name = ser.validated_data["project_name"]
+        enforce_project_access_by_name(request.user, project_name)
 
         # Generate cache key from request data
         request_hash = hashlib.md5(str(request.data).encode()).hexdigest()

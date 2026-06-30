@@ -25,8 +25,16 @@ from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+
+from accounts.permissions import IsAuthenticatedProjectRBAC
+from accounts.rbac import RBACDomain, extract_project_name_from_data
+from accounts.rbac_checks import (
+    apply_project_rbac_to_queryset,
+    enforce_instance_write,
+    enforce_project_access_by_name,
+    enforce_project_write_by_name,
+)
 
 from ..models.planned_earned_value import PlannedEarnedValue
 from .planned_earned_value_serializer import PlannedEarnedValueSerializer
@@ -248,6 +256,8 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
     queryset = PlannedEarnedValue.objects.all()
     serializer_class = PlannedEarnedValueSerializer
     pagination_class = PlannedEarnedValuePagination
+    permission_classes = [IsAuthenticatedProjectRBAC]
+    rbac_domain = RBACDomain.FINANCIAL
 
     def get_queryset(self):
         qs = PlannedEarnedValue.objects.all()
@@ -274,7 +284,8 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
             except ValueError:
                 pass
 
-        return qs.order_by("projectName", "year", "month", "value_type")
+        qs = qs.order_by("projectName", "year", "month", "value_type")
+        return apply_project_rbac_to_queryset(qs, self.request, "projectName")
 
     def _invalidate_list_cache(self):
         cache.delete(_CACHE_KEY_LIST)
@@ -526,6 +537,11 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
         Nested payload (dashboard): project_name, month, year, scl, contractor
         Flat payload (legacy): projectName, value_type, month, year, plannedValue, earnedValue
         """
+        project_name = extract_project_name_from_data(request.data)
+        enforce_project_write_by_name(
+            request.user, project_name, RBACDomain.FINANCIAL
+        )
+
         if _is_nested_payload(request.data):
             try:
                 result, http_status, message = self._save_nested_payload(request)
@@ -663,6 +679,8 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
+        enforce_instance_write(request.user, instance, RBACDomain.FINANCIAL)
+
         if _is_nested_payload(request.data):
             try:
                 result, http_status, message = self._save_nested_payload(
@@ -725,6 +743,8 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
+        enforce_instance_write(request.user, instance, RBACDomain.FINANCIAL)
+
         label = f"{instance.projectName} [{instance.value_type}] {instance.month:02d}/{instance.year}"
         instance.delete()
         self._invalidate_list_cache()
@@ -756,6 +776,8 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
     def get_by_project_name(self, request, projectName: str = None):
         if not projectName or not projectName.strip():
             return self._error("projectName is required.")
+
+        enforce_project_access_by_name(request.user, projectName.strip())
 
         instance = (
             PlannedEarnedValue.objects.filter(
@@ -812,6 +834,8 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
             return self._error("year must be between 2000 and 2100.")
 
         project_name = projectName.strip()
+        enforce_project_access_by_name(request.user, project_name)
+
         records = PlannedEarnedValue.objects.filter(
             projectName__iexact=project_name,
             month=month_int,
@@ -855,6 +879,8 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
             return self._error("year must be between 2000 and 2100.")
 
         project_name = projectName.strip()
+        enforce_project_access_by_name(request.user, project_name)
+
         qs = PlannedEarnedValue.objects.filter(
             projectName__iexact=project_name,
             year=year_int,

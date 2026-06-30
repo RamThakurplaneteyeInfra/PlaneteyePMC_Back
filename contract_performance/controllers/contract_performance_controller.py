@@ -42,6 +42,15 @@ from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
+from accounts.permissions import IsAuthenticatedProjectRBAC
+from accounts.rbac import RBACDomain
+from accounts.rbac_checks import (
+    apply_project_rbac_to_queryset,
+    enforce_instance_write,
+    enforce_project_access_by_name,
+    enforce_project_write_by_name,
+)
+
 from ..models.contract_performance import ContractPerformance
 from .contract_performance_serializer import ContractPerformanceSerializer
 
@@ -205,6 +214,8 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
     queryset = ContractPerformance.objects.all()
     serializer_class = ContractPerformanceSerializer
     pagination_class = ContractPerformancePagination
+    permission_classes = [IsAuthenticatedProjectRBAC]
+    rbac_domain = RBACDomain.FINANCIAL
 
     # -------------------------------------------------------------------------
     # Queryset
@@ -218,10 +229,11 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
           ?project_name= — partial, case-insensitive project name filter
           ?search=       — free-text search across projectName
         """
-        return _build_queryset(
+        qs = _build_queryset(
             project_name=self.request.query_params.get("project_name"),
             search=self.request.query_params.get("search"),
         )
+        return apply_project_rbac_to_queryset(qs, self.request, "projectName")
 
     # -------------------------------------------------------------------------
     # Response helpers
@@ -297,6 +309,10 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
             or request.data.get("project_name")
             or ""
         ).strip()
+
+        enforce_project_write_by_name(
+            request.user, project_name, RBACDomain.FINANCIAL
+        )
 
         # Strip read-only / auto-calculated fields the frontend should not send
         _READ_ONLY = {
@@ -496,6 +512,8 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
+        enforce_instance_write(request.user, instance, RBACDomain.FINANCIAL)
+
         _READ_ONLY = {"variance", "variancePercentage", "performancePercentage", "collectionEfficiency", "performanceStatus", "id", "created_at", "updated_at"}
         payload = {k: v for k, v in request.data.items() if k not in _READ_ONLY}
 
@@ -552,6 +570,8 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
+        enforce_instance_write(request.user, instance, RBACDomain.FINANCIAL)
+
         project_name = instance.projectName
         instance.delete()
         self._invalidate_cache()
@@ -592,6 +612,8 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
         """
         if not projectName or not projectName.strip():
             return self._error("projectName is required.")
+
+        enforce_project_access_by_name(request.user, projectName.strip())
 
         try:
             instance = ContractPerformance.objects.get(

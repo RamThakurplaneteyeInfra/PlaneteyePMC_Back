@@ -14,6 +14,9 @@ from drf_yasg import openapi
 
 from .models import Contract
 from .serializers import ContractSerializer
+from accounts.permissions import IsAuthenticatedProjectRBAC
+from accounts.rbac import RBACDomain, filter_queryset_by_project_access
+from accounts.rbac_checks import enforce_project_write_by_name
 
 
 # Role normalization mapping for case-insensitive input
@@ -82,7 +85,8 @@ class ContractViewSet(viewsets.ModelViewSet):
 
     queryset = Contract.objects.all()
     serializer_class = ContractSerializer
-    # Using role from request (temporary). Do not require auth for now.
+    permission_classes = [IsAuthenticatedProjectRBAC]
+    rbac_domain = RBACDomain.BILLING
 
     def initial(self, request, *args, **kwargs):
         """
@@ -223,10 +227,16 @@ class ContractViewSet(viewsets.ModelViewSet):
             if role not in ["PMC Head", "CEO"]:
                 qs = qs.filter(status=Contract.Status.APPROVED)
 
+            qs = self._apply_project_rbac_filter(qs)
             return qs.order_by("-created_at")
         else:
-            # For retrieve/detail view: return full queryset without filtering
-            return qs
+            return self._apply_project_rbac_filter(qs)
+
+    def _apply_project_rbac_filter(self, qs):
+        user = getattr(self.request, "user", None)
+        if user and user.is_authenticated:
+            return filter_queryset_by_project_access(qs, user, "project_name")
+        return qs
 
     @swagger_auto_schema(
         operation_description="Retrieve a single contract by ID. Dashboard users see only approved contracts.",
@@ -322,6 +332,11 @@ class ContractViewSet(viewsets.ModelViewSet):
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        enforce_project_write_by_name(
+            request.user,
+            serializer.validated_data.get("project_name"),
+            RBACDomain.BILLING,
+        )
         # Explicitly set status to PENDING (prevent any auto-approval)
         contract = serializer.save(status=Contract.Status.PENDING)
 

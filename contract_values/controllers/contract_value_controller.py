@@ -36,8 +36,16 @@ from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+
+from accounts.permissions import IsAuthenticatedProjectRBAC
+from accounts.rbac import RBACDomain
+from accounts.rbac_checks import (
+    apply_project_rbac_to_queryset,
+    enforce_instance_write,
+    enforce_project_access_by_name,
+    enforce_project_write_by_name,
+)
 
 from ..models.contract_value import ContractValue
 from .contract_value_serializer import ContractValueSerializer, _normalize_contract_type
@@ -265,6 +273,8 @@ class ContractValueViewSet(viewsets.ModelViewSet):
     queryset = ContractValue.objects.all()
     serializer_class = ContractValueSerializer
     pagination_class = ContractValuePagination
+    permission_classes = [IsAuthenticatedProjectRBAC]
+    rbac_domain = RBACDomain.FINANCIAL
 
     # -------------------------------------------------------------------------
     # Queryset
@@ -279,11 +289,12 @@ class ContractValueViewSet(viewsets.ModelViewSet):
           ?contract_type=  — exact contract type filter (SCL | Contractor)
           ?search=         — free-text search across projectName
         """
-        return _build_queryset(
+        qs = _build_queryset(
             project_name=self.request.query_params.get("project_name"),
             contract_type=self.request.query_params.get("contract_type"),
             search=self.request.query_params.get("search"),
         )
+        return apply_project_rbac_to_queryset(qs, self.request, "project_name")
 
     # -------------------------------------------------------------------------
     # Response helpers
@@ -378,6 +389,9 @@ class ContractValueViewSet(viewsets.ModelViewSet):
         """
         payload = _normalise_payload(request.data)
         project_name = payload.get("project_name", "")
+        enforce_project_write_by_name(
+            request.user, project_name, RBACDomain.FINANCIAL
+        )
         contract_type = payload.get("contract_type", "")
 
         existing = None
@@ -576,6 +590,8 @@ class ContractValueViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
+        enforce_instance_write(request.user, instance, RBACDomain.FINANCIAL)
+
         payload = _normalise_payload(request.data)
 
         serializer = ContractValueSerializer(
@@ -631,6 +647,8 @@ class ContractValueViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
+        enforce_instance_write(request.user, instance, RBACDomain.FINANCIAL)
+
         project_name = instance.project_name
         contract_type = instance.contract_type
         instance.delete()
@@ -677,7 +695,13 @@ class ContractValueViewSet(viewsets.ModelViewSet):
         if not projectName or not projectName.strip():
             return self._error("projectName is required.")
 
-        qs = _build_queryset(project_name=projectName)
+        enforce_project_access_by_name(request.user, projectName.strip())
+
+        qs = apply_project_rbac_to_queryset(
+            _build_queryset(project_name=projectName),
+            request,
+            "project_name",
+        )
 
         if not qs.exists():
             return self._error(
@@ -732,7 +756,11 @@ class ContractValueViewSet(viewsets.ModelViewSet):
                 f"Must be one of: {', '.join(valid_types)}."
             )
 
-        qs = _build_queryset(contract_type=contract_type)
+        qs = apply_project_rbac_to_queryset(
+            _build_queryset(contract_type=contract_type),
+            request,
+            "project_name",
+        )
 
         if not qs.exists():
             return self._error(
@@ -792,6 +820,8 @@ class ContractValueViewSet(viewsets.ModelViewSet):
                 f"Invalid contractType '{contractType}'. "
                 f"Must be one of: {', '.join(valid_types)}."
             )
+
+        enforce_project_access_by_name(request.user, projectName.strip())
 
         try:
             instance = ContractValue.objects.get(

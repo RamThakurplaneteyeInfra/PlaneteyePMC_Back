@@ -16,6 +16,13 @@ from .models import DailyProgressReport, DPRActivity
 from projects.models import Project
 from .serializers import DailyProgressReportSerializer, DPRActivitySerializer
 from services.notifications import notify_dpr_submitted, notify_dpr_approved, notify_dpr_rejected, notify_dpr_approved_by_role, notify_dpr_rejected_by_role
+from accounts.permissions import IsAuthenticatedProjectRBAC
+from accounts.rbac import RBACDomain, filter_queryset_by_project_access
+from accounts.rbac_checks import (
+    enforce_instance_write,
+    enforce_project_write_by_name,
+    site_engineer_cannot_delete_approved_dpr,
+)
 
 import logging
 logger = logging.getLogger(__name__)
@@ -40,7 +47,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
     ViewSet for Daily Progress Report CRUD operations
 
     Supports filtering by project_name and date.
-    No authentication required for testing.
+    Requires JWT authentication and project-scoped RBAC.
 
     **Filtering Parameters:**
     - `project_name`: Filter by project name (case-insensitive partial match)
@@ -52,6 +59,8 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
     queryset = DailyProgressReport.objects.all()
     serializer_class = DailyProgressReportSerializer
     pagination_class = PageNumberPagination
+    permission_classes = [IsAuthenticatedProjectRBAC]
+    rbac_domain = RBACDomain.ENGINEERING
 
     @swagger_auto_schema(
         operation_description="List all Daily Progress Reports with optional filtering",
@@ -165,7 +174,13 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                 pass
 
         # Order by latest first (handled in model Meta, but ensuring here too)
-        return queryset.order_by('-report_date', '-created_at')
+        queryset = queryset.order_by('-report_date', '-created_at')
+        user = getattr(self.request, "user", None)
+        if user and user.is_authenticated:
+            queryset = filter_queryset_by_project_access(
+                queryset, user, project_name_field="project_name"
+            )
+        return queryset
 
     @swagger_auto_schema(
         operation_description="Retrieve a single Daily Progress Report by ID",
@@ -225,6 +240,13 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                     },
                     status=status.HTTP_400_BAD_REQUEST
                 )
+            project_name = (
+                serializer.validated_data.get("project_name")
+                or request.data.get("project_name")
+            )
+            enforce_project_write_by_name(
+                request.user, project_name, RBACDomain.ENGINEERING
+            )
             instance = serializer.save()
             headers = self.get_success_headers(serializer.data)
 
@@ -286,6 +308,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         """
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
+        enforce_instance_write(request.user, instance, RBACDomain.ENGINEERING)
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
@@ -319,6 +342,8 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         All associated activities will also be deleted (CASCADE).
         """
         instance = self.get_object()
+        enforce_instance_write(request.user, instance, RBACDomain.ENGINEERING)
+        site_engineer_cannot_delete_approved_dpr(request.user, instance)
         self.perform_destroy(instance)
         return Response(
             {'message': 'Daily Progress Report deleted successfully'},
