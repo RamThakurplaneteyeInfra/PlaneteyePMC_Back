@@ -27,18 +27,22 @@ class RBACHelperTest(TestCase):
         self.tl_group, _ = Group.objects.get_or_create(name="Team Leader")
         self.se_group, _ = Group.objects.get_or_create(name="Site Engineer")
         self.bse_group, _ = Group.objects.get_or_create(name="Billing Site Engineer")
+        self.qaqc_group, _ = Group.objects.get_or_create(name="QAQC Site Engineer")
 
         self.tl = User.objects.create_user("tl_user", password="x")
         self.se = User.objects.create_user("se_user", password="x")
         self.bse = User.objects.create_user("bse_user", password="x")
+        self.qaqc = User.objects.create_user("qaqc_user", password="x")
 
         self.tl.groups.add(self.tl_group)
         self.se.groups.add(self.se_group)
         self.bse.groups.add(self.bse_group)
+        self.qaqc.groups.add(self.qaqc_group)
 
         self.project.team_lead = self.tl
         self.project.site_engineer = self.se
         self.project.billing_site_engineer = self.bse
+        self.project.qaqc_site_engineer = self.qaqc
         self.project.save()
 
     def test_assigned_user_has_project_access(self):
@@ -64,6 +68,17 @@ class RBACHelperTest(TestCase):
         self.assertFalse(
             user_can_write_domain(self.bse, self.project, RBACDomain.QAQC)
         )
+
+    def test_qaqc_engineer_can_write_qaqc_not_billing(self):
+        self.assertTrue(
+            user_can_write_domain(self.qaqc, self.project, RBACDomain.QAQC)
+        )
+        self.assertFalse(
+            user_can_write_domain(self.qaqc, self.project, RBACDomain.BILLING)
+        )
+
+    def test_qaqc_engineer_has_assigned_project_access(self):
+        self.assertTrue(user_has_project_access(self.qaqc, self.project))
 
     def test_enforce_raises_for_unauthorized_write(self):
         with self.assertRaises(PermissionDenied):

@@ -4,10 +4,18 @@ from django.core.cache import cache
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
-from rest_framework.permissions import AllowAny
 from rest_framework.pagination import PageNumberPagination
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
+
+from accounts.permissions import IsAuthenticatedProjectRBAC
+from accounts.rbac import RBACDomain
+from accounts.rbac_checks import (
+    apply_project_rbac_to_queryset,
+    enforce_instance_write,
+    enforce_project_access_by_name,
+    enforce_project_write_by_name,
+)
 
 from .models import HealthSafetyReport
 from .serializers import HealthSafetyReportSerializer, HealthSafetyInputSerializer
@@ -235,6 +243,8 @@ class HealthSafetyReportViewSet(viewsets.ModelViewSet):
     queryset = HealthSafetyReport.objects.all()
     serializer_class = HealthSafetyReportSerializer
     pagination_class = PageNumberPagination
+    permission_classes = [IsAuthenticatedProjectRBAC]
+    rbac_domain = RBACDomain.QAQC
     
     def get_queryset(self):
         """Filter reports by query parameters"""
@@ -263,7 +273,11 @@ class HealthSafetyReportViewSet(viewsets.ModelViewSet):
         if date_to:
             queryset = queryset.filter(report_date__lte=date_to.strip() if date_to else None)
 
-        return queryset.order_by('-report_date', '-created_at')
+        return apply_project_rbac_to_queryset(
+            queryset.order_by('-report_date', '-created_at'),
+            self.request,
+            "project_name",
+        )
 
     def list(self, request, *args, **kwargs):
         cache_key = f"health_safety_reports:{request.get_full_path()}"
@@ -314,6 +328,10 @@ class HealthSafetyReportViewSet(viewsets.ModelViewSet):
                 {'error': 'Validation failed', 'details': serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        project_name = serializer.validated_data.get("project_name")
+        enforce_project_write_by_name(
+            request.user, project_name, RBACDomain.QAQC
+        )
         self.perform_create(serializer)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -449,6 +467,8 @@ class HSERecordViewSet(viewsets.ModelViewSet):
     queryset = HSERecord.objects.all()
     serializer_class = HSERecordSerializer
     pagination_class = HSERecordPagination
+    permission_classes = [IsAuthenticatedProjectRBAC]
+    rbac_domain = RBACDomain.QAQC
 
     # -------------------------------------------------------------------------
     # Queryset
@@ -478,7 +498,7 @@ class HSERecordViewSet(viewsets.ModelViewSet):
         if project_name:
             qs = qs.filter(projectName__icontains=project_name.strip())
 
-        return qs
+        return apply_project_rbac_to_queryset(qs, self.request, "projectName")
 
     # -------------------------------------------------------------------------
     # Helpers
@@ -528,6 +548,9 @@ class HSERecordViewSet(viewsets.ModelViewSet):
         Auto-calculates totalIncidents, ltifr, and incidentRate.
         """
         project_name = str(request.data.get("projectName", "")).strip()
+        enforce_project_write_by_name(
+            request.user, project_name, RBACDomain.QAQC
+        )
 
         # Strip read-only / auto-calculated fields the frontend should not send
         _READ_ONLY = {"totalIncidents", "ltifr", "incidentRate", "id", "created_at", "updated_at"}
@@ -672,6 +695,8 @@ class HSERecordViewSet(viewsets.ModelViewSet):
         except HSERecord.DoesNotExist:
             return self._error("HSE record not found", http_status=status.HTTP_404_NOT_FOUND)
 
+        enforce_project_access_by_name(request.user, instance.projectName)
+
         return self._success(
             "HSE record retrieved successfully",
             HSERecordSerializer(instance).data,
@@ -706,6 +731,8 @@ class HSERecordViewSet(viewsets.ModelViewSet):
             instance = HSERecord.objects.get(pk=kwargs["pk"])
         except HSERecord.DoesNotExist:
             return self._error("HSE record not found", http_status=status.HTTP_404_NOT_FOUND)
+
+        enforce_instance_write(request.user, instance, RBACDomain.QAQC)
 
         _READ_ONLY = {"totalIncidents", "ltifr", "incidentRate", "id", "created_at", "updated_at"}
         payload = {k: v for k, v in request.data.items() if k not in _READ_ONLY}
@@ -753,6 +780,8 @@ class HSERecordViewSet(viewsets.ModelViewSet):
         except HSERecord.DoesNotExist:
             return self._error("HSE record not found", http_status=status.HTTP_404_NOT_FOUND)
 
+        enforce_instance_write(request.user, instance, RBACDomain.QAQC)
+
         project_name = instance.projectName
         instance.delete()
         self._invalidate_cache()
@@ -791,6 +820,8 @@ class HSERecordViewSet(viewsets.ModelViewSet):
         """
         if not projectName or not projectName.strip():
             return self._error("projectName is required.")
+
+        enforce_project_access_by_name(request.user, projectName.strip())
 
         try:
             instance = HSERecord.objects.get(projectName__iexact=projectName.strip())
@@ -897,6 +928,8 @@ class HealthSafetyRecordViewSet(viewsets.ModelViewSet):
     queryset = HealthSafetyRecord.objects.all()
     serializer_class = HealthSafetyRecordSerializer
     pagination_class = HealthSafetyRecordPagination
+    permission_classes = [IsAuthenticatedProjectRBAC]
+    rbac_domain = RBACDomain.QAQC
 
     # -------------------------------------------------------------------------
     # Queryset
@@ -923,7 +956,11 @@ class HealthSafetyRecordViewSet(viewsets.ModelViewSet):
             except ValueError:
                 pass
 
-        return qs.order_by("project_name", "year", "month")
+        return apply_project_rbac_to_queryset(
+            qs.order_by("project_name", "year", "month"),
+            self.request,
+            "project_name",
+        )
 
     # -------------------------------------------------------------------------
     # Helpers
@@ -974,6 +1011,10 @@ class HealthSafetyRecordViewSet(viewsets.ModelViewSet):
 
         if not serializer.is_valid():
             return self._error("Validation failed", errors=serializer.errors)
+
+        enforce_project_write_by_name(
+            request.user, project_name, RBACDomain.QAQC
+        )
 
         try:
             instance = serializer.save()
@@ -1028,6 +1069,8 @@ class HealthSafetyRecordViewSet(viewsets.ModelViewSet):
         except HealthSafetyRecord.DoesNotExist:
             return self._error("Health & Safety record not found", http_status=status.HTTP_404_NOT_FOUND)
 
+        enforce_project_access_by_name(request.user, instance.project_name)
+
         return self._success(
             "Health & Safety record retrieved successfully",
             _record_data(instance),
@@ -1044,6 +1087,8 @@ class HealthSafetyRecordViewSet(viewsets.ModelViewSet):
             instance = HealthSafetyRecord.objects.get(pk=kwargs["pk"])
         except HealthSafetyRecord.DoesNotExist:
             return self._error("Health & Safety record not found", http_status=status.HTTP_404_NOT_FOUND)
+
+        enforce_instance_write(request.user, instance, RBACDomain.QAQC)
 
         serializer = HealthSafetyRecordSerializer(instance, data=request.data, partial=partial)
         if not serializer.is_valid():
@@ -1075,6 +1120,8 @@ class HealthSafetyRecordViewSet(viewsets.ModelViewSet):
         except HealthSafetyRecord.DoesNotExist:
             return self._error("Health & Safety record not found", http_status=status.HTTP_404_NOT_FOUND)
 
+        enforce_instance_write(request.user, instance, RBACDomain.QAQC)
+
         label = f"{instance.project_name} ({instance.month:02d}/{instance.year})"
         instance.delete()
         return self._success(f"HSE record for '{label}' deleted successfully", {})
@@ -1101,6 +1148,8 @@ class HealthSafetyRecordViewSet(viewsets.ModelViewSet):
             return self._error("month must be between 1 and 12.")
         if not (2000 <= year_int <= 2100):
             return self._error("year must be between 2000 and 2100.")
+
+        enforce_project_access_by_name(request.user, projectName.strip())
 
         try:
             instance = HealthSafetyRecord.objects.get(
@@ -1144,6 +1193,8 @@ class HealthSafetyRecordViewSet(viewsets.ModelViewSet):
             return self._error("year must be between 2000 and 2100.")
 
         project_name = projectName.strip()
+        enforce_project_access_by_name(request.user, project_name)
+
         qs = HealthSafetyRecord.objects.filter(
             project_name__iexact=project_name,
             year=year_int,
@@ -1188,6 +1239,7 @@ class HealthSafetyRecordViewSet(viewsets.ModelViewSet):
         current_month = today.month
         current_year = today.year
         project_name = projectName.strip()
+        enforce_project_access_by_name(request.user, project_name)
 
         # --- Current month record ---
         current_month_data = None

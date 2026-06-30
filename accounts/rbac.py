@@ -44,7 +44,7 @@ class RBACDomain:
     ENGINEERING = "engineering"    # DPR, progress, site images, scope
     BILLING = "billing"          # contracts, invoicing, cashflow
     FINANCIAL = "financial"      # cost/budget performance, contract values
-    QAQC = "qaqc"                # quality status, inspections
+    QAQC = "qaqc"                # quality status, health & safety, inspections
 
 
 # Roles allowed to WRITE per domain

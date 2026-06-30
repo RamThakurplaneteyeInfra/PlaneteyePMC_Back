@@ -23,10 +23,14 @@ from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.permissions import IsAuthenticated
 from accounts.permissions import IsAuthenticatedProjectRBAC
-from accounts.rbac import RBACDomain, filter_queryset_by_project_access
-from accounts.rbac_checks import enforce_project_write_by_name
+from accounts.rbac import RBACDomain
+from accounts.rbac_checks import (
+    apply_project_rbac_to_queryset,
+    enforce_instance_write,
+    enforce_project_access_by_name,
+    enforce_project_write_by_name,
+)
 from rest_framework.response import Response
 
 from ..models.project_quality_status import ProjectQualityStatus
@@ -163,11 +167,9 @@ class ProjectQualityStatusViewSet(viewsets.ModelViewSet):
         if search:
             qs = qs.filter(projectName__icontains=search.strip())
 
-        user = getattr(self.request, "user", None)
-        if user and user.is_authenticated:
-            qs = filter_queryset_by_project_access(qs, user, "projectName")
-
-        return qs.order_by("projectName", "year", "month")
+        return apply_project_rbac_to_queryset(qs, self.request, "projectName").order_by(
+            "projectName", "year", "month"
+        )
 
     def _invalidate_cache(self):
         cache.delete(_CACHE_KEY_LIST)
@@ -317,6 +319,9 @@ class ProjectQualityStatusViewSet(viewsets.ModelViewSet):
                 "Project quality status record not found",
                 http_status=status.HTTP_404_NOT_FOUND,
             )
+
+        enforce_project_access_by_name(request.user, instance.projectName)
+
         return self._success(
             "Project quality status record retrieved successfully",
             ProjectQualityStatusSerializer(instance).data,
@@ -337,6 +342,8 @@ class ProjectQualityStatusViewSet(viewsets.ModelViewSet):
                 "Project quality status record not found",
                 http_status=status.HTTP_404_NOT_FOUND,
             )
+
+        enforce_instance_write(request.user, instance, RBACDomain.QAQC)
 
         payload = {
             k: v
@@ -384,6 +391,8 @@ class ProjectQualityStatusViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
+        enforce_instance_write(request.user, instance, RBACDomain.QAQC)
+
         label = f"{instance.projectName} ({instance.month:02d}/{instance.year})"
         instance.delete()
         self._invalidate_cache()
@@ -411,6 +420,8 @@ class ProjectQualityStatusViewSet(viewsets.ModelViewSet):
         """Return compact dashboard metrics for the most recent monthly record."""
         if not projectName or not projectName.strip():
             return self._error("projectName is required.")
+
+        enforce_project_access_by_name(request.user, projectName.strip())
 
         instance = (
             ProjectQualityStatus.objects.filter(projectName__iexact=projectName.strip())
@@ -457,6 +468,8 @@ class ProjectQualityStatusViewSet(viewsets.ModelViewSet):
             return self._error("year must be between 2000 and 2100.")
 
         project_name = projectName.strip()
+        enforce_project_access_by_name(request.user, project_name)
+
         instance = self._find_monthly_record(project_name, month_int, year_int)
 
         if instance is None:
@@ -496,6 +509,8 @@ class ProjectQualityStatusViewSet(viewsets.ModelViewSet):
             return self._error("year must be between 2000 and 2100.")
 
         project_name = projectName.strip()
+        enforce_project_access_by_name(request.user, project_name)
+
         qs = ProjectQualityStatus.objects.filter(
             projectName__iexact=project_name,
             year=year_int,
