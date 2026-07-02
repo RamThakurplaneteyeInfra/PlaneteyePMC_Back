@@ -4,7 +4,8 @@ Correspondence KPI calculations — aggregated from document records at read tim
 Definitions:
   received       = total inbound documents (CLIENT / CONTRACTOR party)
   delivered      = on_time + late_deliveries (has delivered_date)
-  pending        = no delivered_date
+  record         = manually entered count (stored summary)
+  pending        = max(received - delivered - record, 0)
   on_time        = delivered_date <= deadline_date
   late_deliveries = delivered_date > deadline_date
   delivery_efficiency = (on_time / delivered) * 100
@@ -16,7 +17,9 @@ from datetime import date
 from django.db.models import Count, Q, QuerySet
 
 from ..models.correspondence import CorrespondenceDocument
+from ..models.inbound_summary import InboundCorrespondenceSummary
 from ..models.scl_delivered_summary import SCLDeliveredCorrespondenceSummary
+from .correspondence_pending import compute_pending
 
 STATUS_PENDING = CorrespondenceDocument.STATUS_PENDING
 STATUS_DELIVERED_ON_TIME = CorrespondenceDocument.STATUS_DELIVERED_ON_TIME
@@ -39,20 +42,23 @@ def metrics_from_counts(
     received: int,
     on_time: int,
     late_deliveries: int,
+    record: int = 0,
     pending: int | None = None,
 ) -> dict:
     """
     Build KPI payload from counts.
 
     delivered is always on_time + late_deliveries (late docs count as delivered).
+    pending defaults to max(received - delivered - record, 0).
     """
     received = int(received or 0)
     on_time = int(on_time or 0)
     late_deliveries = int(late_deliveries or 0)
+    record = int(record or 0)
     delivered = on_time + late_deliveries
 
     if pending is None:
-        pending = max(received - delivered, 0)
+        pending = compute_pending(received, delivered, record)
     else:
         pending = int(pending or 0)
 
@@ -67,6 +73,7 @@ def metrics_from_counts(
     return {
         "received": received,
         "delivered": delivered,
+        "record": record,
         "pending": pending,
         "on_time": on_time,
         "late_deliveries": late_deliveries,
@@ -79,22 +86,51 @@ def metrics_from_counts(
     }
 
 
-def metrics_from_queryset(queryset: QuerySet) -> dict:
+def metrics_from_summary_counts(
+    received: int,
+    delivered: int,
+    record: int = 0,
+) -> dict:
+    """Build KPI payload from stored summary counts (no on_time/late split)."""
+    received = int(received or 0)
+    delivered = int(delivered or 0)
+    record = int(record or 0)
+    pending = compute_pending(received, delivered, record)
+
+    return {
+        "received": received,
+        "delivered": delivered,
+        "record": record,
+        "pending": pending,
+        "on_time": delivered,
+        "late_deliveries": 0,
+        "status_breakdown": {
+            "on_time": delivered,
+            "late_deliveries": 0,
+            "pending": pending,
+        },
+        "delivery_efficiency": compute_delivery_efficiency(delivered, delivered),
+        "correspondence_received": received,
+        "correspondence_delivered": delivered,
+        "pending_correspondence": pending,
+    }
+
+
+def metrics_from_queryset(queryset: QuerySet, record: int = 0) -> dict:
     """Aggregate KPIs in a single database query."""
     if queryset is None:
-        return metrics_from_counts(0, 0, 0, pending=0)
+        return metrics_from_counts(0, 0, 0, record=record)
 
     agg = queryset.aggregate(
         received=Count("id"),
         on_time=Count("id", filter=Q(delivered_status=STATUS_DELIVERED_ON_TIME)),
         late_deliveries=Count("id", filter=Q(delivered_status=STATUS_DELIVERED_LATE)),
-        pending=Count("id", filter=Q(delivered_status=STATUS_PENDING)),
     )
     return metrics_from_counts(
         received=agg["received"],
         on_time=agg["on_time"],
         late_deliveries=agg["late_deliveries"],
-        pending=agg["pending"],
+        record=record,
     )
 
 
@@ -149,6 +185,52 @@ def inbound_queryset(queryset: QuerySet) -> QuerySet:
     return queryset.filter(flow_direction=CorrespondenceDocument.FLOW_INBOUND)
 
 
+def get_inbound_summary(
+    project_name: str,
+    month: int,
+    year: int,
+    view: str,
+) -> InboundCorrespondenceSummary | None:
+    return InboundCorrespondenceSummary.objects.filter(
+        project_name__iexact=project_name.strip(),
+        month=month,
+        year=year,
+        view=normalize_view(view),
+    ).first()
+
+
+def inbound_metrics(
+    queryset: QuerySet,
+    *,
+    summary: InboundCorrespondenceSummary | None = None,
+    correspondence_type: str,
+    project_name: str | None = None,
+    month: int | None = None,
+    year: int | None = None,
+    view: str = VIEW_MONTHLY,
+) -> dict:
+    """
+    Client or Contractor KPI block.
+
+    Prefers stored inbound summary; falls back to document aggregation with record=0.
+    """
+    if summary is None and project_name and month and year:
+        summary = get_inbound_summary(project_name, month, year, view)
+
+    if summary is not None:
+        if correspondence_type == CorrespondenceDocument.TYPE_CLIENT:
+            block = summary.client_metrics()
+        else:
+            block = summary.contractor_metrics()
+        return metrics_from_summary_counts(
+            block["received"],
+            block["delivered"],
+            block["record"],
+        )
+
+    return metrics_from_queryset(queryset, record=0)
+
+
 def get_scl_delivered_summary(
     project_name: str,
     month: int,
@@ -199,12 +281,13 @@ def scl_delivered_metrics(
         row["recipient_type"]: {
             "received": row["received"],
             "delivered": row["delivered"],
-            "pending": max(row["received"] - row["delivered"], 0),
+            "record": 0,
+            "pending": compute_pending(row["received"], row["delivered"], 0),
         }
         for row in counts
     }
 
-    empty = {"received": 0, "delivered": 0, "pending": 0}
+    empty = {"received": 0, "delivered": 0, "record": 0, "pending": 0}
     client = by_recipient.get(CorrespondenceDocument.RECIPIENT_CLIENT, empty)
     contractor = by_recipient.get(CorrespondenceDocument.RECIPIENT_CONTRACTOR, empty)
     other_agency = by_recipient.get(
@@ -218,6 +301,7 @@ def scl_delivered_metrics(
     total_delivered = (
         client["delivered"] + contractor["delivered"] + other_agency["delivered"]
     )
+    total_record = client["record"] + contractor["record"] + other_agency["record"]
     total_pending = client["pending"] + contractor["pending"] + other_agency["pending"]
 
     return {
@@ -227,6 +311,7 @@ def scl_delivered_metrics(
         "totals": {
             "received": total_received,
             "delivered": total_delivered,
+            "record": total_record,
             "pending": total_pending,
         },
         # Legacy aliases for delivered-only consumers.
@@ -281,6 +366,7 @@ def dashboard_response(
         correspondence_type=CorrespondenceDocument.TYPE_CONTRACTOR
     )
 
+    inbound_summary = get_inbound_summary(project_name, month, year, view)
     scl_summary = get_scl_delivered_summary(project_name, month, year, view)
 
     return {
@@ -290,8 +376,24 @@ def dashboard_response(
         "project_name": project_name,
         "month": month,
         "year": year,
-        "client": metrics_from_queryset(client_qs),
-        "contractor": metrics_from_queryset(contractor_qs),
+        "client": inbound_metrics(
+            client_qs,
+            summary=inbound_summary,
+            correspondence_type=CorrespondenceDocument.TYPE_CLIENT,
+            project_name=project_name,
+            month=month,
+            year=year,
+            view=view,
+        ),
+        "contractor": inbound_metrics(
+            contractor_qs,
+            summary=inbound_summary,
+            correspondence_type=CorrespondenceDocument.TYPE_CONTRACTOR,
+            project_name=project_name,
+            month=month,
+            year=year,
+            view=view,
+        ),
         "scl_delivered_correspondence": scl_delivered_metrics(
             period_qs,
             summary=scl_summary,

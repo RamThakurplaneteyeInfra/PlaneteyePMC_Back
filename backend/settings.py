@@ -78,6 +78,7 @@ INSTALLED_APPS = [
     'construction_progress',
     'project_equipment',
     'project_dates',
+    'contractors',
     'site_images.apps.SiteImagesConfig',
     'bottlenecks',
 ]

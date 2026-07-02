@@ -40,6 +40,10 @@ class SCLDeliveredCorrespondenceSummary(models.Model):
     other_agency_received = models.PositiveIntegerField(default=0)
     other_agency_delivered = models.PositiveIntegerField(default=0)
 
+    client_record = models.PositiveIntegerField(default=0)
+    contractor_record = models.PositiveIntegerField(default=0)
+    other_agency_record = models.PositiveIntegerField(default=0)
+
     created_at = models.DateTimeField(default=timezone.now, editable=False)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -59,20 +63,39 @@ class SCLDeliveredCorrespondenceSummary(models.Model):
         return self.total_delivered
 
     @staticmethod
-    def pending(received: int | None, delivered: int | None) -> int:
-        return max(int(received or 0) - int(delivered or 0), 0)
+    def pending(
+        received: int | None,
+        delivered: int | None,
+        record: int | None = 0,
+    ) -> int:
+        return max(
+            int(received or 0) - int(delivered or 0) - int(record or 0),
+            0,
+        )
 
     @property
     def client_pending(self) -> int:
-        return self.pending(self.client_received, self.client_delivered)
+        return self.pending(
+            self.client_received,
+            self.client_delivered,
+            self.client_record,
+        )
 
     @property
     def contractor_pending(self) -> int:
-        return self.pending(self.contractor_received, self.contractor_delivered)
+        return self.pending(
+            self.contractor_received,
+            self.contractor_delivered,
+            self.contractor_record,
+        )
 
     @property
     def other_agency_pending(self) -> int:
-        return self.pending(self.other_agency_received, self.other_agency_delivered)
+        return self.pending(
+            self.other_agency_received,
+            self.other_agency_delivered,
+            self.other_agency_record,
+        )
 
     @property
     def total_received(self) -> int:
@@ -91,6 +114,14 @@ class SCLDeliveredCorrespondenceSummary(models.Model):
         )
 
     @property
+    def total_record(self) -> int:
+        return (
+            self.client_record
+            + self.contractor_record
+            + self.other_agency_record
+        )
+
+    @property
     def total_pending(self) -> int:
         return (
             self.client_pending
@@ -98,26 +129,38 @@ class SCLDeliveredCorrespondenceSummary(models.Model):
             + self.other_agency_pending
         )
 
+    def _category_block(self, received, delivered, record, pending) -> dict:
+        return {
+            "received": received,
+            "delivered": delivered,
+            "record": record,
+            "pending": pending,
+        }
+
     def to_api_dict(self) -> dict:
         return {
-            "client": {
-                "received": self.client_received,
-                "delivered": self.client_delivered,
-                "pending": self.client_pending,
-            },
-            "contractor": {
-                "received": self.contractor_received,
-                "delivered": self.contractor_delivered,
-                "pending": self.contractor_pending,
-            },
-            "other_agency": {
-                "received": self.other_agency_received,
-                "delivered": self.other_agency_delivered,
-                "pending": self.other_agency_pending,
-            },
+            "client": self._category_block(
+                self.client_received,
+                self.client_delivered,
+                self.client_record,
+                self.client_pending,
+            ),
+            "contractor": self._category_block(
+                self.contractor_received,
+                self.contractor_delivered,
+                self.contractor_record,
+                self.contractor_pending,
+            ),
+            "other_agency": self._category_block(
+                self.other_agency_received,
+                self.other_agency_delivered,
+                self.other_agency_record,
+                self.other_agency_pending,
+            ),
             "totals": {
                 "received": self.total_received,
                 "delivered": self.total_delivered,
+                "record": self.total_record,
                 "pending": self.total_pending,
             },
             # Legacy aliases for delivered-only consumers.

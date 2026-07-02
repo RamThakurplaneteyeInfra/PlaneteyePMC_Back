@@ -22,7 +22,12 @@ class ProjectDatesFilter(django_filters.FilterSet):
         choices=ProjectDates.DATE_TYPE_CHOICES,
         label="Date type (SCL or CONTRACTOR)",
     )
+    contractor_name = django_filters.CharFilter(
+        field_name="contractor_name",
+        lookup_expr="icontains",
+        label="Contractor name (partial, case-insensitive)",
+    )
 
     class Meta:
         model = ProjectDates
-        fields = ["project_name", "date_type"]
+        fields = ["project_name", "date_type", "contractor_name"]

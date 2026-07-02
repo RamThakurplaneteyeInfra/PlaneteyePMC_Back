@@ -31,7 +31,9 @@ from .correspondence_metrics import (
     normalize_view,
 )
 from .correspondence_serializer import CorrespondenceDocumentSerializer
+from .inbound_serializer import InboundCorrespondenceSerializer
 from .scl_delivered_serializer import SCLDeliveredCorrespondenceSerializer
+from ..models.inbound_summary import InboundCorrespondenceSummary
 from ..models.scl_delivered_summary import SCLDeliveredCorrespondenceSummary
 
 logger = logging.getLogger(__name__)
@@ -54,6 +56,7 @@ _STRIP_FIELDS = {
     "received",
     "delivered",
     "pending",
+    "record",
     "delivery_efficiency",
     "correspondence_received",
     "correspondence_delivered",
@@ -163,10 +166,50 @@ _SCL_DELIVERED_SCHEMA = openapi.Schema(
         ),
         "client_received": openapi.Schema(type=openapi.TYPE_INTEGER, example=25),
         "client_delivered": openapi.Schema(type=openapi.TYPE_INTEGER, example=18),
+        "client_record": openapi.Schema(type=openapi.TYPE_INTEGER, example=2),
         "contractor_received": openapi.Schema(type=openapi.TYPE_INTEGER, example=40),
         "contractor_delivered": openapi.Schema(type=openapi.TYPE_INTEGER, example=30),
+        "contractor_record": openapi.Schema(type=openapi.TYPE_INTEGER, example=3),
         "other_agency_received": openapi.Schema(type=openapi.TYPE_INTEGER, example=15),
         "other_agency_delivered": openapi.Schema(type=openapi.TYPE_INTEGER, example=10),
+        "other_agency_record": openapi.Schema(type=openapi.TYPE_INTEGER, example=1),
+    },
+)
+
+_INBOUND_SCHEMA = openapi.Schema(
+    type=openapi.TYPE_OBJECT,
+    required=["project_name", "month", "year"],
+    properties={
+        "project_name": openapi.Schema(type=openapi.TYPE_STRING, example="Thane Project"),
+        "month": openapi.Schema(type=openapi.TYPE_INTEGER, example=6),
+        "year": openapi.Schema(type=openapi.TYPE_INTEGER, example=2026),
+        "view": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            enum=[VIEW_MONTHLY, VIEW_CUMULATIVE],
+            example=VIEW_MONTHLY,
+        ),
+        "client_received": openapi.Schema(type=openapi.TYPE_INTEGER, example=10),
+        "client_delivered": openapi.Schema(type=openapi.TYPE_INTEGER, example=6),
+        "client_record": openapi.Schema(type=openapi.TYPE_INTEGER, example=2),
+        "contractor_received": openapi.Schema(type=openapi.TYPE_INTEGER, example=12),
+        "contractor_delivered": openapi.Schema(type=openapi.TYPE_INTEGER, example=8),
+        "contractor_record": openapi.Schema(type=openapi.TYPE_INTEGER, example=1),
+        "client": openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                "received": openapi.Schema(type=openapi.TYPE_INTEGER),
+                "delivered": openapi.Schema(type=openapi.TYPE_INTEGER),
+                "record": openapi.Schema(type=openapi.TYPE_INTEGER),
+            },
+        ),
+        "contractor": openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                "received": openapi.Schema(type=openapi.TYPE_INTEGER),
+                "delivered": openapi.Schema(type=openapi.TYPE_INTEGER),
+                "record": openapi.Schema(type=openapi.TYPE_INTEGER),
+            },
+        ),
     },
 )
 
@@ -555,10 +598,13 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
             "project_name": validated["project_name"],
             "client_received": validated["client_received"],
             "client_delivered": validated["client_delivered"],
+            "client_record": validated["client_record"],
             "contractor_received": validated["contractor_received"],
             "contractor_delivered": validated["contractor_delivered"],
+            "contractor_record": validated["contractor_record"],
             "other_agency_received": validated["other_agency_received"],
             "other_agency_delivered": validated["other_agency_delivered"],
+            "other_agency_record": validated["other_agency_record"],
             # Keep legacy delivered-only columns in sync for old admin/data uses.
             "client": validated["client_delivered"],
             "contractor": validated["contractor_delivered"],
@@ -625,21 +671,25 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
                             "client": {
                                 "received": 0,
                                 "delivered": 0,
+                                "record": 0,
                                 "pending": 0,
                             },
                             "contractor": {
                                 "received": 0,
                                 "delivered": 0,
+                                "record": 0,
                                 "pending": 0,
                             },
                             "other_agency": {
                                 "received": 0,
                                 "delivered": 0,
+                                "record": 0,
                                 "pending": 0,
                             },
                             "totals": {
                                 "received": 0,
                                 "delivered": 0,
+                                "record": 0,
                                 "pending": 0,
                             },
                             "client_delivered": 0,
@@ -656,6 +706,136 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
 
         allow_create = request.method == "POST"
         return self._save_scl_delivered(request, allow_create=allow_create)
+
+    def _save_inbound_correspondence(self, request, *, allow_create: bool = True):
+        data = request.data
+        project_name = (data.get("project_name") or data.get("projectName") or "").strip()
+        if not project_name:
+            return self._error("project_name is required.")
+
+        serializer = InboundCorrespondenceSerializer(data=data)
+        if not serializer.is_valid():
+            return self._error(
+                "Validation failed",
+                errors=_flatten_errors(serializer.errors),
+            )
+
+        validated = serializer.validated_data
+        existing = InboundCorrespondenceSummary.objects.filter(
+            project_name__iexact=validated["project_name"],
+            month=validated["month"],
+            year=validated["year"],
+            view=validated["view"],
+        ).first()
+
+        if not allow_create and existing is None:
+            return self._error(
+                "Inbound correspondence record not found. Use POST to create.",
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+
+        defaults = {
+            "project_name": validated["project_name"],
+            "client_received": validated["client_received"],
+            "client_delivered": validated["client_delivered"],
+            "client_record": validated["client_record"],
+            "contractor_received": validated["contractor_received"],
+            "contractor_delivered": validated["contractor_delivered"],
+            "contractor_record": validated["contractor_record"],
+        }
+
+        if existing:
+            for key, value in defaults.items():
+                setattr(existing, key, value)
+            existing.save()
+            instance = existing
+        else:
+            instance = InboundCorrespondenceSummary.objects.create(
+                month=validated["month"],
+                year=validated["year"],
+                view=validated["view"],
+                **defaults,
+            )
+
+        self._invalidate_list_cache()
+        http_status = status.HTTP_200_OK if existing else status.HTTP_201_CREATED
+        message = (
+            "Inbound correspondence updated successfully"
+            if existing
+            else "Inbound correspondence created successfully"
+        )
+        return self._success(
+            message,
+            InboundCorrespondenceSerializer(instance).data,
+            http_status=http_status,
+        )
+
+    def _handle_inbound_correspondence(self, request):
+        """Client / Contractor correspondence counts — save/load by project period."""
+        if request.method == "GET":
+            parsed, error = self._parse_scl_request(request, from_query=True)
+            if error:
+                return error
+
+            from .correspondence_metrics import get_inbound_summary
+
+            summary = get_inbound_summary(
+                parsed["project_name"],
+                parsed["month"],
+                parsed["year"],
+                parsed["view"],
+            )
+            if summary is None:
+                empty = {"received": 0, "delivered": 0, "record": 0, "pending": 0}
+                return self._success(
+                    "No inbound correspondence record found",
+                    {
+                        "project_name": parsed["project_name"],
+                        "month": parsed["month"],
+                        "year": parsed["year"],
+                        "view": parsed["view"],
+                        "client": empty,
+                        "contractor": empty,
+                    },
+                )
+            return self._success(
+                "Inbound correspondence retrieved successfully",
+                InboundCorrespondenceSerializer(summary).data,
+            )
+
+        allow_create = request.method == "POST"
+        return self._save_inbound_correspondence(request, allow_create=allow_create)
+
+    @swagger_auto_schema(
+        operation_summary="Get inbound (Client / Contractor) correspondence counts",
+        methods=["get"],
+        manual_parameters=[
+            openapi.Parameter("project_name", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True),
+            openapi.Parameter("month", openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter("year", openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter("view", openapi.IN_QUERY, type=openapi.TYPE_STRING, enum=[VIEW_MONTHLY, VIEW_CUMULATIVE]),
+        ],
+        tags=["Correspondence Documents"],
+    )
+    @swagger_auto_schema(
+        operation_summary="Create or upsert inbound correspondence counts",
+        methods=["post"],
+        request_body=_INBOUND_SCHEMA,
+        tags=["Correspondence Documents"],
+    )
+    @swagger_auto_schema(
+        operation_summary="Update inbound correspondence counts",
+        methods=["put", "patch"],
+        request_body=_INBOUND_SCHEMA,
+        tags=["Correspondence Documents"],
+    )
+    @action(
+        detail=False,
+        methods=["get", "post", "put", "patch"],
+        url_path="inbound-correspondence",
+    )
+    def inbound_correspondence(self, request):
+        return self._handle_inbound_correspondence(request)
 
     @swagger_auto_schema(
         operation_summary="Get SCL delivered correspondence counts",

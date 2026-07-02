@@ -140,6 +140,9 @@ urlpatterns = [
     # Project Dates (SCL & Contractor) API
     path('api/', include('project_dates.urls')),
 
+    # Contractor Master API
+    path('api/', include('contractors.urls')),
+
     # Site Progress Images (S3 + Cloudinary fallback)
     path('api/', include('site_images.urls')),
 

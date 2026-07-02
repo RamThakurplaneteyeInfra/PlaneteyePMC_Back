@@ -47,7 +47,10 @@ from accounts.rbac_checks import (
     enforce_project_write_by_name,
 )
 
+from contractors.resolvers import contractor_payload, resolve_contractor_for_write
+
 from ..models.contract_value import ContractValue
+from .contract_value_metrics import contractor_summary_from_records
 from .contract_value_serializer import ContractValueSerializer, _normalize_contract_type
 
 logger = logging.getLogger(__name__)
@@ -66,7 +69,8 @@ _STRIP_FIELDS = {
 
 _FIELD_ALIASES = {
     "projectName": "project_name",
-    "contractType": "contract_type",
+    "contractorName": "contractor_name",
+    "contractorId": "contractor_id",
     "originalContractValue": "original_contract_value",
     "excessValue": "excess_value",
     "approvedVO": "excess_value",
@@ -93,8 +97,72 @@ def _normalise_payload(data: dict) -> dict:
         )
     if "project_name" in normalised and isinstance(normalised["project_name"], str):
         normalised["project_name"] = normalised["project_name"].strip()
+    if "contractor_name" in normalised and isinstance(normalised["contractor_name"], str):
+        normalised["contractor_name"] = normalised["contractor_name"].strip()
 
     return normalised
+
+
+def _find_existing_record(
+    project_name: str,
+    contract_type: str,
+    contractor_id: int | None = None,
+    contractor_name: str | None = None,
+):
+    """Locate an existing record for upsert (SCL or named contractor)."""
+    if not project_name or not contract_type:
+        return None
+
+    filters = {
+        "project_name__iexact": project_name.strip(),
+        "contract_type": contract_type,
+    }
+    if contract_type == ContractValue.ContractType.CONTRACTOR:
+        if contractor_id:
+            filters["contractor_id"] = contractor_id
+        else:
+            name = (contractor_name or "").strip()
+            if not name:
+                return None
+            filters["contractor_name__iexact"] = name
+
+    try:
+        return ContractValue.objects.get(**filters)
+    except ContractValue.DoesNotExist:
+        return None
+
+
+def _build_project_payload(project_name: str, records) -> dict:
+    """Shape GET-by-project response with scl, contractors[], and deprecated contractor."""
+    scl_record = None
+    contractor_records = []
+    for record in records:
+        if record.contract_type == ContractValue.ContractType.SCL:
+            scl_record = record
+        else:
+            contractor_records.append(record)
+
+    contractors_data = [
+        {
+            "id": record.id,
+            "contractor_name": record.contractor_name,
+            "contractor": contractor_payload(record.contractor),
+            "contract_values": ContractValueSerializer(record).data,
+        }
+        for record in contractor_records
+    ]
+
+    first_contractor_values = (
+        contractors_data[0]["contract_values"] if contractors_data else None
+    )
+
+    return {
+        "project_name": project_name,
+        "scl": ContractValueSerializer(scl_record).data if scl_record else None,
+        "contractor_summary": contractor_summary_from_records(contractor_records),
+        "contractors": contractors_data,
+        "contractor": first_contractor_values,
+    }
 
 # Cache settings
 _CACHE_KEY_LIST = "contract_values_list"
@@ -131,6 +199,11 @@ _CV_POST_SCHEMA = openapi.Schema(
             description='Contract type: "SCL" or "CONTRACTOR"',
             enum=["SCL", "CONTRACTOR"],
             example="SCL",
+        ),
+        "contractor_name": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            description="Required when contract_type=CONTRACTOR. Omit for SCL.",
+            example="ABC Infra",
         ),
         "original_contract_value": openapi.Schema(
             type=openapi.TYPE_NUMBER,
@@ -206,6 +279,7 @@ _CV_RESPONSE_SCHEMA = openapi.Schema(
 def _build_queryset(
     project_name: str = None,
     contract_type: str = None,
+    contractor_name: str = None,
     search: str = None,
 ):
     """
@@ -221,6 +295,7 @@ def _build_queryset(
         "id",
         "project_name",
         "contract_type",
+        "contractor_name",
         "original_contract_value",
         "excess_value",
         "saving",
@@ -233,6 +308,9 @@ def _build_queryset(
 
     if contract_type:
         qs = qs.filter(contract_type=_normalize_contract_type(contract_type.strip()))
+
+    if contractor_name:
+        qs = qs.filter(contractor_name__iexact=contractor_name.strip())
 
     if search:
         qs = qs.filter(project_name__icontains=search.strip())
@@ -260,7 +338,7 @@ class ContractValueViewSet(viewsets.ModelViewSet):
     Contract Value ViewSet.
 
     Manages contract financial KPIs per project per contract type.
-    One record per (projectName, contractType) pair.
+    One SCL record per project; multiple CONTRACTOR records (unique contractor_name).
 
     The contractType field acts as a discriminator — the same API serves
     both SCL and Contractor data. New types can be added to the enum
@@ -360,16 +438,13 @@ class ContractValueViewSet(viewsets.ModelViewSet):
     @swagger_auto_schema(
         operation_summary="Create Contract Value Record",
         operation_description=(
-            "Create a new contract value record for a project and contract type.\n\n"
-            "**One record per (projectName, contractType) pair.**\n\n"
+            "Create or update a contract value record.\n\n"
+            "**SCL:** one record per project (`contractor_name` omitted).\n"
+            "**CONTRACTOR:** upserts by `(project_name, contractor_name)` — "
+            "each contractor maintains independent values.\n\n"
             "**Auto-calculated fields (do not send):**\n"
             "- `revised_value` = original_contract_value + excess_value - saving\n"
-            "- `increase_percentage` = ((revised_value - original_contract_value) / original_contract_value) × 100\n\n"
-            "**Example — create both types for the same project:**\n"
-            "```\n"
-            'POST { "projectName": "PMC Smart City", "contractType": "SCL", ... }\n'
-            'POST { "projectName": "PMC Smart City", "contractType": "Contractor", ... }\n'
-            "```"
+            "- `increase_percentage` = ((revised_value - original_contract_value) / original_contract_value) × 100"
         ),
         request_body=_CV_POST_SCHEMA,
         responses={
@@ -380,12 +455,10 @@ class ContractValueViewSet(viewsets.ModelViewSet):
     )
     def create(self, request, *args, **kwargs):
         """
-        Create or update a contract value record (upsert by projectName + contractType).
+        Create or update a contract value record.
 
-        If a record already exists for the given (projectName, contractType) pair
-        it is updated in-place rather than returning a 400/500 uniqueness error.
-
-        Computed fields are stripped from the payload before validation.
+        SCL upserts by (project_name, contract_type).
+        CONTRACTOR upserts by (project_name, contract_type, contractor_name).
         """
         payload = _normalise_payload(request.data)
         project_name = payload.get("project_name", "")
@@ -393,16 +466,12 @@ class ContractValueViewSet(viewsets.ModelViewSet):
             request.user, project_name, RBACDomain.FINANCIAL
         )
         contract_type = payload.get("contract_type", "")
+        contractor_id = payload.get("contractor_id")
+        contractor_name = payload.get("contractor_name")
 
-        existing = None
-        if project_name and contract_type:
-            try:
-                existing = ContractValue.objects.get(
-                    project_name__iexact=project_name,
-                    contract_type=contract_type,
-                )
-            except ContractValue.DoesNotExist:
-                pass
+        existing = _find_existing_record(
+            project_name, contract_type, contractor_id, contractor_name
+        )
 
         if existing is not None:
             serializer = ContractValueSerializer(
@@ -651,11 +720,14 @@ class ContractValueViewSet(viewsets.ModelViewSet):
 
         project_name = instance.project_name
         contract_type = instance.contract_type
+        contractor_label = (
+            f" — {instance.contractor_name}" if instance.contractor_name else ""
+        )
         instance.delete()
         self._invalidate_cache()
 
         return self._success(
-            f"Contract value record for '{project_name}' [{contract_type}] deleted successfully",
+            f"Contract value record for '{project_name}' [{contract_type}{contractor_label}] deleted successfully",
             {},
         )
 
@@ -671,12 +743,42 @@ class ContractValueViewSet(viewsets.ModelViewSet):
     @swagger_auto_schema(
         operation_summary="Get All Contract Values by Project Name",
         operation_description=(
-            "Retrieve all contract type records for a given project.\n\n"
-            "Returns both SCL and Contractor records (if they exist) for the project.\n"
-            "Useful for dashboard contract comparison tables."
+            "Retrieve SCL and all contractor contract value records for a project.\n\n"
+            "Returns `contractors` as an array (one entry per contractor), "
+            "`contractor_summary` with backend-calculated cumulative totals, "
+            "and `contractor` for backward compatibility (first contractor)."
         ),
         responses={
-            200: openapi.Response("OK", _CV_RESPONSE_SCHEMA),
+            200: openapi.Response(
+                "OK",
+                openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        "success": openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                        "message": openapi.Schema(type=openapi.TYPE_STRING),
+                        "data": openapi.Schema(
+                            type=openapi.TYPE_OBJECT,
+                            properties={
+                                "project_name": openapi.Schema(type=openapi.TYPE_STRING),
+                                "scl": openapi.Schema(type=openapi.TYPE_OBJECT, nullable=True),
+                                "contractor_summary": openapi.Schema(
+                                    type=openapi.TYPE_OBJECT,
+                                    description="Cumulative totals across all contractors",
+                                ),
+                                "contractors": openapi.Schema(
+                                    type=openapi.TYPE_ARRAY,
+                                    items=openapi.Schema(type=openapi.TYPE_OBJECT),
+                                ),
+                                "contractor": openapi.Schema(
+                                    type=openapi.TYPE_OBJECT,
+                                    nullable=True,
+                                    description="Deprecated — first contractor contract_values",
+                                ),
+                            },
+                        ),
+                    },
+                ),
+            ),
             404: "Not found",
         },
         tags=["Contract Values"],
@@ -689,29 +791,38 @@ class ContractValueViewSet(viewsets.ModelViewSet):
     )
     def get_by_project_name(self, request, projectName: str = None):
         """
-        Retrieve all contract value records for a project (all types).
-        Returns both SCL and Contractor records for the same project.
+        Return SCL and all contractor contract value records for a project.
+
+        Response includes:
+          - scl: single SCL record or null
+          - contractor_summary: cumulative totals across all contractors
+          - contractors: array with id, contractor_name, contract_values
+          - contractor: first contractor's contract_values (backward compatibility)
         """
         if not projectName or not projectName.strip():
             return self._error("projectName is required.")
 
-        enforce_project_access_by_name(request.user, projectName.strip())
+        project_name = projectName.strip()
+        enforce_project_access_by_name(request.user, project_name)
 
         qs = apply_project_rbac_to_queryset(
-            _build_queryset(project_name=projectName),
+            _build_queryset(project_name=project_name),
             request,
             "project_name",
-        )
+        ).order_by("contract_type", "contractor_name")
 
         if not qs.exists():
             return self._error(
-                f"No contract value records found for project '{projectName}'",
+                f"No contract value records found for project '{project_name}'",
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
-        return self._paginated_success(
-            request, qs,
-            f"Contract value records for project '{projectName.strip()}' retrieved successfully",
+        actual_name = qs.first().project_name
+        payload = _build_project_payload(actual_name, qs)
+
+        return self._success(
+            f"Contract value records for project '{actual_name}' retrieved successfully",
+            payload,
         )
 
     # -------------------------------------------------------------------------
@@ -781,15 +892,24 @@ class ContractValueViewSet(viewsets.ModelViewSet):
     @swagger_auto_schema(
         operation_summary="Get Contract Value by Project Name and Contract Type",
         operation_description=(
-            "Retrieve the exact contract value record for a specific project + type combination.\n\n"
+            "Retrieve the contract value record for a specific project + type.\n\n"
+            "For CONTRACTOR type, pass `?contractor_name=` when multiple contractors exist.\n\n"
             "**Examples:**\n"
             "- `GET /api/contract-values/project/PMC Smart City/type/SCL/`\n"
-            "- `GET /api/contract-values/project/PMC Smart City/type/Contractor/`\n\n"
-            "Ideal for dashboard KPI cards that display SCL and Contractor values side-by-side."
+            "- `GET /api/contract-values/project/PMC Smart City/type/CONTRACTOR/?contractor_name=ABC Infra`"
         ),
+        manual_parameters=[
+            openapi.Parameter(
+                "contractor_name",
+                openapi.IN_QUERY,
+                type=openapi.TYPE_STRING,
+                required=False,
+                description="Required when multiple CONTRACTOR records exist for the project.",
+            ),
+        ],
         responses={
             200: openapi.Response("OK", _CV_RESPONSE_SCHEMA),
-            400: "Invalid contract type",
+            400: "Invalid contract type or missing contractor_name",
             404: "Not found",
         },
         tags=["Contract Values"],
@@ -823,20 +943,60 @@ class ContractValueViewSet(viewsets.ModelViewSet):
 
         enforce_project_access_by_name(request.user, projectName.strip())
 
-        try:
-            instance = ContractValue.objects.get(
-                project_name__iexact=projectName.strip(),
+        project_name = projectName.strip()
+        contractor_name = (request.query_params.get("contractor_name") or "").strip()
+        contractor_id = request.query_params.get("contractor_id")
+
+        if contract_type == ContractValue.ContractType.SCL:
+            try:
+                instance = ContractValue.objects.get(
+                    project_name__iexact=project_name,
+                    contract_type=contract_type,
+                )
+            except ContractValue.DoesNotExist:
+                return self._error(
+                    f"No contract value record found for project '{projectName}' "
+                    f"with contractType '{contractType}'",
+                    http_status=status.HTTP_404_NOT_FOUND,
+                )
+        else:
+            contractor_qs = ContractValue.objects.filter(
+                project_name__iexact=project_name,
                 contract_type=contract_type,
             )
-        except ContractValue.DoesNotExist:
-            return self._error(
-                f"No contract value record found for project '{projectName}' "
-                f"with contractType '{contractType}'",
-                http_status=status.HTTP_404_NOT_FOUND,
-            )
+            if not contractor_qs.exists():
+                return self._error(
+                    f"No contract value record found for project '{projectName}' "
+                    f"with contractType '{contractType}'",
+                    http_status=status.HTTP_404_NOT_FOUND,
+                )
+
+            if contractor_id or contractor_name:
+                try:
+                    if contractor_id:
+                        instance = contractor_qs.get(contractor_id=int(contractor_id))
+                    else:
+                        instance = contractor_qs.get(
+                            contractor_name__iexact=contractor_name,
+                        )
+                except (ContractValue.DoesNotExist, ValueError):
+                    label = contractor_id or contractor_name
+                    return self._error(
+                        f"No contract value record found for contractor '{label}' "
+                        f"on project '{projectName}'",
+                        http_status=status.HTTP_404_NOT_FOUND,
+                    )
+            elif contractor_qs.count() == 1:
+                instance = contractor_qs.first()
+            else:
+                return self._error(
+                    "Multiple contractors exist for this project. "
+                    "Pass ?contractor_id= or ?contractor_name= to select one.",
+                    http_status=status.HTTP_400_BAD_REQUEST,
+                )
 
         return self._success(
-            f"Contract value record for '{projectName.strip()}' [{contractType.strip()}] "
+            f"Contract value record for '{project_name}' [{contractType.strip()}] "
             "retrieved successfully",
             ContractValueSerializer(instance).data,
         )

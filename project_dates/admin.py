@@ -25,6 +25,7 @@ class ProjectDatesAdmin(admin.ModelAdmin):
     list_display = [
         "project",
         "date_type",
+        "contractor_name",
         "project_start",
         "contract_finish",
         "forecast_finish",
@@ -33,13 +34,13 @@ class ProjectDatesAdmin(admin.ModelAdmin):
         "updated_at",
     ]
     list_filter = ["date_type", "created_at"]
-    search_fields = ["project__name", "date_type"]
+    search_fields = ["project__name", "date_type", "contractor_name"]
     readonly_fields = ["created_at", "updated_at"]
-    ordering = ["project__name", "date_type"]
+    ordering = ["project__name", "date_type", "contractor_name"]
     inlines = [BGStatusInline]
 
     fieldsets = (
-        ("Project & Type", {"fields": ("project", "date_type")}),
+        ("Project & Type", {"fields": ("project", "date_type", "contractor_name")}),
         (
             "Schedule Dates",
             {

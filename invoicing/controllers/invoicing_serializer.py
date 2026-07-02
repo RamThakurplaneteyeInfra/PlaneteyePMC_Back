@@ -9,6 +9,9 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
+from contractors.resolvers import contractor_payload, resolve_contractor_for_write
+from projects.models import Project
+
 from ..models.invoicing_information import InvoicingInformation
 from .invoicing_metrics import metrics_from_record
 
@@ -31,6 +34,8 @@ def _normalize_invoice_type(value: str) -> str:
 class InvoicingInformationSerializer(serializers.ModelSerializer):
     difference = serializers.SerializerMethodField()
     certification_efficiency = serializers.SerializerMethodField()
+    contractor = serializers.SerializerMethodField()
+    contractor_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
 
     # Legacy read aliases
     projectName = serializers.SerializerMethodField()
@@ -49,6 +54,9 @@ class InvoicingInformationSerializer(serializers.ModelSerializer):
             "projectName",
             "invoice_type",
             "invoiceType",
+            "contractor_name",
+            "contractor",
+            "contractor_id",
             "gross_billed",
             "grossBilled",
             "gross_certified_billed",
@@ -65,6 +73,7 @@ class InvoicingInformationSerializer(serializers.ModelSerializer):
             "id",
             "projectName",
             "invoiceType",
+            "contractor",
             "grossBilled",
             "grossCertifiedBilled",
             "difference",
@@ -75,6 +84,9 @@ class InvoicingInformationSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+    def get_contractor(self, obj):
+        return contractor_payload(obj.contractor)
 
     def get_projectName(self, obj) -> str:
         return obj.project_name
@@ -113,6 +125,8 @@ class InvoicingInformationSerializer(serializers.ModelSerializer):
             data["project_name"] = data["projectName"]
         if "invoiceType" in data and "invoice_type" not in data:
             data["invoice_type"] = data["invoiceType"]
+        if "contractorName" in data and "contractor_name" not in data:
+            data["contractor_name"] = data["contractorName"]
         if "grossBilled" in data and "gross_billed" not in data:
             data["gross_billed"] = data["grossBilled"]
         if "grossCertifiedBilled" in data and "gross_certified_billed" not in data:
@@ -144,6 +158,46 @@ class InvoicingInformationSerializer(serializers.ModelSerializer):
                 "invoice_type must be SCL or CONTRACTOR."
             )
         return value
+
+    def validate_contractor_name(self, value: str):
+        if value is None:
+            return value
+        return str(value).strip()
+
+    def validate(self, attrs):
+        project_name = attrs.get("project_name") or (
+            self.instance.project_name if self.instance else None
+        )
+        invoice_type = attrs.get(
+            "invoice_type",
+            getattr(self.instance, "invoice_type", None) if self.instance else None,
+        )
+        contractor_id = attrs.pop("contractor_id", None)
+        if contractor_id is None and hasattr(self, "initial_data"):
+            contractor_id = self.initial_data.get("contractor_id")
+        contractor_name = attrs.get(
+            "contractor_name",
+            getattr(self.instance, "contractor_name", None) if self.instance else None,
+        )
+
+        if invoice_type == InvoicingInformation.InvoiceType.SCL:
+            attrs["contractor"] = None
+            attrs["contractor_name"] = None
+        elif invoice_type == InvoicingInformation.InvoiceType.CONTRACTOR:
+            project = Project.objects.filter(name__iexact=str(project_name).strip()).first()
+            if project is None:
+                raise serializers.ValidationError(
+                    {"project_name": f"No project found with name '{project_name}'."}
+                )
+            contractor = resolve_contractor_for_write(
+                project,
+                contractor_id=contractor_id,
+                contractor_name=contractor_name,
+            )
+            attrs["contractor"] = contractor
+            attrs["contractor_name"] = contractor.contractor_name
+
+        return attrs
 
     def _validate_non_negative(self, value: Decimal, field_name: str) -> Decimal:
         if value is not None and value < 0:

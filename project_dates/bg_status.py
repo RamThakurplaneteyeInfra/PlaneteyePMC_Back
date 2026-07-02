@@ -68,7 +68,6 @@ def calculate_bg_status(
     if today > due_date:
         return BG_STATUS_NOT_UPDATED
 
-    # Due date is today and no update yet
     return BG_STATUS_NOT_UPDATED
 
 
@@ -119,8 +118,40 @@ def get_bg_entries_for_project(project: Project | None):
     )
 
 
+def bg_status_for_project_date(
+    project_date: ProjectDates | None,
+    today: date | None = None,
+) -> dict:
+    """Return BG entries scoped to a single ProjectDates row."""
+    if project_date is None:
+        return dict(EMPTY_BG_PAYLOAD)
+
+    entries = list(project_date.bg_statuses.all())
+    contractor_bg = []
+    scl_bg = []
+
+    if project_date.date_type == ProjectDates.DATE_TYPE_SCL:
+        scl_bg = [
+            _serialize_bg_entry(entry, today=today)
+            for entry in entries
+            if entry.bg_type == BGStatus.BG_TYPE_SCL
+        ]
+    else:
+        contractor_bg = [
+            _serialize_bg_entry(entry, today=today)
+            for entry in entries
+            if entry.bg_type == BGStatus.BG_TYPE_CONTRACTOR
+        ]
+
+    return {
+        "contractor_bg": contractor_bg,
+        "scl_bg": scl_bg,
+        "bg_summary": calculate_bg_summary(entries, today=today),
+    }
+
+
 def bg_status_payload(project: Project | None, today: date | None = None) -> dict:
-    """Return multi-entry BG payload for a project."""
+    """Return project-wide multi-entry BG payload (all contractors + SCL)."""
     if project is None:
         return dict(EMPTY_BG_PAYLOAD)
 
@@ -143,9 +174,35 @@ def bg_status_payload(project: Project | None, today: date | None = None) -> dic
     }
 
 
-def get_project_date_for_bg(project: Project, bg_type: str) -> ProjectDates | None:
-    """Resolve the ProjectDates row for a BG type."""
+def get_project_date_for_bg(
+    project: Project,
+    bg_type: str,
+    contractor_name: str | None = None,
+    contractor_id: int | None = None,
+) -> ProjectDates | None:
+    """Resolve the ProjectDates row for a BG type (and optional contractor)."""
+    if bg_type == ProjectDates.DATE_TYPE_SCL:
+        return ProjectDates.objects.filter(
+            project_id=project.id,
+            date_type=ProjectDates.DATE_TYPE_SCL,
+        ).first()
+
+    if contractor_id:
+        return ProjectDates.objects.filter(
+            project_id=project.id,
+            date_type=ProjectDates.DATE_TYPE_CONTRACTOR,
+            contractor_id=contractor_id,
+        ).first()
+
+    name = (contractor_name or "").strip()
+    if not name:
+        return ProjectDates.objects.filter(
+            project_id=project.id,
+            date_type=ProjectDates.DATE_TYPE_CONTRACTOR,
+        ).first()
+
     return ProjectDates.objects.filter(
         project_id=project.id,
-        date_type=bg_type,
+        date_type=ProjectDates.DATE_TYPE_CONTRACTOR,
+        contractor_name__iexact=name,
     ).first()

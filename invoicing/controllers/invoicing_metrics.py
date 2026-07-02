@@ -46,3 +46,13 @@ def metrics_from_record(record) -> dict:
         record.gross_billed,
         record.gross_certified_billed,
     )
+
+
+def contractor_summary_from_records(records) -> dict:
+    """Aggregate contractor records into cumulative totals (not averaged efficiencies)."""
+    total_gross = Decimal("0")
+    total_certified = Decimal("0")
+    for record in records:
+        total_gross += _to_decimal(record.gross_billed)
+        total_certified += _to_decimal(record.gross_certified_billed)
+    return metrics_from_amounts(total_gross, total_certified)

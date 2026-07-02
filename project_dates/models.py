@@ -4,9 +4,9 @@ Project Dates Model.
 Stores project schedule information separately for SCL and Contractor
 within a single table, linked to the Project model via ForeignKey.
 
-Each project can have exactly two records:
-  - One for SCL
-  - One for CONTRACTOR
+Each project can have:
+  - Exactly one SCL schedule (contractor_name is null)
+  - One or more CONTRACTOR schedules (each identified by contractor_name)
 
 Calculated fields (not stored — computed in the serializer):
   - elapsed_duration       = (today - project_start).days
@@ -17,26 +17,23 @@ Calculated fields (not stored — computed in the serializer):
 Business rules enforced in clean():
   - project_start   <= contract_finish
   - contract_finish <= eot_date
-
-  forecast_finish may be before or after contract_finish (early or delayed forecast).
-  - One SCL record per project
-  - One CONTRACTOR record per project
+  - contractor_name required when date_type = CONTRACTOR
+  - contractor_name must be null/blank when date_type = SCL
 """
 
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.utils import timezone
+from django.db.models import Q
 
 from projects.models import Project
 
 
 class ProjectDates(models.Model):
     """
-    Project schedule dates for SCL or Contractor.
+    Project schedule dates for SCL or a named Contractor.
 
-    One record per (project, date_type) pair.
-    Calculated duration fields are derived at read time in the serializer —
-    they are never stored in the database.
+    SCL: one row per project (contractor_name is null).
+    CONTRACTOR: many rows per project, unique by contractor_name.
     """
 
     DATE_TYPE_SCL = "SCL"
@@ -47,9 +44,6 @@ class ProjectDates(models.Model):
         (DATE_TYPE_CONTRACTOR, "CONTRACTOR"),
     ]
 
-    # -------------------------------------------------------------------------
-    # Core identifiers
-    # -------------------------------------------------------------------------
     project = models.ForeignKey(
         Project,
         on_delete=models.CASCADE,
@@ -63,50 +57,50 @@ class ProjectDates(models.Model):
         db_index=True,
         help_text="SCL or CONTRACTOR",
     )
+    contractor_name = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Contractor display name (denormalized from Contractor Master)",
+    )
+    contractor = models.ForeignKey(
+        "contractors.Contractor",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="project_dates",
+        db_index=True,
+        help_text="Contractor Master reference (required for CONTRACTOR)",
+    )
 
-    # -------------------------------------------------------------------------
-    # Date fields
-    # -------------------------------------------------------------------------
-    project_start = models.DateField(
-        help_text="Project start date",
-    )
-    contract_finish = models.DateField(
-        help_text="Contractual finish date",
-    )
-    forecast_finish = models.DateField(
-        help_text="Forecasted finish date",
-    )
-    eot_date = models.DateField(
-        help_text="Extension of Time (EOT) date",
-    )
+    project_start = models.DateField(help_text="Project start date")
+    contract_finish = models.DateField(help_text="Contractual finish date")
+    forecast_finish = models.DateField(help_text="Forecasted finish date")
+    eot_date = models.DateField(help_text="Extension of Time (EOT) date")
 
-    # -------------------------------------------------------------------------
-    # Timestamps
-    # -------------------------------------------------------------------------
     created_at = models.DateTimeField(
         auto_now_add=True,
         db_index=True,
         help_text="Record creation timestamp",
     )
-    updated_at = models.DateTimeField(
-        auto_now=True,
-        help_text="Last update timestamp",
-    )
-
-    # =========================================================================
-    # Validation
-    # =========================================================================
+    updated_at = models.DateTimeField(auto_now=True, help_text="Last update timestamp")
 
     def clean(self):
-        """
-        Business rule validation:
-          1. project_start   <= contract_finish
-          2. contract_finish <= eot_date
-
-          forecast_finish is not constrained relative to contract_finish —
-          it may be earlier (ahead of schedule) or later (delayed).
-        """
         errors = {}
+
+        if self.date_type == self.DATE_TYPE_SCL:
+            if self.contractor_name and str(self.contractor_name).strip():
+                errors["contractor_name"] = (
+                    "contractor_name must be empty for SCL records."
+                )
+            if self.contractor_id:
+                errors["contractor_id"] = "contractor must be empty for SCL records."
+        elif self.date_type == self.DATE_TYPE_CONTRACTOR:
+            if not self.contractor_id and not (self.contractor_name or "").strip():
+                errors["contractor_id"] = (
+                    "contractor_id is required for CONTRACTOR records."
+                )
 
         if self.project_start and self.contract_finish:
             if self.project_start > self.contract_finish:
@@ -128,18 +122,24 @@ class ProjectDates(models.Model):
             raise ValidationError(errors)
 
     def save(self, *args, **kwargs):
-        """Run full validation before persisting."""
+        if self.date_type == self.DATE_TYPE_SCL:
+            self.contractor_name = None
+            self.contractor = None
+        elif self.contractor_id:
+            self.contractor_name = self.contractor.contractor_name
+        elif self.contractor_name:
+            self.contractor_name = str(self.contractor_name).strip()
         self.full_clean()
         super().save(*args, **kwargs)
 
-    # =========================================================================
-    # Meta & helpers
-    # =========================================================================
-
     def __str__(self) -> str:
         project_name = self.project.name if self.project_id else "Unknown"
+        if self.date_type == self.DATE_TYPE_CONTRACTOR and self.contractor_name:
+            label = f"{self.contractor_name} [{self.date_type}]"
+        else:
+            label = self.date_type
         return (
-            f"{project_name} [{self.date_type}] — "
+            f"{project_name} — {label} — "
             f"Start: {self.project_start} | "
             f"Contract: {self.contract_finish} | "
             f"Forecast: {self.forecast_finish} | "
@@ -147,11 +147,21 @@ class ProjectDates(models.Model):
         )
 
     class Meta:
-        ordering = ["project__name", "date_type"]
+        ordering = ["project__name", "date_type", "contractor_name"]
         verbose_name = "Project Dates"
         verbose_name_plural = "Project Dates"
-        # One SCL record and one CONTRACTOR record per project
-        unique_together = [("project", "date_type")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "date_type"],
+                condition=Q(date_type="SCL"),
+                name="pd_unique_scl_per_project",
+            ),
+            models.UniqueConstraint(
+                fields=["project", "contractor"],
+                condition=Q(date_type="CONTRACTOR"),
+                name="pd_unique_contractor_per_project",
+            ),
+        ]
         indexes = [
             models.Index(
                 fields=["project", "date_type"],
@@ -160,6 +170,10 @@ class ProjectDates(models.Model):
             models.Index(
                 fields=["date_type"],
                 name="pd_date_type_idx",
+            ),
+            models.Index(
+                fields=["project", "contractor_name"],
+                name="pd_project_contractor_idx",
             ),
         ]
 
@@ -190,24 +204,19 @@ class BGStatus(models.Model):
         max_length=20,
         choices=BG_TYPE_CHOICES,
         db_index=True,
-        help_text="Contractor or SCL bank guarantee",
+        help_text="Contract type for this bank guarantee",
     )
     bg_name = models.CharField(
         max_length=255,
         help_text="Display name for this bank guarantee",
     )
-    due_date = models.DateField(
-        help_text="Bank guarantee due date",
-    )
+    due_date = models.DateField(help_text="Bank guarantee due date")
     updated_date = models.DateField(
         null=True,
         blank=True,
         help_text="Date the bank guarantee was last updated",
     )
-    remarks = models.TextField(
-        blank=True,
-        help_text="Optional notes",
-    )
+    remarks = models.TextField(blank=True, help_text="Optional notes")
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
 

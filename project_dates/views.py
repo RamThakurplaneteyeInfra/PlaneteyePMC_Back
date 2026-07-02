@@ -125,6 +125,16 @@ _BG_STATUS_CREATE_SCHEMA = openapi.Schema(
             enum=["CONTRACTOR", "SCL"],
             example="CONTRACTOR",
         ),
+        "contractor_id": openapi.Schema(
+            type=openapi.TYPE_INTEGER,
+            description="Target contractor (preferred). Required when multiple contractors exist.",
+            example=1,
+        ),
+        "contractor_name": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            description="Deprecated — use contractor_id.",
+            example="ABC Infra",
+        ),
         "bg_name": openapi.Schema(type=openapi.TYPE_STRING, example="Performance BG"),
         "due_date": openapi.Schema(type=openapi.TYPE_STRING, format="date", example="2026-06-15"),
         "updated_date": openapi.Schema(
@@ -158,7 +168,17 @@ _PD_POST_SCHEMA = openapi.Schema(
     required=["project_name", "date_type", "project_start", "contract_finish", "forecast_finish", "eot_date"],
     properties={
         "project_name": openapi.Schema(type=openapi.TYPE_STRING, example="Thane Project"),
-        "date_type": openapi.Schema(type=openapi.TYPE_STRING, enum=["SCL", "CONTRACTOR"], example="SCL"),
+        "date_type": openapi.Schema(type=openapi.TYPE_STRING, enum=["SCL", "CONTRACTOR"], example="CONTRACTOR"),
+        "contractor_id": openapi.Schema(
+            type=openapi.TYPE_INTEGER,
+            description="Required when date_type=CONTRACTOR (preferred). Omit for SCL.",
+            example=1,
+        ),
+        "contractor_name": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            description="Deprecated — use contractor_id.",
+            example="ABC Infra",
+        ),
         "project_start": openapi.Schema(type=openapi.TYPE_STRING, format="date", example="2024-06-01"),
         "contract_finish": openapi.Schema(type=openapi.TYPE_STRING, format="date", example="2026-06-01"),
         "forecast_finish": openapi.Schema(type=openapi.TYPE_STRING, format="date", example="2026-09-01"),
@@ -176,7 +196,8 @@ _PD_RESPONSE_SCHEMA = openapi.Schema(
             properties={
                 "id": openapi.Schema(type=openapi.TYPE_INTEGER, example=1),
                 "project_name": openapi.Schema(type=openapi.TYPE_STRING, example="Thane Project"),
-                "date_type": openapi.Schema(type=openapi.TYPE_STRING, example="SCL"),
+                "date_type": openapi.Schema(type=openapi.TYPE_STRING, example="CONTRACTOR"),
+                "contractor_name": openapi.Schema(type=openapi.TYPE_STRING, example="ABC Infra", nullable=True),
                 "project_start": openapi.Schema(type=openapi.TYPE_STRING, example="2024-06-01"),
                 "contract_finish": openapi.Schema(type=openapi.TYPE_STRING, example="2026-06-01"),
                 "forecast_finish": openapi.Schema(type=openapi.TYPE_STRING, example="2026-09-01"),
@@ -203,16 +224,10 @@ _PD_RESPONSE_SCHEMA = openapi.Schema(
 
 class ProjectDatesViewSet(viewsets.ModelViewSet):
     """
-    Project Dates ViewSet — manages SCL and Contractor schedule dates per project.
+    Project Dates ViewSet — manages SCL and multiple Contractor schedule dates per project.
 
-    One SCL record and one CONTRACTOR record per project.
+    One SCL record per project. Multiple CONTRACTOR records allowed (unique contractor_name).
     All duration fields are calculated fresh on every read — never stored.
-
-    Duration formulas:
-      elapsed_duration         = (today - project_start).days
-      remaining_duration       = (contract_finish - today).days
-      forecast_finish_duration = (forecast_finish - contract_finish).days
-      eot_duration             = (eot_date - contract_finish).days
     """
 
     queryset = ProjectDates.objects.select_related("project").prefetch_related(
@@ -228,8 +243,8 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = ProjectDatesFilter
     search_fields = ["project__name", "date_type"]
-    ordering_fields = ["created_at", "updated_at", "project__name", "date_type"]
-    ordering = ["project__name", "date_type"]
+    ordering_fields = ["created_at", "updated_at", "project__name", "date_type", "contractor_name"]
+    ordering = ["project__name", "date_type", "contractor_name"]
 
     # -------------------------------------------------------------------------
     # Response helpers
@@ -254,17 +269,17 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
     @swagger_auto_schema(
         operation_summary="Create Project Dates Record (SCL or Contractor)",
         operation_description=(
-            "Create a new project dates record for SCL or CONTRACTOR.\n\n"
-            "**One record per project per date_type** — duplicates are rejected.\n\n"
+            "Create a new project dates record.\n\n"
+            "**SCL:** one record per project (`contractor_name` omitted).\n"
+            "**CONTRACTOR:** multiple records allowed — each POST creates a new contractor "
+            "schedule identified by `contractor_name` (must be unique within the project).\n\n"
             "**Business rules:**\n"
             "- `project_start` ≤ `contract_finish`\n"
             "- `contract_finish` ≤ `eot_date`\n"
-            "- `forecast_finish` may be before or after `contract_finish` (early or delayed forecast)\n\n"
+            "- `contractor_name` required when `date_type=CONTRACTOR`\n\n"
             "**Calculated fields (auto-computed, not stored):**\n"
-            "- `elapsed_duration` = (today − project_start).days\n"
-            "- `remaining_duration` = (contract_finish − today).days\n"
-            "- `forecast_finish_duration` = (forecast_finish − contract_finish).days\n"
-            "- `eot_duration` = (eot_date − contract_finish).days"
+            "- `elapsed_duration`, `remaining_duration`, `forecast_finish_duration`, "
+            "`eot_duration`, `delay_days`, `eot_delay_days`, `current_delay`"
         ),
         request_body=_PD_POST_SCHEMA,
         responses={
@@ -429,7 +444,10 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
         except ProjectDates.DoesNotExist:
             return self._error("Project dates record not found", http_status=status.HTTP_404_NOT_FOUND)
 
-        label = f"{instance.project.name} [{instance.date_type}]"
+        label = f"{instance.project.name} [{instance.date_type}"
+        if instance.contractor_name:
+            label += f" — {instance.contractor_name}"
+        label += "]"
         instance.delete()
         return self._success(f"Project dates record for '{label}' deleted successfully", {})
 
@@ -452,9 +470,10 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
         method="post",
         operation_summary="Create BG Status Entry",
         operation_description=(
-            "Create a new bank guarantee entry. Each request adds a new row; "
-            "existing BG entries are never overwritten.\n\n"
-            "Requires a matching SCL or CONTRACTOR project dates record for the given `bg_type`."
+            "Create a new bank guarantee entry for a specific schedule row.\n\n"
+            "For CONTRACTOR BG entries, pass `contractor_name` when the project has "
+            "multiple contractor schedules. BG entries are scoped to the selected "
+            "contractor and never mixed across contractors."
         ),
         request_body=_BG_STATUS_CREATE_SCHEMA,
         responses={201: _BG_ENTRY_SCHEMA, 400: "Validation error", 404: "Project not found"},
@@ -480,6 +499,38 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
             )
 
         if request.method == "GET":
+            contractor_name = (request.query_params.get("contractor_name") or "").strip()
+            contractor_id = request.query_params.get("contractor_id")
+            if contractor_id or contractor_name:
+                from .bg_status import get_project_date_for_bg, bg_status_for_project_date
+
+                try:
+                    parsed_id = int(contractor_id) if contractor_id else None
+                except (TypeError, ValueError):
+                    return self._error("contractor_id must be a valid integer.")
+
+                project_date = get_project_date_for_bg(
+                    project,
+                    ProjectDates.DATE_TYPE_CONTRACTOR,
+                    contractor_name or None,
+                    contractor_id=parsed_id,
+                )
+                if project_date is None:
+                    label = contractor_id or contractor_name
+                    return self._error(
+                        f"No contractor schedule found for '{label}' on this project.",
+                        http_status=status.HTTP_404_NOT_FOUND,
+                    )
+                label = (
+                    project_date.contractor_name
+                    or (project_date.contractor.contractor_name if project_date.contractor_id else "")
+                )
+                payload = bg_status_for_project_date(project_date)
+                return self._success(
+                    f"BG Status for contractor '{label}' retrieved successfully",
+                    payload,
+                )
+
             return self._success(
                 f"BG Status for '{project.name}' retrieved successfully",
                 bg_status_payload(project),
@@ -576,12 +627,23 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
     # -------------------------------------------------------------------------
 
     @swagger_auto_schema(
-        operation_summary="Get Both SCL and Contractor Dates for a Project",
+        operation_summary="Get SCL and Contractor Dates for a Project",
         operation_description=(
-            "Retrieve both SCL and CONTRACTOR date records for a specific project "
-            "(case-insensitive name match) in a single response.\n\n"
-            "Returns `null` for whichever record does not exist yet."
+            "Retrieve SCL and all contractor schedule records for a project "
+            "(case-insensitive name match).\n\n"
+            "Returns `contractors` as an array (one entry per contractor). "
+            "`contractor` is kept for backward compatibility and points to the "
+            "first contractor when present."
         ),
+        manual_parameters=[
+            openapi.Parameter(
+                "contractor_name",
+                openapi.IN_QUERY,
+                type=openapi.TYPE_STRING,
+                required=False,
+                description="Optional: filter BG status GET on bg-status endpoint only",
+            ),
+        ],
         responses={
             200: openapi.Response(
                 "OK",
@@ -595,7 +657,16 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
                             properties={
                                 "project_name": openapi.Schema(type=openapi.TYPE_STRING, example="Thane Project"),
                                 "scl": openapi.Schema(type=openapi.TYPE_OBJECT, nullable=True),
-                                "contractor": openapi.Schema(type=openapi.TYPE_OBJECT, nullable=True),
+                                "contractors": openapi.Schema(
+                                    type=openapi.TYPE_ARRAY,
+                                    items=openapi.Schema(type=openapi.TYPE_OBJECT),
+                                    description="All contractor schedules with scoped bg_status",
+                                ),
+                                "contractor": openapi.Schema(
+                                    type=openapi.TYPE_OBJECT,
+                                    nullable=True,
+                                    description="Deprecated — first contractor for backward compatibility",
+                                ),
                                 "contractor_bg": openapi.Schema(
                                     type=openapi.TYPE_ARRAY,
                                     items=_BG_ENTRY_SCHEMA,
@@ -622,20 +693,12 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
     )
     def get_by_project_name(self, request, projectName: str = None):
         """
-        Return both SCL and CONTRACTOR records for a project in one response.
+        Return SCL and all contractor schedule records for a project.
 
-        Example response:
-        {
-          "success": true,
-          "message": "...",
-          "data": {
-            "project_name": "Thane Project",
-            "scl": { ...SCL record with all duration fields... },
-            "contractor": { ...CONTRACTOR record with all duration fields... }
-          }
-        }
-
-        Either scl or contractor will be null if that record hasn't been created yet.
+        Response includes:
+          - scl: single SCL record or null
+          - contractors: array of contractor schedules (each with scoped bg_status)
+          - contractor: first contractor (backward compatibility)
         """
         if not projectName or not projectName.strip():
             return self._error("projectName is required.")
@@ -652,6 +715,7 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
                 )
             )
             .filter(project__name__iexact=project_name)
+            .order_by("date_type", "contractor_name")
         )
 
         if not records.exists():
@@ -660,22 +724,27 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Build a dict keyed by date_type
-        by_type = {r.date_type: r for r in records}
+        scl_record = None
+        contractor_records = []
+        for record in records:
+            if record.date_type == ProjectDates.DATE_TYPE_SCL:
+                scl_record = record
+            else:
+                contractor_records.append(record)
 
-        scl_record = by_type.get(ProjectDates.DATE_TYPE_SCL)
-        contractor_record = by_type.get(ProjectDates.DATE_TYPE_CONTRACTOR)
-
-        # Use the actual project name from whichever record exists
-        project = (scl_record or contractor_record).project
+        project = (scl_record or contractor_records[0]).project
         actual_name = project.name
-
         bg_payload = bg_status_payload(project)
+
+        contractors_data = [
+            ProjectDatesSerializer(record).data for record in contractor_records
+        ]
 
         payload = {
             "project_name": actual_name,
             "scl": ProjectDatesSerializer(scl_record).data if scl_record else None,
-            "contractor": ProjectDatesSerializer(contractor_record).data if contractor_record else None,
+            "contractors": contractors_data,
+            "contractor": contractors_data[0] if contractors_data else None,
             "contractor_bg": bg_payload["contractor_bg"],
             "scl_bg": bg_payload["scl_bg"],
             "bg_summary": bg_payload["bg_summary"],

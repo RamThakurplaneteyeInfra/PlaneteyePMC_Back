@@ -47,7 +47,10 @@ from accounts.rbac_checks import (
     enforce_project_write_by_name,
 )
 
+from contractors.resolvers import contractor_payload
+
 from ..models.invoicing_information import InvoicingInformation
+from .invoicing_metrics import contractor_summary_from_records
 from .invoicing_serializer import (
     InvoicingInformationSerializer,
     _normalize_invoice_type,
@@ -69,6 +72,8 @@ _STRIP_FIELDS = {
 _FIELD_ALIASES = {
     "projectName": "project_name",
     "invoiceType": "invoice_type",
+    "contractorName": "contractor_name",
+    "contractorId": "contractor_id",
     "grossBilled": "gross_billed",
     "grossCertifiedBilled": "gross_certified_billed",
     "netBilledWithoutVAT": "gross_billed",
@@ -95,8 +100,72 @@ def _normalise_payload(data: dict) -> dict:
         )
     if "project_name" in normalised and isinstance(normalised["project_name"], str):
         normalised["project_name"] = normalised["project_name"].strip()
+    if "contractor_name" in normalised and isinstance(normalised["contractor_name"], str):
+        normalised["contractor_name"] = normalised["contractor_name"].strip()
 
     return normalised
+
+
+def _find_existing_record(
+    project_name: str,
+    invoice_type: str,
+    contractor_id: int | None = None,
+    contractor_name: str | None = None,
+):
+    """Locate an existing record for upsert (SCL or named contractor)."""
+    if not project_name or not invoice_type:
+        return None
+
+    filters = {
+        "project_name__iexact": project_name.strip(),
+        "invoice_type": invoice_type,
+    }
+    if invoice_type == InvoicingInformation.InvoiceType.CONTRACTOR:
+        if contractor_id:
+            filters["contractor_id"] = contractor_id
+        else:
+            name = (contractor_name or "").strip()
+            if not name:
+                return None
+            filters["contractor_name__iexact"] = name
+
+    try:
+        return InvoicingInformation.objects.get(**filters)
+    except InvoicingInformation.DoesNotExist:
+        return None
+
+
+def _build_project_payload(project_name: str, records) -> dict:
+    """Shape GET-by-project response with scl, contractors[], and deprecated contractor."""
+    scl_record = None
+    contractor_records = []
+    for record in records:
+        if record.invoice_type == InvoicingInformation.InvoiceType.SCL:
+            scl_record = record
+        else:
+            contractor_records.append(record)
+
+    contractors_data = [
+        {
+            "id": record.id,
+            "contractor_name": record.contractor_name,
+            "contractor": contractor_payload(record.contractor),
+            "invoicing": InvoicingInformationSerializer(record).data,
+        }
+        for record in contractor_records
+    ]
+
+    first_contractor_invoicing = (
+        contractors_data[0]["invoicing"] if contractors_data else None
+    )
+
+    return {
+        "project_name": project_name,
+        "scl": InvoicingInformationSerializer(scl_record).data if scl_record else None,
+        "contractor_summary": contractor_summary_from_records(contractor_records),
+        "contractors": contractors_data,
+        "contractor": first_contractor_invoicing,
+    }
 
 # Cache settings
 _CACHE_KEY_LIST = "invoicing_list"
@@ -133,6 +202,11 @@ _INV_POST_SCHEMA = openapi.Schema(
             description='Invoice type: "SCL" or "CONTRACTOR"',
             enum=["SCL", "CONTRACTOR"],
             example="SCL",
+        ),
+        "contractor_name": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            description="Required when invoice_type=CONTRACTOR. Omit for SCL.",
+            example="ABC Infra",
         ),
         "gross_billed": openapi.Schema(
             type=openapi.TYPE_NUMBER,
@@ -200,6 +274,7 @@ _INV_RESPONSE_SCHEMA = openapi.Schema(
 def _build_queryset(
     project_name: str = None,
     invoice_type: str = None,
+    contractor_name: str = None,
     search: str = None,
 ):
     """
@@ -215,6 +290,7 @@ def _build_queryset(
         "id",
         "project_name",
         "invoice_type",
+        "contractor_name",
         "gross_billed",
         "gross_certified_billed",
         "created_at",
@@ -228,6 +304,9 @@ def _build_queryset(
         qs = qs.filter(
             invoice_type=_normalize_invoice_type(invoice_type.strip())
         )
+
+    if contractor_name:
+        qs = qs.filter(contractor_name__iexact=contractor_name.strip())
 
     if search:
         qs = qs.filter(project_name__icontains=search.strip())
@@ -257,7 +336,7 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
     Invoicing Information ViewSet.
 
     Manages invoicing KPIs per project per invoice type.
-    One record per (project_name, invoice_type) pair.
+    One SCL record per project; multiple CONTRACTOR records (unique contractor_name).
 
     The invoice_type field acts as a discriminator — the same API serves
     both SCL and CONTRACTOR invoicing data.
@@ -356,16 +435,13 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
     @swagger_auto_schema(
         operation_summary="Create Invoice Record",
         operation_description=(
-            "Create a new invoicing record for a project and invoice type.\n\n"
-            "**One record per (project_name, invoice_type) pair.**\n\n"
+            "Create or update an invoicing record.\n\n"
+            "**SCL:** one record per project (`contractor_name` omitted).\n"
+            "**CONTRACTOR:** upserts by `(project_name, contractor_name)` — "
+            "each contractor maintains independent invoicing data.\n\n"
             "**Auto-calculated (do not send):**\n"
             "- `difference` = gross_billed − gross_certified_billed\n"
-            "- `certification_efficiency` = (gross_certified_billed / gross_billed) × 100\n\n"
-            "**Example — create both types for the same project:**\n"
-            "```\n"
-            'POST { "project_name": "Thane Project", "invoice_type": "SCL", ... }\n'
-            'POST { "project_name": "Thane Project", "invoice_type": "CONTRACTOR", ... }\n'
-            "```"
+            "- `certification_efficiency` = (gross_certified_billed / gross_billed) × 100"
         ),
         request_body=_INV_POST_SCHEMA,
         responses={
@@ -376,9 +452,10 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
     )
     def create(self, request, *args, **kwargs):
         """
-        Create or update an invoicing record (upsert by project_name + invoice_type).
+        Create or update an invoicing record.
 
-        If a record already exists for the given pair it is updated in-place.
+        SCL upserts by (project_name, invoice_type).
+        CONTRACTOR upserts by (project_name, invoice_type, contractor_name).
         """
         payload = _normalise_payload(request.data)
         project_name = str(payload.get("project_name", "")).strip()
@@ -386,16 +463,12 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
             request.user, project_name, RBACDomain.BILLING
         )
         invoice_type = payload.get("invoice_type", "")
+        contractor_id = payload.get("contractor_id")
+        contractor_name = payload.get("contractor_name")
 
-        existing = None
-        if project_name and invoice_type:
-            try:
-                existing = InvoicingInformation.objects.get(
-                    project_name__iexact=project_name,
-                    invoice_type=invoice_type,
-                )
-            except InvoicingInformation.DoesNotExist:
-                pass
+        existing = _find_existing_record(
+            project_name, invoice_type, contractor_id, contractor_name
+        )
 
         if existing is not None:
             serializer = InvoicingInformationSerializer(
@@ -644,11 +717,14 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
 
         project_name = instance.project_name
         invoice_type = instance.invoice_type
+        contractor_label = (
+            f" — {instance.contractor_name}" if instance.contractor_name else ""
+        )
         instance.delete()
         self._invalidate_cache()
 
         return self._success(
-            f"Invoice record for '{project_name}' [{invoice_type}] deleted successfully",
+            f"Invoice record for '{project_name}' [{invoice_type}{contractor_label}] deleted successfully",
             {},
         )
 
@@ -664,12 +740,42 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
     @swagger_auto_schema(
         operation_summary="Get All Invoice Records by Project Name",
         operation_description=(
-            "Retrieve all invoice type records for a given project.\n\n"
-            "Returns both SCL and CONTRACTOR records (if they exist).\n"
-            "Useful for dashboard invoicing comparison tables."
+            "Retrieve SCL and all contractor invoicing records for a project.\n\n"
+            "Returns `contractors` as an array (one entry per contractor), "
+            "`contractor_summary` with backend-calculated cumulative totals, "
+            "and `contractor` for backward compatibility (first contractor)."
         ),
         responses={
-            200: openapi.Response("OK", _INV_RESPONSE_SCHEMA),
+            200: openapi.Response(
+                "OK",
+                openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        "success": openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                        "message": openapi.Schema(type=openapi.TYPE_STRING),
+                        "data": openapi.Schema(
+                            type=openapi.TYPE_OBJECT,
+                            properties={
+                                "project_name": openapi.Schema(type=openapi.TYPE_STRING),
+                                "scl": openapi.Schema(type=openapi.TYPE_OBJECT, nullable=True),
+                                "contractor_summary": openapi.Schema(
+                                    type=openapi.TYPE_OBJECT,
+                                    description="Cumulative totals across all contractors",
+                                ),
+                                "contractors": openapi.Schema(
+                                    type=openapi.TYPE_ARRAY,
+                                    items=openapi.Schema(type=openapi.TYPE_OBJECT),
+                                ),
+                                "contractor": openapi.Schema(
+                                    type=openapi.TYPE_OBJECT,
+                                    nullable=True,
+                                    description="Deprecated — first contractor invoicing",
+                                ),
+                            },
+                        ),
+                    },
+                ),
+            ),
             404: "Not found",
         },
         tags=["Invoicing"],
@@ -682,29 +788,38 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
     )
     def get_by_project_name(self, request, projectName: str = None):
         """
-        Retrieve all invoicing records for a project (all types).
-        Returns both SCL and CONTRACTOR records for the same project.
+        Return SCL and all contractor invoicing records for a project.
+
+        Response includes:
+          - scl: single SCL record or null
+          - contractor_summary: cumulative totals across all contractors
+          - contractors: array with id, contractor_name, invoicing
+          - contractor: first contractor's invoicing (backward compatibility)
         """
         if not projectName or not projectName.strip():
             return self._error("projectName is required.")
 
-        enforce_project_access_by_name(request.user, projectName.strip())
+        project_name = projectName.strip()
+        enforce_project_access_by_name(request.user, project_name)
 
         qs = apply_project_rbac_to_queryset(
-            _build_queryset(project_name=projectName),
+            _build_queryset(project_name=project_name),
             request,
             "project_name",
-        )
+        ).order_by("invoice_type", "contractor_name")
 
         if not qs.exists():
             return self._error(
-                f"No invoice records found for project '{projectName}'",
+                f"No invoice records found for project '{project_name}'",
                 http_status=status.HTTP_404_NOT_FOUND,
             )
 
-        return self._paginated_success(
-            request, qs,
-            f"Invoice records for project '{projectName.strip()}' retrieved successfully",
+        actual_name = qs.first().project_name
+        payload = _build_project_payload(actual_name, qs)
+
+        return self._success(
+            f"Invoice records for project '{actual_name}' retrieved successfully",
+            payload,
         )
 
     # -------------------------------------------------------------------------
@@ -773,16 +888,24 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
     @swagger_auto_schema(
         operation_summary="Get Invoice Record by Project Name and Invoice Type",
         operation_description=(
-            "Retrieve the exact invoicing record for a specific project + type.\n\n"
+            "Retrieve the invoicing record for a specific project + type.\n\n"
+            "For CONTRACTOR type, pass `?contractor_name=` when multiple contractors exist.\n\n"
             "**Examples:**\n"
             "- `GET /api/invoicing/project/Thane Project/type/SCL/`\n"
-            "- `GET /api/invoicing/project/Thane Project/type/CONTRACTOR/`\n\n"
-            "Ideal for dashboard KPI cards that display SCL and CONTRACTOR "
-            "invoicing side-by-side."
+            "- `GET /api/invoicing/project/Thane Project/type/CONTRACTOR/?contractor_name=ABC Infra`"
         ),
+        manual_parameters=[
+            openapi.Parameter(
+                "contractor_name",
+                openapi.IN_QUERY,
+                type=openapi.TYPE_STRING,
+                required=False,
+                description="Required when multiple CONTRACTOR records exist for the project.",
+            ),
+        ],
         responses={
             200: openapi.Response("OK", _INV_RESPONSE_SCHEMA),
-            400: "Invalid invoice type",
+            400: "Invalid invoice type or missing contractor_name",
             404: "Not found",
         },
         tags=["Invoicing"],
@@ -815,20 +938,60 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
 
         enforce_project_access_by_name(request.user, projectName.strip())
 
-        try:
-            instance = InvoicingInformation.objects.get(
-                project_name__iexact=projectName.strip(),
+        project_name = projectName.strip()
+        contractor_name = (request.query_params.get("contractor_name") or "").strip()
+        contractor_id = request.query_params.get("contractor_id")
+
+        if normalized == InvoicingInformation.InvoiceType.SCL:
+            try:
+                instance = InvoicingInformation.objects.get(
+                    project_name__iexact=project_name,
+                    invoice_type=normalized,
+                )
+            except InvoicingInformation.DoesNotExist:
+                return self._error(
+                    f"No invoice record found for project '{projectName}' "
+                    f"with invoiceType '{invoiceType}'",
+                    http_status=status.HTTP_404_NOT_FOUND,
+                )
+        else:
+            contractor_qs = InvoicingInformation.objects.filter(
+                project_name__iexact=project_name,
                 invoice_type=normalized,
             )
-        except InvoicingInformation.DoesNotExist:
-            return self._error(
-                f"No invoice record found for project '{projectName}' "
-                f"with invoiceType '{invoiceType}'",
-                http_status=status.HTTP_404_NOT_FOUND,
-            )
+            if not contractor_qs.exists():
+                return self._error(
+                    f"No invoice record found for project '{projectName}' "
+                    f"with invoiceType '{invoiceType}'",
+                    http_status=status.HTTP_404_NOT_FOUND,
+                )
+
+            if contractor_id or contractor_name:
+                try:
+                    if contractor_id:
+                        instance = contractor_qs.get(contractor_id=int(contractor_id))
+                    else:
+                        instance = contractor_qs.get(
+                            contractor_name__iexact=contractor_name,
+                        )
+                except (InvoicingInformation.DoesNotExist, ValueError):
+                    label = contractor_id or contractor_name
+                    return self._error(
+                        f"No invoice record found for contractor '{label}' "
+                        f"on project '{projectName}'",
+                        http_status=status.HTTP_404_NOT_FOUND,
+                    )
+            elif contractor_qs.count() == 1:
+                instance = contractor_qs.first()
+            else:
+                return self._error(
+                    "Multiple contractors exist for this project. "
+                    "Pass ?contractor_id= or ?contractor_name= to select one.",
+                    http_status=status.HTTP_400_BAD_REQUEST,
+                )
 
         return self._success(
-            f"Invoice record for '{projectName.strip()}' [{invoiceType.strip()}] "
+            f"Invoice record for '{project_name}' [{invoiceType.strip()}] "
             "retrieved successfully",
             InvoicingInformationSerializer(instance).data,
         )

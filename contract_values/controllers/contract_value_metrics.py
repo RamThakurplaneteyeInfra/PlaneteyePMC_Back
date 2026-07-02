@@ -60,3 +60,15 @@ def metrics_from_record(record) -> dict:
         record.excess_value,
         record.saving,
     )
+
+
+def contractor_summary_from_records(records) -> dict:
+    """Aggregate contractor records into cumulative totals (not averaged percentages)."""
+    total_original = Decimal("0")
+    total_excess = Decimal("0")
+    total_saving = Decimal("0")
+    for record in records:
+        total_original += _to_decimal(record.original_contract_value)
+        total_excess += _to_decimal(record.excess_value)
+        total_saving += _to_decimal(record.saving)
+    return metrics_from_amounts(total_original, total_excess, total_saving)
