@@ -1,14 +1,6 @@
 """
-Correspondence KPI calculations — aggregated from document records at read time.
-
-Definitions:
-  received       = total inbound documents (CLIENT / CONTRACTOR party)
-  delivered      = on_time + late_deliveries (has delivered_date)
-  record         = manually entered count (stored summary)
-  pending        = max(received - delivered - record, 0)
-  on_time        = delivered_date <= deadline_date
-  late_deliveries = delivered_date > deadline_date
-  delivery_efficiency = (on_time / delivered) * 100
+Correspondence KPI calculations — record counts come from documents
+with correspondence_category=RECORD (never manual summary entry).
 """
 
 import calendar
@@ -24,6 +16,8 @@ from .correspondence_pending import compute_pending
 STATUS_PENDING = CorrespondenceDocument.STATUS_PENDING
 STATUS_DELIVERED_ON_TIME = CorrespondenceDocument.STATUS_DELIVERED_ON_TIME
 STATUS_DELIVERED_LATE = CorrespondenceDocument.STATUS_DELIVERED_LATE
+CATEGORY_DELIVERY = CorrespondenceDocument.CATEGORY_DELIVERY
+CATEGORY_RECORD = CorrespondenceDocument.CATEGORY_RECORD
 
 VIEW_MONTHLY = "monthly"
 VIEW_CUMULATIVE = "cumulative"
@@ -116,22 +110,110 @@ def metrics_from_summary_counts(
     }
 
 
-def metrics_from_queryset(queryset: QuerySet, record: int = 0) -> dict:
-    """Aggregate KPIs in a single database query."""
+def record_count_from_queryset(queryset: QuerySet) -> int:
+    """Count documents classified as RECORD."""
     if queryset is None:
-        return metrics_from_counts(0, 0, 0, record=record)
+        return 0
+    return queryset.filter(correspondence_category=CATEGORY_RECORD).count()
 
-    agg = queryset.aggregate(
-        received=Count("id"),
+
+def metrics_from_queryset(queryset: QuerySet) -> dict:
+    """
+    Aggregate KPIs from documents.
+
+    received  = all documents (DELIVERY + RECORD)
+    record    = documents with correspondence_category=RECORD
+    delivered = DELIVERY documents with on_time + late status
+    pending   = max(received - delivered - record, 0)
+    """
+    if queryset is None:
+        return metrics_from_counts(0, 0, 0, record=0)
+
+    received = queryset.count()
+    record = record_count_from_queryset(queryset)
+
+    delivery_qs = queryset.filter(correspondence_category=CATEGORY_DELIVERY)
+    agg = delivery_qs.aggregate(
         on_time=Count("id", filter=Q(delivered_status=STATUS_DELIVERED_ON_TIME)),
         late_deliveries=Count("id", filter=Q(delivered_status=STATUS_DELIVERED_LATE)),
     )
     return metrics_from_counts(
-        received=agg["received"],
+        received=received,
         on_time=agg["on_time"],
         late_deliveries=agg["late_deliveries"],
         record=record,
     )
+
+
+def _scl_category_counts(queryset: QuerySet) -> dict:
+    """Per-recipient received/delivered/record/pending from documents."""
+    delivered_q = Q(delivered_status=STATUS_DELIVERED_ON_TIME) | Q(
+        delivered_status=STATUS_DELIVERED_LATE
+    )
+    received = queryset.count()
+    record = record_count_from_queryset(queryset)
+    delivery_qs = queryset.filter(correspondence_category=CATEGORY_DELIVERY)
+    delivered = delivery_qs.filter(delivered_q).count()
+    pending = compute_pending(received, delivered, record)
+    return {
+        "received": received,
+        "delivered": delivered,
+        "record": record,
+        "pending": pending,
+    }
+
+
+def merge_scl_record_from_documents(scl_payload: dict, queryset: QuerySet) -> dict:
+    """Overlay document-computed record counts onto an SCL summary payload."""
+    empty = {"received": 0, "delivered": 0, "record": 0, "pending": 0}
+    scl_qs = queryset.filter(
+        flow_direction=CorrespondenceDocument.FLOW_OUTBOUND_SCL,
+        sender=CorrespondenceDocument.SENDER_SCL,
+    )
+
+    updated = dict(scl_payload)
+    for key, recipient in (
+        ("client", CorrespondenceDocument.RECIPIENT_CLIENT),
+        ("contractor", CorrespondenceDocument.RECIPIENT_CONTRACTOR),
+        ("other_agency", CorrespondenceDocument.RECIPIENT_OTHER_AGENCY),
+    ):
+        block = dict(updated.get(key) or empty)
+        record = record_count_from_queryset(
+            scl_qs.filter(recipient_type=recipient),
+        )
+        block["record"] = record
+        block["pending"] = compute_pending(
+            block.get("received", 0),
+            block.get("delivered", 0),
+            record,
+        )
+        updated[key] = block
+
+    totals = updated.get("totals") or dict(empty)
+    totals = {
+        "received": sum(updated[k]["received"] for k in ("client", "contractor", "other_agency")),
+        "delivered": sum(updated[k]["delivered"] for k in ("client", "contractor", "other_agency")),
+        "record": sum(updated[k]["record"] for k in ("client", "contractor", "other_agency")),
+        "pending": sum(updated[k]["pending"] for k in ("client", "contractor", "other_agency")),
+    }
+    updated["totals"] = totals
+    return updated
+
+
+def inbound_block_with_document_record(
+    received: int,
+    delivered: int,
+    document_qs: QuerySet,
+) -> dict:
+    """Build inbound category block; record always from documents."""
+    record = record_count_from_queryset(document_qs)
+    pending = compute_pending(received, delivered, record)
+    return {
+        "received": int(received or 0),
+        "delivered": int(delivered or 0),
+        "record": record,
+        "pending": pending,
+    }
 
 
 def period_date_range(year: int, month: int, view: str) -> tuple[date, date]:
@@ -212,23 +294,32 @@ def inbound_metrics(
     """
     Client or Contractor KPI block.
 
-    Prefers stored inbound summary; falls back to document aggregation with record=0.
+    Record is always computed from documents (correspondence_category=RECORD).
+    Received/delivered prefer stored summary when present; otherwise documents.
     """
     if summary is None and project_name and month and year:
         summary = get_inbound_summary(project_name, month, year, view)
 
     if summary is not None:
         if correspondence_type == CorrespondenceDocument.TYPE_CLIENT:
-            block = summary.client_metrics()
+            block = inbound_block_with_document_record(
+                summary.client_received,
+                summary.client_delivered,
+                queryset,
+            )
         else:
-            block = summary.contractor_metrics()
+            block = inbound_block_with_document_record(
+                summary.contractor_received,
+                summary.contractor_delivered,
+                queryset,
+            )
         return metrics_from_summary_counts(
             block["received"],
             block["delivered"],
             block["record"],
         )
 
-    return metrics_from_queryset(queryset, record=0)
+    return metrics_from_queryset(queryset)
 
 
 def get_scl_delivered_summary(
@@ -263,41 +354,25 @@ def scl_delivered_metrics(
         summary = get_scl_delivered_summary(project_name, month, year, view)
 
     if summary is not None:
-        return summary.to_api_dict()
+        return merge_scl_record_from_documents(summary.to_api_dict(), queryset)
 
-    delivered_q = Q(delivered_status=STATUS_DELIVERED_ON_TIME) | Q(
-        delivered_status=STATUS_DELIVERED_LATE
-    )
     scl_qs = queryset.filter(
         flow_direction=CorrespondenceDocument.FLOW_OUTBOUND_SCL,
         sender=CorrespondenceDocument.SENDER_SCL,
     )
 
-    counts = scl_qs.values("recipient_type").annotate(
-        received=Count("id"),
-        delivered=Count("id", filter=delivered_q),
-    )
-    by_recipient = {
-        row["recipient_type"]: {
-            "received": row["received"],
-            "delivered": row["delivered"],
-            "record": 0,
-            "pending": compute_pending(row["received"], row["delivered"], 0),
-        }
-        for row in counts
-    }
-
     empty = {"received": 0, "delivered": 0, "record": 0, "pending": 0}
-    client = by_recipient.get(CorrespondenceDocument.RECIPIENT_CLIENT, empty)
-    contractor = by_recipient.get(CorrespondenceDocument.RECIPIENT_CONTRACTOR, empty)
-    other_agency = by_recipient.get(
-        CorrespondenceDocument.RECIPIENT_OTHER_AGENCY,
-        empty,
+    client = _scl_category_counts(
+        scl_qs.filter(recipient_type=CorrespondenceDocument.RECIPIENT_CLIENT),
+    )
+    contractor = _scl_category_counts(
+        scl_qs.filter(recipient_type=CorrespondenceDocument.RECIPIENT_CONTRACTOR),
+    )
+    other_agency = _scl_category_counts(
+        scl_qs.filter(recipient_type=CorrespondenceDocument.RECIPIENT_OTHER_AGENCY),
     )
 
-    total_received = (
-        client["received"] + contractor["received"] + other_agency["received"]
-    )
+    total_received = client["received"] + contractor["received"] + other_agency["received"]
     total_delivered = (
         client["delivered"] + contractor["delivered"] + other_agency["delivered"]
     )
@@ -332,6 +407,7 @@ def recent_documents_payload(queryset: QuerySet, limit: int = 10) -> list[dict]:
             "month": doc.month,
             "year": doc.year,
             "correspondence_type": doc.correspondence_type,
+            "correspondence_category": doc.correspondence_category,
             "flow_direction": doc.flow_direction,
             "sender": doc.sender,
             "recipient_type": doc.recipient_type,
@@ -344,6 +420,41 @@ def recent_documents_payload(queryset: QuerySet, limit: int = 10) -> list[dict]:
         }
         for doc in docs
     ]
+
+
+def inbound_summary_to_api(
+    summary: InboundCorrespondenceSummary,
+    document_qs: QuerySet | None = None,
+) -> dict:
+    """Serialize inbound summary with record counts from documents."""
+    client_doc_qs = CorrespondenceDocument.objects.none()
+    contractor_doc_qs = CorrespondenceDocument.objects.none()
+    if document_qs is not None:
+        inbound_qs = inbound_queryset(document_qs)
+        client_doc_qs = inbound_qs.filter(
+            correspondence_type=CorrespondenceDocument.TYPE_CLIENT,
+        )
+        contractor_doc_qs = inbound_qs.filter(
+            correspondence_type=CorrespondenceDocument.TYPE_CONTRACTOR,
+        )
+
+    return {
+        "id": summary.id,
+        "project_name": summary.project_name,
+        "month": summary.month,
+        "year": summary.year,
+        "view": summary.view,
+        "client": inbound_block_with_document_record(
+            summary.client_received,
+            summary.client_delivered,
+            client_doc_qs,
+        ),
+        "contractor": inbound_block_with_document_record(
+            summary.contractor_received,
+            summary.contractor_delivered,
+            contractor_doc_qs,
+        ),
+    }
 
 
 def dashboard_response(

@@ -25,14 +25,13 @@ def _nested_value(nested: dict, category: str, metric: str):
 
 
 def extract_scl_counts(data: dict) -> dict:
-    """Read SCL received/delivered/record counts from flat, nested, or legacy payloads."""
+    """Read SCL received/delivered counts from flat, nested, or legacy payloads."""
     nested = data.get("scl_delivered_correspondence") or {}
 
     counts = {}
     for category in ("client", "contractor", "other_agency"):
         received_key = f"{category}_received"
         delivered_key = f"{category}_delivered"
-        record_key = f"{category}_record"
         legacy_delivered = data.get(category)
 
         received = data.get(received_key, _nested_value(nested, category, "received"))
@@ -40,13 +39,11 @@ def extract_scl_counts(data: dict) -> dict:
             delivered_key,
             _nested_value(nested, category, "delivered"),
         )
-        record = data.get(record_key, _nested_value(nested, category, "record"))
         if delivered is None:
             delivered = legacy_delivered
 
         counts[received_key] = _parse_count(received)
         counts[delivered_key] = _parse_count(delivered)
-        counts[record_key] = _parse_count(record)
     return counts
 
 
@@ -73,15 +70,6 @@ class SCLDeliveredCorrespondenceSerializer(serializers.Serializer):
     other_agency_delivered = serializers.IntegerField(
         min_value=0, required=False, default=0, allow_null=True
     )
-    client_record = serializers.IntegerField(
-        min_value=0, required=False, default=0, allow_null=True
-    )
-    contractor_record = serializers.IntegerField(
-        min_value=0, required=False, default=0, allow_null=True
-    )
-    other_agency_record = serializers.IntegerField(
-        min_value=0, required=False, default=0, allow_null=True
-    )
 
     def validate_project_name(self, value):
         value = (value or "").strip()
@@ -96,28 +84,22 @@ class SCLDeliveredCorrespondenceSerializer(serializers.Serializer):
         data = self.initial_data if hasattr(self, "initial_data") else attrs
         if isinstance(data, dict):
             attrs.update(extract_scl_counts(data))
-
-        errors = {}
-        for category in ("client", "contractor", "other_agency"):
-            received = attrs.get(f"{category}_received", 0)
-            record = attrs.get(f"{category}_record", 0)
-            if record > received:
-                errors[f"{category}_record"] = (
-                    f"{category}_record cannot exceed {category}_received."
-                )
-        if errors:
-            raise serializers.ValidationError(errors)
-
         return attrs
 
     def to_representation(self, instance):
         if isinstance(instance, SCLDeliveredCorrespondenceSummary):
+            from .correspondence_metrics import merge_scl_record_from_documents
+
+            document_qs = self.context.get("document_qs")
+            scl_payload = instance.to_api_dict()
+            if document_qs is not None:
+                scl_payload = merge_scl_record_from_documents(scl_payload, document_qs)
             return {
                 "id": instance.id,
                 "project_name": instance.project_name,
                 "month": instance.month,
                 "year": instance.year,
                 "view": instance.view,
-                "scl_delivered_correspondence": instance.to_api_dict(),
+                "scl_delivered_correspondence": scl_payload,
             }
         return super().to_representation(instance)

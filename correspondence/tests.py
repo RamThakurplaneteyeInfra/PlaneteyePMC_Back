@@ -132,6 +132,27 @@ class CorrespondenceDocumentModelTest(TestCase):
         doc = self._make(delivered_date=date(2026, 6, 15))
         self.assertEqual(doc.delivered_status, "DELIVERED_LATE")
 
+    def test_record_category_strips_delivered_date_on_save(self):
+        doc = CorrespondenceDocument(
+            project_name="X",
+            month=6,
+            year=2026,
+            correspondence_type=CorrespondenceDocument.TYPE_CLIENT,
+            correspondence_category=CorrespondenceDocument.CATEGORY_RECORD,
+            sr_no=1,
+            description="record",
+            received_date=date(2026, 6, 1),
+            delivered_date=date(2026, 6, 5),
+        )
+        doc.save()
+        self.assertIsNone(doc.delivered_date)
+
+    def test_record_category_stays_pending(self):
+        doc = self._make(correspondence_category=CorrespondenceDocument.CATEGORY_RECORD)
+        self.assertIsNone(doc.delivered_date)
+        self.assertEqual(doc.delivered_status, "PENDING")
+        self.assertEqual(doc.correspondence_category, CorrespondenceDocument.CATEGORY_RECORD)
+
     def test_received_date_must_match_month_year(self):
         obj = CorrespondenceDocument(
             project_name="X",
@@ -184,6 +205,88 @@ class CorrespondenceQuerysetMetricsTest(TestCase):
         self.assertEqual(m["pending"], 1)
         self.assertEqual(m["delivered"], m["on_time"] + m["late_deliveries"])
         self.assertAlmostEqual(m["delivery_efficiency"], round(2 / 3 * 100, 2))
+
+    def test_record_documents_reduce_pending(self):
+        self._create(1, date(2026, 6, 5))
+        self._create(2, date(2026, 6, 5))
+        self._create(3, date(2026, 6, 15))
+        self._create(4, None)
+        CorrespondenceDocument.objects.create(
+            project_name=self.PROJECT,
+            month=6,
+            year=2026,
+            correspondence_type=CorrespondenceDocument.TYPE_CLIENT,
+            correspondence_category=CorrespondenceDocument.CATEGORY_RECORD,
+            sr_no=5,
+            description="Record doc",
+            received_date=date(2026, 6, 2),
+        )
+
+        qs = CorrespondenceDocument.objects.filter(project_name=self.PROJECT)
+        m = metrics_from_queryset(qs)
+
+        self.assertEqual(m["received"], 5)
+        self.assertEqual(m["record"], 1)
+        self.assertEqual(m["delivered"], 3)
+        self.assertEqual(m["pending"], 1)
+
+
+class CorrespondenceCategoryAPITest(APITestCase):
+    LIST_URL = "/api/correspondence-documents/"
+    DASHBOARD_URL = "/api/correspondence-documents/dashboard/"
+
+    def setUp(self):
+        CorrespondenceDocument.objects.filter(project_name__iexact="Thane Project").delete()
+        InboundCorrespondenceSummary.objects.filter(project_name__iexact="Thane Project").delete()
+        authenticate_client(self.client)
+
+    def _create_record_doc(self, correspondence_type, sr_no):
+        return self.client.post(
+            self.LIST_URL,
+            {
+                "project_name": "Thane Project",
+                "month": 6,
+                "year": 2026,
+                "correspondence_type": correspondence_type,
+                "correspondence_category": "RECORD",
+                "description": f"Record {sr_no}",
+                "received_date": "2026-06-01",
+            },
+            format="json",
+        )
+
+    def test_create_record_document(self):
+        response = self._create_record_doc("CLIENT", 1)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["data"]["correspondence_category"], "RECORD")
+        self.assertIsNone(response.data["data"]["delivered_date"])
+
+    def test_dashboard_record_from_documents(self):
+        self.client.post(
+            self.LIST_URL,
+            {
+                "project_name": "Thane Project",
+                "month": 6,
+                "year": 2026,
+                "correspondence_type": "CLIENT",
+                "correspondence_category": "DELIVERY",
+                "description": "Pending delivery",
+                "received_date": "2026-06-01",
+            },
+            format="json",
+        )
+        self._create_record_doc("CLIENT", 2)
+        self._create_record_doc("CLIENT", 3)
+
+        response = self.client.get(
+            self.DASHBOARD_URL,
+            {"project_name": "Thane Project", "month": 6, "year": 2026},
+        )
+        client = response.data["data"]["client"]
+        self.assertEqual(client["received"], 3)
+        self.assertEqual(client["record"], 2)
+        self.assertEqual(client["delivered"], 0)
+        self.assertEqual(client["pending"], 1)
 
 
 class CorrespondenceDocumentAPITest(APITestCase):
@@ -601,15 +704,41 @@ class InboundCorrespondenceRecordTest(TestCase):
 
 
 class SCLRecordAPITest(APITestCase):
+    LIST_URL = "/api/correspondence-documents/"
     SCL_URL = "/api/correspondence-documents/scl-delivered-correspondence/"
 
     def setUp(self):
         SCLDeliveredCorrespondenceSummary.objects.filter(
             project_name__iexact="Thane Project"
         ).delete()
+        CorrespondenceDocument.objects.filter(project_name__iexact="Thane Project").delete()
         authenticate_client(self.client)
 
-    def test_scl_pending_with_record(self):
+    def _create_scl_record_doc(self, recipient_type, sr_no):
+        return CorrespondenceDocument.objects.create(
+            project_name="Thane Project",
+            month=6,
+            year=2026,
+            flow_direction=CorrespondenceDocument.FLOW_OUTBOUND_SCL,
+            sender=CorrespondenceDocument.SENDER_SCL,
+            recipient_type=recipient_type,
+            correspondence_type=recipient_type,
+            correspondence_category=CorrespondenceDocument.CATEGORY_RECORD,
+            sr_no=sr_no,
+            description=f"SCL record {sr_no}",
+            received_date=date(2026, 6, 1),
+        )
+
+    def test_scl_pending_with_record_from_documents(self):
+        self._create_scl_record_doc(CorrespondenceDocument.RECIPIENT_CLIENT, 1)
+        self._create_scl_record_doc(CorrespondenceDocument.RECIPIENT_CLIENT, 2)
+        self._create_scl_record_doc(CorrespondenceDocument.RECIPIENT_CONTRACTOR, 1)
+        self._create_scl_record_doc(CorrespondenceDocument.RECIPIENT_CONTRACTOR, 2)
+        self._create_scl_record_doc(CorrespondenceDocument.RECIPIENT_CONTRACTOR, 3)
+        self._create_scl_record_doc(CorrespondenceDocument.RECIPIENT_CONTRACTOR, 4)
+        self._create_scl_record_doc(CorrespondenceDocument.RECIPIENT_CONTRACTOR, 5)
+        self._create_scl_record_doc(CorrespondenceDocument.RECIPIENT_OTHER_AGENCY, 1)
+
         response = self.client.post(
             self.SCL_URL,
             {
@@ -618,24 +747,24 @@ class SCLRecordAPITest(APITestCase):
                 "year": 2026,
                 "client_received": 10,
                 "client_delivered": 6,
-                "client_record": 2,
                 "contractor_received": 20,
                 "contractor_delivered": 15,
-                "contractor_record": 5,
                 "other_agency_received": 8,
                 "other_agency_delivered": 4,
-                "other_agency_record": 1,
             },
             format="json",
         )
         scl = response.data["data"]["scl_delivered_correspondence"]
+        self.assertEqual(scl["client"]["record"], 2)
         self.assertEqual(scl["client"]["pending"], 2)
+        self.assertEqual(scl["contractor"]["record"], 5)
         self.assertEqual(scl["contractor"]["pending"], 0)
+        self.assertEqual(scl["other_agency"]["record"], 1)
         self.assertEqual(scl["other_agency"]["pending"], 3)
         self.assertEqual(scl["totals"]["record"], 8)
         self.assertEqual(scl["totals"]["pending"], 5)
 
-    def test_scl_record_cannot_exceed_received(self):
+    def test_manual_record_field_is_ignored(self):
         response = self.client.post(
             self.SCL_URL,
             {
@@ -648,11 +777,14 @@ class SCLRecordAPITest(APITestCase):
             },
             format="json",
         )
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("client_record", response.data["errors"])
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        scl = response.data["data"]["scl_delivered_correspondence"]
+        self.assertEqual(scl["client"]["record"], 0)
+        self.assertEqual(scl["client"]["pending"], 3)
 
 
 class InboundCorrespondenceAPITest(APITestCase):
+    LIST_URL = "/api/correspondence-documents/"
     INBOUND_URL = "/api/correspondence-documents/inbound-correspondence/"
     DASHBOARD_URL = "/api/correspondence-documents/dashboard/"
 
@@ -665,7 +797,47 @@ class InboundCorrespondenceAPITest(APITestCase):
         ).delete()
         authenticate_client(self.client)
 
-    def test_inbound_post_returns_record_and_pending(self):
+    def test_inbound_post_returns_record_from_documents(self):
+        self.client.post(
+            self.LIST_URL,
+            {
+                "project_name": "Thane Project",
+                "month": 6,
+                "year": 2026,
+                "correspondence_type": "CLIENT",
+                "correspondence_category": "RECORD",
+                "description": "Client record 1",
+                "received_date": "2026-06-01",
+            },
+            format="json",
+        )
+        self.client.post(
+            self.LIST_URL,
+            {
+                "project_name": "Thane Project",
+                "month": 6,
+                "year": 2026,
+                "correspondence_type": "CLIENT",
+                "correspondence_category": "RECORD",
+                "description": "Client record 2",
+                "received_date": "2026-06-02",
+            },
+            format="json",
+        )
+        self.client.post(
+            self.LIST_URL,
+            {
+                "project_name": "Thane Project",
+                "month": 6,
+                "year": 2026,
+                "correspondence_type": "CONTRACTOR",
+                "correspondence_category": "RECORD",
+                "description": "Contractor record",
+                "received_date": "2026-06-03",
+            },
+            format="json",
+        )
+
         response = self.client.post(
             self.INBOUND_URL,
             {
@@ -674,10 +846,8 @@ class InboundCorrespondenceAPITest(APITestCase):
                 "year": 2026,
                 "client_received": 10,
                 "client_delivered": 6,
-                "client_record": 2,
                 "contractor_received": 12,
                 "contractor_delivered": 8,
-                "contractor_record": 1,
             },
             format="json",
         )
@@ -688,7 +858,7 @@ class InboundCorrespondenceAPITest(APITestCase):
         self.assertEqual(data["contractor"]["record"], 1)
         self.assertEqual(data["contractor"]["pending"], 3)
 
-    def test_dashboard_uses_inbound_summary(self):
+    def test_dashboard_uses_inbound_summary_with_document_record(self):
         self.client.post(
             self.INBOUND_URL,
             {
@@ -697,21 +867,41 @@ class InboundCorrespondenceAPITest(APITestCase):
                 "year": 2026,
                 "client_received": 20,
                 "client_delivered": 15,
-                "client_record": 4,
                 "contractor_received": 18,
                 "contractor_delivered": 12,
-                "contractor_record": 2,
             },
             format="json",
+        )
+        for idx in range(4):
+            CorrespondenceDocument.objects.create(
+                project_name="Thane Project",
+                month=6,
+                year=2026,
+                correspondence_type=CorrespondenceDocument.TYPE_CLIENT,
+                correspondence_category=CorrespondenceDocument.CATEGORY_RECORD,
+                sr_no=idx + 1,
+                description=f"Record {idx}",
+                received_date=date(2026, 6, idx + 1),
+            )
+        CorrespondenceDocument.objects.create(
+            project_name="Thane Project",
+            month=6,
+            year=2026,
+            correspondence_type=CorrespondenceDocument.TYPE_CONTRACTOR,
+            correspondence_category=CorrespondenceDocument.CATEGORY_RECORD,
+            sr_no=1,
+            description="Contractor record",
+            received_date=date(2026, 6, 5),
         )
         CorrespondenceDocument.objects.create(
             project_name="Thane Project",
             month=6,
             year=2026,
-            correspondence_type=CorrespondenceDocument.TYPE_CLIENT,
-            sr_no=1,
-            description="Doc",
-            received_date=date(2026, 6, 1),
+            correspondence_type=CorrespondenceDocument.TYPE_CONTRACTOR,
+            correspondence_category=CorrespondenceDocument.CATEGORY_RECORD,
+            sr_no=2,
+            description="Contractor record 2",
+            received_date=date(2026, 6, 6),
         )
         response = self.client.get(
             self.DASHBOARD_URL,
@@ -723,6 +913,7 @@ class InboundCorrespondenceAPITest(APITestCase):
         self.assertEqual(client["record"], 4)
         self.assertEqual(client["pending"], 1)
         contractor = response.data["data"]["contractor"]
+        self.assertEqual(contractor["record"], 2)
         self.assertEqual(contractor["pending"], 4)
 
     def test_inbound_nested_payload(self):
@@ -732,13 +923,13 @@ class InboundCorrespondenceAPITest(APITestCase):
                 "project_name": "Thane Project",
                 "month": 6,
                 "year": 2026,
-                "client": {"received": 12, "delivered": 4, "record": 1},
-                "contractor": {"received": 8, "delivered": 5, "record": 0},
+                "client": {"received": 12, "delivered": 4},
+                "contractor": {"received": 8, "delivered": 5},
             },
             format="json",
         )
         data = response.data["data"]
-        self.assertEqual(data["client"]["pending"], 7)
+        self.assertEqual(data["client"]["pending"], 8)
         self.assertEqual(data["contractor"]["pending"], 3)
 
 
@@ -769,15 +960,41 @@ class InboundCorrespondenceRecordTest(TestCase):
 
 
 class SCLRecordAPITest(APITestCase):
+    LIST_URL = "/api/correspondence-documents/"
     SCL_URL = "/api/correspondence-documents/scl-delivered-correspondence/"
 
     def setUp(self):
         SCLDeliveredCorrespondenceSummary.objects.filter(
             project_name__iexact="Thane Project"
         ).delete()
+        CorrespondenceDocument.objects.filter(project_name__iexact="Thane Project").delete()
         authenticate_client(self.client)
 
-    def test_scl_pending_with_record(self):
+    def _create_scl_record_doc(self, recipient_type, sr_no):
+        return CorrespondenceDocument.objects.create(
+            project_name="Thane Project",
+            month=6,
+            year=2026,
+            flow_direction=CorrespondenceDocument.FLOW_OUTBOUND_SCL,
+            sender=CorrespondenceDocument.SENDER_SCL,
+            recipient_type=recipient_type,
+            correspondence_type=recipient_type,
+            correspondence_category=CorrespondenceDocument.CATEGORY_RECORD,
+            sr_no=sr_no,
+            description=f"SCL record {sr_no}",
+            received_date=date(2026, 6, 1),
+        )
+
+    def test_scl_pending_with_record_from_documents(self):
+        self._create_scl_record_doc(CorrespondenceDocument.RECIPIENT_CLIENT, 1)
+        self._create_scl_record_doc(CorrespondenceDocument.RECIPIENT_CLIENT, 2)
+        self._create_scl_record_doc(CorrespondenceDocument.RECIPIENT_CONTRACTOR, 1)
+        self._create_scl_record_doc(CorrespondenceDocument.RECIPIENT_CONTRACTOR, 2)
+        self._create_scl_record_doc(CorrespondenceDocument.RECIPIENT_CONTRACTOR, 3)
+        self._create_scl_record_doc(CorrespondenceDocument.RECIPIENT_CONTRACTOR, 4)
+        self._create_scl_record_doc(CorrespondenceDocument.RECIPIENT_CONTRACTOR, 5)
+        self._create_scl_record_doc(CorrespondenceDocument.RECIPIENT_OTHER_AGENCY, 1)
+
         response = self.client.post(
             self.SCL_URL,
             {
@@ -786,24 +1003,24 @@ class SCLRecordAPITest(APITestCase):
                 "year": 2026,
                 "client_received": 10,
                 "client_delivered": 6,
-                "client_record": 2,
                 "contractor_received": 20,
                 "contractor_delivered": 15,
-                "contractor_record": 5,
                 "other_agency_received": 8,
                 "other_agency_delivered": 4,
-                "other_agency_record": 1,
             },
             format="json",
         )
         scl = response.data["data"]["scl_delivered_correspondence"]
+        self.assertEqual(scl["client"]["record"], 2)
         self.assertEqual(scl["client"]["pending"], 2)
+        self.assertEqual(scl["contractor"]["record"], 5)
         self.assertEqual(scl["contractor"]["pending"], 0)
+        self.assertEqual(scl["other_agency"]["record"], 1)
         self.assertEqual(scl["other_agency"]["pending"], 3)
         self.assertEqual(scl["totals"]["record"], 8)
         self.assertEqual(scl["totals"]["pending"], 5)
 
-    def test_scl_record_cannot_exceed_received(self):
+    def test_manual_record_field_is_ignored(self):
         response = self.client.post(
             self.SCL_URL,
             {
@@ -816,11 +1033,14 @@ class SCLRecordAPITest(APITestCase):
             },
             format="json",
         )
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("client_record", response.data["errors"])
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        scl = response.data["data"]["scl_delivered_correspondence"]
+        self.assertEqual(scl["client"]["record"], 0)
+        self.assertEqual(scl["client"]["pending"], 3)
 
 
 class InboundCorrespondenceAPITest(APITestCase):
+    LIST_URL = "/api/correspondence-documents/"
     INBOUND_URL = "/api/correspondence-documents/inbound-correspondence/"
     DASHBOARD_URL = "/api/correspondence-documents/dashboard/"
 
@@ -833,7 +1053,47 @@ class InboundCorrespondenceAPITest(APITestCase):
         ).delete()
         authenticate_client(self.client)
 
-    def test_inbound_post_returns_record_and_pending(self):
+    def test_inbound_post_returns_record_from_documents(self):
+        self.client.post(
+            self.LIST_URL,
+            {
+                "project_name": "Thane Project",
+                "month": 6,
+                "year": 2026,
+                "correspondence_type": "CLIENT",
+                "correspondence_category": "RECORD",
+                "description": "Client record 1",
+                "received_date": "2026-06-01",
+            },
+            format="json",
+        )
+        self.client.post(
+            self.LIST_URL,
+            {
+                "project_name": "Thane Project",
+                "month": 6,
+                "year": 2026,
+                "correspondence_type": "CLIENT",
+                "correspondence_category": "RECORD",
+                "description": "Client record 2",
+                "received_date": "2026-06-02",
+            },
+            format="json",
+        )
+        self.client.post(
+            self.LIST_URL,
+            {
+                "project_name": "Thane Project",
+                "month": 6,
+                "year": 2026,
+                "correspondence_type": "CONTRACTOR",
+                "correspondence_category": "RECORD",
+                "description": "Contractor record",
+                "received_date": "2026-06-03",
+            },
+            format="json",
+        )
+
         response = self.client.post(
             self.INBOUND_URL,
             {
@@ -842,10 +1102,8 @@ class InboundCorrespondenceAPITest(APITestCase):
                 "year": 2026,
                 "client_received": 10,
                 "client_delivered": 6,
-                "client_record": 2,
                 "contractor_received": 12,
                 "contractor_delivered": 8,
-                "contractor_record": 1,
             },
             format="json",
         )
@@ -856,7 +1114,7 @@ class InboundCorrespondenceAPITest(APITestCase):
         self.assertEqual(data["contractor"]["record"], 1)
         self.assertEqual(data["contractor"]["pending"], 3)
 
-    def test_dashboard_uses_inbound_summary(self):
+    def test_dashboard_uses_inbound_summary_with_document_record(self):
         self.client.post(
             self.INBOUND_URL,
             {
@@ -865,21 +1123,41 @@ class InboundCorrespondenceAPITest(APITestCase):
                 "year": 2026,
                 "client_received": 20,
                 "client_delivered": 15,
-                "client_record": 4,
                 "contractor_received": 18,
                 "contractor_delivered": 12,
-                "contractor_record": 2,
             },
             format="json",
+        )
+        for idx in range(4):
+            CorrespondenceDocument.objects.create(
+                project_name="Thane Project",
+                month=6,
+                year=2026,
+                correspondence_type=CorrespondenceDocument.TYPE_CLIENT,
+                correspondence_category=CorrespondenceDocument.CATEGORY_RECORD,
+                sr_no=idx + 1,
+                description=f"Record {idx}",
+                received_date=date(2026, 6, idx + 1),
+            )
+        CorrespondenceDocument.objects.create(
+            project_name="Thane Project",
+            month=6,
+            year=2026,
+            correspondence_type=CorrespondenceDocument.TYPE_CONTRACTOR,
+            correspondence_category=CorrespondenceDocument.CATEGORY_RECORD,
+            sr_no=1,
+            description="Contractor record",
+            received_date=date(2026, 6, 5),
         )
         CorrespondenceDocument.objects.create(
             project_name="Thane Project",
             month=6,
             year=2026,
-            correspondence_type=CorrespondenceDocument.TYPE_CLIENT,
-            sr_no=1,
-            description="Doc",
-            received_date=date(2026, 6, 1),
+            correspondence_type=CorrespondenceDocument.TYPE_CONTRACTOR,
+            correspondence_category=CorrespondenceDocument.CATEGORY_RECORD,
+            sr_no=2,
+            description="Contractor record 2",
+            received_date=date(2026, 6, 6),
         )
         response = self.client.get(
             self.DASHBOARD_URL,
@@ -891,6 +1169,7 @@ class InboundCorrespondenceAPITest(APITestCase):
         self.assertEqual(client["record"], 4)
         self.assertEqual(client["pending"], 1)
         contractor = response.data["data"]["contractor"]
+        self.assertEqual(contractor["record"], 2)
         self.assertEqual(contractor["pending"], 4)
 
     def test_inbound_nested_payload(self):
@@ -900,11 +1179,11 @@ class InboundCorrespondenceAPITest(APITestCase):
                 "project_name": "Thane Project",
                 "month": 6,
                 "year": 2026,
-                "client": {"received": 12, "delivered": 4, "record": 1},
-                "contractor": {"received": 8, "delivered": 5, "record": 0},
+                "client": {"received": 12, "delivered": 4},
+                "contractor": {"received": 8, "delivered": 5},
             },
             format="json",
         )
         data = response.data["data"]
-        self.assertEqual(data["client"]["pending"], 7)
+        self.assertEqual(data["client"]["pending"], 8)
         self.assertEqual(data["contractor"]["pending"], 3)

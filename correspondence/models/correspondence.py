@@ -65,6 +65,14 @@ class CorrespondenceDocument(models.Model):
         (STATUS_DELIVERED_LATE, "DELIVERED_LATE"),
     ]
 
+    CATEGORY_DELIVERY = "DELIVERY"
+    CATEGORY_RECORD = "RECORD"
+
+    CORRESPONDENCE_CATEGORY_CHOICES = [
+        (CATEGORY_DELIVERY, "Delivery"),
+        (CATEGORY_RECORD, "Record"),
+    ]
+
     project_name = models.CharField(
         max_length=255,
         db_index=True,
@@ -129,6 +137,13 @@ class CorrespondenceDocument(models.Model):
         blank=True,
         db_index=True,
         help_text="Recipient for SCL outbound documents",
+    )
+    correspondence_category = models.CharField(
+        max_length=20,
+        choices=CORRESPONDENCE_CATEGORY_CHOICES,
+        default=CATEGORY_DELIVERY,
+        db_index=True,
+        help_text="DELIVERY = normal delivery tracking; RECORD = filed as record",
     )
 
     created_at = models.DateTimeField(
@@ -223,8 +238,19 @@ class CorrespondenceDocument(models.Model):
                 "delivered_date cannot be before received_date."
             )
 
+        category = self.correspondence_category or self.CATEGORY_DELIVERY
+        if category == self.CATEGORY_RECORD and self.delivered_date:
+            errors["delivered_date"] = (
+                "delivered_date is not allowed when correspondence_category is RECORD."
+            )
+
         if errors:
             raise ValidationError(errors)
+
+    def _apply_category_defaults(self):
+        """Record documents are filed — not part of delivery tracking."""
+        if self.correspondence_category == self.CATEGORY_RECORD:
+            self.delivered_date = None
 
     def _apply_deadline_and_delivered_status(self):
         if self.received_date:
@@ -253,7 +279,10 @@ class CorrespondenceDocument(models.Model):
     def save(self, *args, **kwargs):
         if self.project_name:
             self.project_name = self.project_name.strip()
+        if not self.correspondence_category:
+            self.correspondence_category = self.CATEGORY_DELIVERY
         self._apply_sender_defaults()
+        self._apply_category_defaults()
         self._apply_deadline_and_delivered_status()
         self.full_clean()
         super().save(*args, **kwargs)

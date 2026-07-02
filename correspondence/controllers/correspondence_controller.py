@@ -567,6 +567,15 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
             "raw": source,
         }, None
 
+    def _period_documents(self, project_name: str, month: int, year: int, view: str):
+        return filter_by_period(
+            CorrespondenceDocument.objects.all(),
+            project_name=project_name,
+            month=month,
+            year=year,
+            view=view,
+        )
+
     def _save_scl_delivered(self, request, *, allow_create: bool = True):
         data = request.data
         project_name = (data.get("project_name") or data.get("projectName") or "").strip()
@@ -598,13 +607,13 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
             "project_name": validated["project_name"],
             "client_received": validated["client_received"],
             "client_delivered": validated["client_delivered"],
-            "client_record": validated["client_record"],
+            "client_record": 0,
             "contractor_received": validated["contractor_received"],
             "contractor_delivered": validated["contractor_delivered"],
-            "contractor_record": validated["contractor_record"],
+            "contractor_record": 0,
             "other_agency_received": validated["other_agency_received"],
             "other_agency_delivered": validated["other_agency_delivered"],
-            "other_agency_record": validated["other_agency_record"],
+            "other_agency_record": 0,
             # Keep legacy delivered-only columns in sync for old admin/data uses.
             "client": validated["client_delivered"],
             "contractor": validated["contractor_delivered"],
@@ -627,7 +636,16 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
             created = True
 
         self._invalidate_list_cache()
-        payload = SCLDeliveredCorrespondenceSerializer(instance).data
+        period_qs = self._period_documents(
+            instance.project_name,
+            instance.month,
+            instance.year,
+            instance.view,
+        )
+        payload = SCLDeliveredCorrespondenceSerializer(
+            instance,
+            context={"document_qs": period_qs},
+        ).data
         message = (
             "SCL delivered correspondence created successfully"
             if created
@@ -701,7 +719,17 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
                 )
             return self._success(
                 "SCL delivered correspondence retrieved successfully",
-                SCLDeliveredCorrespondenceSerializer(summary).data,
+                SCLDeliveredCorrespondenceSerializer(
+                    summary,
+                    context={
+                        "document_qs": self._period_documents(
+                            parsed["project_name"],
+                            parsed["month"],
+                            parsed["year"],
+                            parsed["view"],
+                        )
+                    },
+                ).data,
             )
 
         allow_create = request.method == "POST"
@@ -738,10 +766,10 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
             "project_name": validated["project_name"],
             "client_received": validated["client_received"],
             "client_delivered": validated["client_delivered"],
-            "client_record": validated["client_record"],
+            "client_record": 0,
             "contractor_received": validated["contractor_received"],
             "contractor_delivered": validated["contractor_delivered"],
-            "contractor_record": validated["contractor_record"],
+            "contractor_record": 0,
         }
 
         if existing:
@@ -758,6 +786,12 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
             )
 
         self._invalidate_list_cache()
+        period_qs = self._period_documents(
+            instance.project_name,
+            instance.month,
+            instance.year,
+            instance.view,
+        )
         http_status = status.HTTP_200_OK if existing else status.HTTP_201_CREATED
         message = (
             "Inbound correspondence updated successfully"
@@ -766,7 +800,10 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
         )
         return self._success(
             message,
-            InboundCorrespondenceSerializer(instance).data,
+            InboundCorrespondenceSerializer(
+                instance,
+                context={"document_qs": period_qs},
+            ).data,
             http_status=http_status,
         )
 
@@ -800,7 +837,17 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
                 )
             return self._success(
                 "Inbound correspondence retrieved successfully",
-                InboundCorrespondenceSerializer(summary).data,
+                InboundCorrespondenceSerializer(
+                    summary,
+                    context={
+                        "document_qs": self._period_documents(
+                            parsed["project_name"],
+                            parsed["month"],
+                            parsed["year"],
+                            parsed["view"],
+                        )
+                    },
+                ).data,
             )
 
         allow_create = request.method == "POST"

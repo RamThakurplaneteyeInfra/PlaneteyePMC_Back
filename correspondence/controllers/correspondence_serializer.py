@@ -61,6 +61,7 @@ class CorrespondenceDocumentSerializer(serializers.ModelSerializer):
             "month",
             "year",
             "correspondence_type",
+            "correspondence_category",
             "party_type",
             "flow_direction",
             "sender",
@@ -114,6 +115,13 @@ class CorrespondenceDocumentSerializer(serializers.ModelSerializer):
             data["correspondence_type"] = _normalize_correspondence_type(
                 str(data["correspondence_type"])
             )
+        if "correspondence_category" in data:
+            category = str(data["correspondence_category"]).strip().upper()
+            if category in (
+                CorrespondenceDocument.CATEGORY_DELIVERY,
+                CorrespondenceDocument.CATEGORY_RECORD,
+            ):
+                data["correspondence_category"] = category
 
         # Legacy request field names
         if "delivery_date" in data and "delivered_date" not in data:
@@ -153,6 +161,20 @@ class CorrespondenceDocumentSerializer(serializers.ModelSerializer):
             )
         return value
 
+    def validate_correspondence_category(self, value: str) -> str:
+        if not value:
+            return CorrespondenceDocument.CATEGORY_DELIVERY
+        normalized = value.strip().upper()
+        allowed = {
+            CorrespondenceDocument.CATEGORY_DELIVERY,
+            CorrespondenceDocument.CATEGORY_RECORD,
+        }
+        if normalized not in allowed:
+            raise serializers.ValidationError(
+                "correspondence_category must be DELIVERY or RECORD."
+            )
+        return normalized
+
     def validate(self, attrs):
         flow = attrs.get(
             "flow_direction",
@@ -174,6 +196,15 @@ class CorrespondenceDocumentSerializer(serializers.ModelSerializer):
                 )
             attrs["correspondence_type"] = recipient
             attrs["sender"] = CorrespondenceDocument.SENDER_SCL
+
+        category = attrs.get(
+            "correspondence_category",
+            getattr(self.instance, "correspondence_category", None)
+            if self.instance
+            else CorrespondenceDocument.CATEGORY_DELIVERY,
+        )
+        if category == CorrespondenceDocument.CATEGORY_RECORD:
+            attrs["delivered_date"] = None
 
         return self._validate_dates(attrs)
 

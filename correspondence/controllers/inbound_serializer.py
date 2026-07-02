@@ -15,15 +15,8 @@ def _parse_count(value) -> int:
         raise serializers.ValidationError("Count must be a non-negative integer.")
 
 
-def _nested_value(nested: dict, category: str, metric: str):
-    value = nested.get(category)
-    if isinstance(value, dict):
-        return value.get(metric)
-    return None
-
-
 def extract_inbound_counts(data: dict) -> dict:
-    """Read client/contractor counts from flat or nested payloads."""
+    """Read client/contractor received/delivered counts from flat or nested payloads."""
     client_nested = data.get("client") if isinstance(data.get("client"), dict) else {}
     contractor_nested = data.get("contractor") if isinstance(data.get("contractor"), dict) else {}
 
@@ -32,7 +25,7 @@ def extract_inbound_counts(data: dict) -> dict:
         ("client", client_nested),
         ("contractor", contractor_nested),
     ):
-        for metric in ("received", "delivered", "record"):
+        for metric in ("received", "delivered"):
             flat_key = f"{category}_{metric}"
             value = data.get(flat_key)
             if value is None and nested:
@@ -53,16 +46,10 @@ class InboundCorrespondenceSerializer(serializers.Serializer):
     client_delivered = serializers.IntegerField(
         min_value=0, required=False, default=0, allow_null=True
     )
-    client_record = serializers.IntegerField(
-        min_value=0, required=False, default=0, allow_null=True
-    )
     contractor_received = serializers.IntegerField(
         min_value=0, required=False, default=0, allow_null=True
     )
     contractor_delivered = serializers.IntegerField(
-        min_value=0, required=False, default=0, allow_null=True
-    )
-    contractor_record = serializers.IntegerField(
         min_value=0, required=False, default=0, allow_null=True
     )
 
@@ -79,29 +66,12 @@ class InboundCorrespondenceSerializer(serializers.Serializer):
         data = self.initial_data if hasattr(self, "initial_data") else attrs
         if isinstance(data, dict):
             attrs.update(extract_inbound_counts(data))
-
-        errors = {}
-        for category in ("client", "contractor"):
-            received = attrs.get(f"{category}_received", 0)
-            record = attrs.get(f"{category}_record", 0)
-            if record > received:
-                errors[f"{category}_record"] = (
-                    f"{category}_record cannot exceed {category}_received."
-                )
-        if errors:
-            raise serializers.ValidationError(errors)
-
         return attrs
 
     def to_representation(self, instance):
         if isinstance(instance, InboundCorrespondenceSummary):
-            return {
-                "id": instance.id,
-                "project_name": instance.project_name,
-                "month": instance.month,
-                "year": instance.year,
-                "view": instance.view,
-                "client": instance.client_metrics(),
-                "contractor": instance.contractor_metrics(),
-            }
+            from .correspondence_metrics import inbound_summary_to_api
+
+            document_qs = self.context.get("document_qs")
+            return inbound_summary_to_api(instance, document_qs)
         return super().to_representation(instance)

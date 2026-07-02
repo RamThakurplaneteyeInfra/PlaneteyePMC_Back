@@ -64,6 +64,7 @@ class CorrespondenceDocumentAdmin(admin.ModelAdmin):
         "month",
         "year",
         "correspondence_type",
+        "correspondence_category",
         "sr_no",
         "received_date",
         "deadline_date",
@@ -73,6 +74,7 @@ class CorrespondenceDocumentAdmin(admin.ModelAdmin):
     ]
     list_filter = [
         "correspondence_type",
+        "correspondence_category",
         "delivered_status",
         "received_date",
         "created_at",
