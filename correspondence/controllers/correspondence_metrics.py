@@ -163,13 +163,24 @@ def _scl_category_counts(queryset: QuerySet) -> dict:
     }
 
 
-def merge_scl_record_from_documents(scl_payload: dict, queryset: QuerySet) -> dict:
-    """Overlay document-computed record counts onto an SCL summary payload."""
-    empty = {"received": 0, "delivered": 0, "record": 0, "pending": 0}
-    scl_qs = queryset.filter(
+def _scl_outbound_qs(queryset: QuerySet) -> QuerySet:
+    return queryset.filter(
         flow_direction=CorrespondenceDocument.FLOW_OUTBOUND_SCL,
         sender=CorrespondenceDocument.SENDER_SCL,
     )
+
+
+def _scl_recipient_qs(scl_qs: QuerySet, recipient: str) -> QuerySet:
+    return scl_qs.filter(
+        Q(recipient_type=recipient)
+        | Q(correspondence_type=recipient, recipient_type__isnull=True)
+    )
+
+
+def merge_scl_record_from_documents(scl_payload: dict, queryset: QuerySet) -> dict:
+    """Overlay document-computed record counts onto an SCL summary payload."""
+    empty = {"received": 0, "delivered": 0, "record": 0, "pending": 0}
+    scl_qs = _scl_outbound_qs(queryset)
 
     updated = dict(scl_payload)
     for key, recipient in (
@@ -178,9 +189,7 @@ def merge_scl_record_from_documents(scl_payload: dict, queryset: QuerySet) -> di
         ("other_agency", CorrespondenceDocument.RECIPIENT_OTHER_AGENCY),
     ):
         block = dict(updated.get(key) or empty)
-        record = record_count_from_queryset(
-            scl_qs.filter(recipient_type=recipient),
-        )
+        record = record_count_from_queryset(_scl_recipient_qs(scl_qs, recipient))
         block["record"] = record
         block["pending"] = compute_pending(
             block.get("received", 0),
@@ -353,47 +362,56 @@ def scl_delivered_metrics(
     if summary is None and project_name and month and year:
         summary = get_scl_delivered_summary(project_name, month, year, view)
 
+    scl_qs = _scl_outbound_qs(queryset)
+
+    empty = {"received": 0, "delivered": 0, "record": 0, "pending": 0}
+
+    if scl_qs.exists():
+        client = _scl_category_counts(
+            _scl_recipient_qs(scl_qs, CorrespondenceDocument.RECIPIENT_CLIENT),
+        )
+        contractor = _scl_category_counts(
+            _scl_recipient_qs(scl_qs, CorrespondenceDocument.RECIPIENT_CONTRACTOR),
+        )
+        other_agency = _scl_category_counts(
+            _scl_recipient_qs(scl_qs, CorrespondenceDocument.RECIPIENT_OTHER_AGENCY),
+        )
+
+        total_received = client["received"] + contractor["received"] + other_agency["received"]
+        total_delivered = (
+            client["delivered"] + contractor["delivered"] + other_agency["delivered"]
+        )
+        total_record = client["record"] + contractor["record"] + other_agency["record"]
+        total_pending = client["pending"] + contractor["pending"] + other_agency["pending"]
+
+        return {
+            "client": client,
+            "contractor": contractor,
+            "other_agency": other_agency,
+            "totals": {
+                "received": total_received,
+                "delivered": total_delivered,
+                "record": total_record,
+                "pending": total_pending,
+            },
+            "client_delivered": client["delivered"],
+            "contractor_delivered": contractor["delivered"],
+            "other_agency_delivered": other_agency["delivered"],
+            "total": total_delivered,
+        }
+
     if summary is not None:
         return merge_scl_record_from_documents(summary.to_api_dict(), queryset)
 
-    scl_qs = queryset.filter(
-        flow_direction=CorrespondenceDocument.FLOW_OUTBOUND_SCL,
-        sender=CorrespondenceDocument.SENDER_SCL,
-    )
-
-    empty = {"received": 0, "delivered": 0, "record": 0, "pending": 0}
-    client = _scl_category_counts(
-        scl_qs.filter(recipient_type=CorrespondenceDocument.RECIPIENT_CLIENT),
-    )
-    contractor = _scl_category_counts(
-        scl_qs.filter(recipient_type=CorrespondenceDocument.RECIPIENT_CONTRACTOR),
-    )
-    other_agency = _scl_category_counts(
-        scl_qs.filter(recipient_type=CorrespondenceDocument.RECIPIENT_OTHER_AGENCY),
-    )
-
-    total_received = client["received"] + contractor["received"] + other_agency["received"]
-    total_delivered = (
-        client["delivered"] + contractor["delivered"] + other_agency["delivered"]
-    )
-    total_record = client["record"] + contractor["record"] + other_agency["record"]
-    total_pending = client["pending"] + contractor["pending"] + other_agency["pending"]
-
     return {
-        "client": client,
-        "contractor": contractor,
-        "other_agency": other_agency,
-        "totals": {
-            "received": total_received,
-            "delivered": total_delivered,
-            "record": total_record,
-            "pending": total_pending,
-        },
-        # Legacy aliases for delivered-only consumers.
-        "client_delivered": client["delivered"],
-        "contractor_delivered": contractor["delivered"],
-        "other_agency_delivered": other_agency["delivered"],
-        "total": total_delivered,
+        "client": dict(empty),
+        "contractor": dict(empty),
+        "other_agency": dict(empty),
+        "totals": dict(empty),
+        "client_delivered": 0,
+        "contractor_delivered": 0,
+        "other_agency_delivered": 0,
+        "total": 0,
     }
 
 

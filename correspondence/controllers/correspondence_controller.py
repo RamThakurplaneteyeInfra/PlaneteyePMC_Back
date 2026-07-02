@@ -27,8 +27,10 @@ from .correspondence_metrics import (
     VIEW_MONTHLY,
     dashboard_response,
     filter_by_period,
+    get_inbound_summary,
     get_scl_delivered_summary,
     normalize_view,
+    scl_delivered_metrics,
 )
 from .correspondence_serializer import CorrespondenceDocumentSerializer
 from .inbound_serializer import InboundCorrespondenceSerializer
@@ -517,12 +519,19 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
         )
 
         if not period_qs.exists():
-            view_label = "year-to-date" if view == VIEW_CUMULATIVE else "month"
-            return self._error(
-                f"No correspondence documents for '{project_name}' "
-                f"in the selected {view_label} ({month_int:02d}/{year_int}).",
-                http_status=status.HTTP_404_NOT_FOUND,
+            has_summary = (
+                get_inbound_summary(project_name, month_int, year_int, view)
+                is not None
+                or get_scl_delivered_summary(project_name, month_int, year_int, view)
+                is not None
             )
+            if not has_summary:
+                view_label = "year-to-date" if view == VIEW_CUMULATIVE else "month"
+                return self._error(
+                    f"No correspondence documents for '{project_name}' "
+                    f"in the selected {view_label} ({month_int:02d}/{year_int}).",
+                    http_status=status.HTTP_404_NOT_FOUND,
+                )
 
         data = dashboard_response(
             project_name,
@@ -677,7 +686,25 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
                 parsed["year"],
                 parsed["view"],
             )
-            if summary is None:
+            period_qs = self._period_documents(
+                parsed["project_name"],
+                parsed["month"],
+                parsed["year"],
+                parsed["view"],
+            )
+            scl_payload = scl_delivered_metrics(
+                period_qs,
+                summary=summary,
+                project_name=parsed["project_name"],
+                month=parsed["month"],
+                year=parsed["year"],
+                view=parsed["view"],
+            )
+
+            if summary is None and not any(
+                scl_payload[key]["received"] or scl_payload[key]["record"]
+                for key in ("client", "contractor", "other_agency")
+            ):
                 return self._success(
                     "No SCL delivered correspondence record found",
                     {
@@ -685,38 +712,22 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
                         "month": parsed["month"],
                         "year": parsed["year"],
                         "view": parsed["view"],
-                        "scl_delivered_correspondence": {
-                            "client": {
-                                "received": 0,
-                                "delivered": 0,
-                                "record": 0,
-                                "pending": 0,
-                            },
-                            "contractor": {
-                                "received": 0,
-                                "delivered": 0,
-                                "record": 0,
-                                "pending": 0,
-                            },
-                            "other_agency": {
-                                "received": 0,
-                                "delivered": 0,
-                                "record": 0,
-                                "pending": 0,
-                            },
-                            "totals": {
-                                "received": 0,
-                                "delivered": 0,
-                                "record": 0,
-                                "pending": 0,
-                            },
-                            "client_delivered": 0,
-                            "contractor_delivered": 0,
-                            "other_agency_delivered": 0,
-                            "total": 0,
-                        },
+                        "scl_delivered_correspondence": scl_payload,
                     },
                 )
+
+            if summary is None:
+                return self._success(
+                    "SCL delivered correspondence retrieved successfully",
+                    {
+                        "project_name": parsed["project_name"],
+                        "month": parsed["month"],
+                        "year": parsed["year"],
+                        "view": parsed["view"],
+                        "scl_delivered_correspondence": scl_payload,
+                    },
+                )
+
             return self._success(
                 "SCL delivered correspondence retrieved successfully",
                 SCLDeliveredCorrespondenceSerializer(

@@ -115,6 +115,12 @@ class CorrespondenceDocumentSerializer(serializers.ModelSerializer):
             data["correspondence_type"] = _normalize_correspondence_type(
                 str(data["correspondence_type"])
             )
+        if "recipient_type" in data and data["recipient_type"]:
+            data["recipient_type"] = _normalize_correspondence_type(
+                str(data["recipient_type"])
+            )
+            if "correspondence_type" not in data or not data.get("correspondence_type"):
+                data["correspondence_type"] = data["recipient_type"]
         if "correspondence_category" in data:
             category = str(data["correspondence_category"]).strip().upper()
             if category in (
@@ -184,6 +190,14 @@ class CorrespondenceDocumentSerializer(serializers.ModelSerializer):
             "recipient_type",
             self.instance.recipient_type if self.instance else None,
         )
+
+        if (
+            flow == CorrespondenceDocument.FLOW_INBOUND
+            and recipient
+            and not (self.instance and self.instance.flow_direction == CorrespondenceDocument.FLOW_INBOUND)
+        ):
+            attrs["flow_direction"] = CorrespondenceDocument.FLOW_OUTBOUND_SCL
+            flow = CorrespondenceDocument.FLOW_OUTBOUND_SCL
 
         if flow == CorrespondenceDocument.FLOW_OUTBOUND_SCL:
             if not recipient:

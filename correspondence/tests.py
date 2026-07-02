@@ -289,6 +289,74 @@ class CorrespondenceCategoryAPITest(APITestCase):
         self.assertEqual(client["pending"], 1)
 
 
+class SCLRecordDocumentAPITest(APITestCase):
+    LIST_URL = "/api/correspondence-documents/"
+    SCL_URL = "/api/correspondence-documents/scl-delivered-correspondence/"
+    DASHBOARD_URL = "/api/correspondence-documents/dashboard/"
+
+    def setUp(self):
+        CorrespondenceDocument.objects.filter(project_name__iexact="Thane Project").delete()
+        SCLDeliveredCorrespondenceSummary.objects.filter(
+            project_name__iexact="Thane Project"
+        ).delete()
+        authenticate_client(self.client)
+
+    def test_scl_record_document_via_recipient_type_only(self):
+        """recipient_type without flow_direction should create OUTBOUND SCL doc."""
+        response = self.client.post(
+            self.LIST_URL,
+            {
+                "project_name": "Thane Project",
+                "month": 6,
+                "year": 2026,
+                "recipient_type": "CLIENT",
+                "correspondence_category": "RECORD",
+                "description": "SCL record filing",
+                "received_date": "2026-06-01",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["data"]["flow_direction"], "OUTBOUND_SCL")
+        self.assertEqual(response.data["data"]["correspondence_category"], "RECORD")
+
+        dashboard = self.client.get(
+            self.DASHBOARD_URL,
+            {"project_name": "Thane Project", "month": 6, "year": 2026},
+        )
+        scl = dashboard.data["data"]["scl_delivered_correspondence"]
+        self.assertEqual(scl["client"]["record"], 1)
+        self.assertEqual(scl["client"]["received"], 1)
+        self.assertEqual(scl["totals"]["record"], 1)
+
+    def test_scl_get_reflects_record_documents_without_summary(self):
+        CorrespondenceDocument.objects.create(
+            project_name="Thane Project",
+            month=6,
+            year=2026,
+            flow_direction=CorrespondenceDocument.FLOW_OUTBOUND_SCL,
+            sender=CorrespondenceDocument.SENDER_SCL,
+            recipient_type=CorrespondenceDocument.RECIPIENT_CLIENT,
+            correspondence_type=CorrespondenceDocument.TYPE_CLIENT,
+            correspondence_category=CorrespondenceDocument.CATEGORY_RECORD,
+            sr_no=1,
+            description="Record only",
+            received_date=date(2026, 6, 1),
+        )
+        response = self.client.get(
+            self.SCL_URL,
+            {
+                "project_name": "Thane Project",
+                "month": 6,
+                "year": 2026,
+            },
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        scl = response.data["data"]["scl_delivered_correspondence"]
+        self.assertEqual(scl["client"]["record"], 1)
+        self.assertEqual(scl["totals"]["record"], 1)
+
+
 class CorrespondenceDocumentAPITest(APITestCase):
     LIST_URL = "/api/correspondence-documents/"
     DASHBOARD_URL = "/api/correspondence-documents/dashboard/"
