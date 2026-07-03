@@ -81,32 +81,91 @@ class UserProfile(models.Model):
 
 class Notification(models.Model):
     """
-    Model for logging sent notifications/emails
+    In-app alerts and notification log entries.
     """
+
+    NOTIFICATION_TYPE_PROJECT_ASSIGNED = "project_assigned"
+    NOTIFICATION_TYPE_DPR_SUBMITTED = "dpr_submitted"
+    NOTIFICATION_TYPE_DPR_APPROVED = "dpr_approved"
+    NOTIFICATION_TYPE_DPR_REJECTED = "dpr_rejected"
+    NOTIFICATION_TYPE_BILLING_UPDATE = "BILLING_UPDATE"
+
     NOTIFICATION_TYPES = [
-        ('project_assigned', 'Project Assigned'),
-        ('dpr_submitted', 'DPR Submitted'),
-        ('dpr_approved', 'DPR Approved'),
-        ('dpr_rejected', 'DPR Rejected'),
+        (NOTIFICATION_TYPE_PROJECT_ASSIGNED, "Project Assigned"),
+        (NOTIFICATION_TYPE_DPR_SUBMITTED, "DPR Submitted"),
+        (NOTIFICATION_TYPE_DPR_APPROVED, "DPR Approved"),
+        (NOTIFICATION_TYPE_DPR_REJECTED, "DPR Rejected"),
+        (NOTIFICATION_TYPE_BILLING_UPDATE, "Billing Data Updated"),
+    ]
+
+    ACTION_CREATE = "CREATE"
+    ACTION_UPDATE = "UPDATE"
+    ACTION_DELETE = "DELETE"
+
+    ACTION_TYPES = [
+        (ACTION_CREATE, "Create"),
+        (ACTION_UPDATE, "Update"),
+        (ACTION_DELETE, "Delete"),
     ]
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
-        related_name='notifications',
-        help_text="User who received the notification"
+        related_name="notifications",
+        help_text="User who received the notification",
+    )
+    sender = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="sent_notifications",
+        help_text="User who triggered the notification",
+    )
+    project = models.ForeignKey(
+        "projects.Project",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="notifications",
+        help_text="Project related to the notification",
+    )
+    module_name = models.CharField(
+        max_length=120,
+        blank=True,
+        default="",
+        help_text="Financial module that was updated",
+    )
+    action_type = models.CharField(
+        max_length=10,
+        choices=ACTION_TYPES,
+        blank=True,
+        default="",
+        help_text="Create, update, or delete action",
+    )
+    title = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Short notification title",
     )
     message = models.TextField(help_text="Notification message content")
     notification_type = models.CharField(
-        max_length=20,
+        max_length=30,
         choices=NOTIFICATION_TYPES,
-        help_text="Type of notification"
+        help_text="Type of notification",
     )
-    is_read = models.BooleanField(default=False, help_text="Whether the user has read the notification")
-    created_at = models.DateTimeField(auto_now_add=True, help_text="When the notification was created")
+    is_read = models.BooleanField(
+        default=False,
+        help_text="Whether the user has read the notification",
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        help_text="When the notification was created",
+    )
 
     class Meta:
-        ordering = ['-created_at']
+        ordering = ["-created_at"]
         verbose_name = "Notification"
         verbose_name_plural = "Notifications"
 

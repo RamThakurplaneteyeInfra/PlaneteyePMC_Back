@@ -39,7 +39,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from accounts.permissions import IsAuthenticatedProjectRBAC
-from accounts.rbac import RBACDomain
+from accounts.rbac import RBACDomain, resolve_project
 from accounts.rbac_checks import (
     apply_project_rbac_to_queryset,
     enforce_instance_write,
@@ -48,6 +48,12 @@ from accounts.rbac_checks import (
 )
 
 from contractors.resolvers import contractor_payload, resolve_contractor_for_write
+from services.billing_update_notifications import (
+    BillingAction,
+    BillingModule,
+    schedule_billing_update_notification,
+    schedule_billing_update_notification_for_instance,
+)
 
 from ..models.contract_value import ContractValue
 from .contract_value_metrics import contractor_summary_from_records
@@ -495,6 +501,14 @@ class ContractValueViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        action = BillingAction.UPDATE if existing else BillingAction.CREATE
+        schedule_billing_update_notification(
+            request.user,
+            resolve_project(project_name),
+            BillingModule.CONTRACT_VALUES,
+            action,
+        )
+
         self._invalidate_cache()
 
         http_status = status.HTTP_200_OK if existing else status.HTTP_201_CREATED
@@ -682,6 +696,13 @@ class ContractValueViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        schedule_billing_update_notification_for_instance(
+            request.user,
+            updated,
+            BillingModule.CONTRACT_VALUES,
+            BillingAction.UPDATE,
+        )
+
         self._invalidate_cache()
 
         return self._success(
@@ -722,6 +743,12 @@ class ContractValueViewSet(viewsets.ModelViewSet):
         contract_type = instance.contract_type
         contractor_label = (
             f" — {instance.contractor_name}" if instance.contractor_name else ""
+        )
+        schedule_billing_update_notification(
+            request.user,
+            resolve_project(project_name),
+            BillingModule.CONTRACT_VALUES,
+            BillingAction.DELETE,
         )
         instance.delete()
         self._invalidate_cache()

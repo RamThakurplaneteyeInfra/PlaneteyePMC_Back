@@ -22,6 +22,12 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from ..models.correspondence import CorrespondenceDocument
+from services.billing_update_notifications import (
+    BillingAction,
+    BillingModule,
+    schedule_billing_update_notification,
+    schedule_billing_update_notification_for_instance,
+)
 from .correspondence_metrics import (
     VIEW_CUMULATIVE,
     VIEW_MONTHLY,
@@ -304,6 +310,13 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        schedule_billing_update_notification_for_instance(
+            request.user,
+            instance,
+            BillingModule.CORRESPONDENCE,
+            BillingAction.CREATE,
+        )
+
         self._invalidate_list_cache()
         return self._success(
             "Correspondence document created successfully",
@@ -421,6 +434,13 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        schedule_billing_update_notification_for_instance(
+            request.user,
+            updated,
+            BillingModule.CORRESPONDENCE,
+            BillingAction.UPDATE,
+        )
+
         self._invalidate_list_cache()
         return self._success(
             "Correspondence document updated successfully",
@@ -440,6 +460,12 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
         label = (
             f"{instance.project_name} [{instance.correspondence_type}] "
             f"{instance.month:02d}/{instance.year} #{instance.sr_no}"
+        )
+        schedule_billing_update_notification_for_instance(
+            request.user,
+            instance,
+            BillingModule.CORRESPONDENCE,
+            BillingAction.DELETE,
         )
         instance.delete()
         self._invalidate_list_cache()

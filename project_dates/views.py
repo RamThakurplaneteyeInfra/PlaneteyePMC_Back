@@ -43,6 +43,12 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from projects.models import Project
+from services.billing_update_notifications import (
+    BillingAction,
+    BillingModule,
+    schedule_billing_update_notification,
+    schedule_billing_update_notification_for_instance,
+)
 
 from .bg_serializers import (
     BGStatusCreateSerializer,
@@ -305,6 +311,13 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        schedule_billing_update_notification_for_instance(
+            request.user,
+            instance,
+            BillingModule.PROJECT_DATES,
+            BillingAction.CREATE,
+        )
+
         return self._success(
             "Project dates saved successfully",
             ProjectDatesSerializer(instance).data,
@@ -419,6 +432,13 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        schedule_billing_update_notification_for_instance(
+            request.user,
+            updated,
+            BillingModule.PROJECT_DATES,
+            BillingAction.UPDATE,
+        )
+
         return self._success(
             "Project dates updated successfully",
             ProjectDatesSerializer(updated).data,
@@ -448,6 +468,12 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
         if instance.contractor_name:
             label += f" — {instance.contractor_name}"
         label += "]"
+        schedule_billing_update_notification(
+            request.user,
+            instance.project,
+            BillingModule.PROJECT_DATES,
+            BillingAction.DELETE,
+        )
         instance.delete()
         return self._success(f"Project dates record for '{label}' deleted successfully", {})
 
@@ -553,6 +579,13 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        schedule_billing_update_notification(
+            request.user,
+            project,
+            BillingModule.BG_STATUS,
+            BillingAction.CREATE,
+        )
+
         return self._success(
             f"BG Status entry for '{project.name}' created successfully",
             BGStatusSerializer(instance).data,
@@ -595,6 +628,12 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
 
         if request.method == "DELETE":
             label = instance.bg_name
+            schedule_billing_update_notification(
+                request.user,
+                instance.project_date.project,
+                BillingModule.BG_STATUS,
+                BillingAction.DELETE,
+            )
             instance.delete()
             return self._success(f"BG Status entry '{label}' deleted successfully", {})
 
@@ -615,6 +654,13 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
                 errors=str(exc),
                 http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+        schedule_billing_update_notification(
+            request.user,
+            updated.project_date.project,
+            BillingModule.BG_STATUS,
+            BillingAction.UPDATE,
+        )
 
         return self._success(
             "BG Status entry updated successfully",

@@ -15,13 +15,18 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from accounts.permissions import IsAuthenticatedProjectRBAC
-from accounts.rbac import RBACDomain
+from accounts.rbac import RBACDomain, resolve_project
 from accounts.rbac_checks import (
     apply_project_rbac_to_queryset,
     enforce_project_write_by_name,
 )
 
 from .models import BudgetCostPerformance
+from services.billing_update_notifications import (
+    BillingAction,
+    BillingModule,
+    schedule_billing_update_notification,
+)
 from .serializers import (
     BudgetCostPerformanceInputSerializer,
     BudgetCostPerformanceSerializer,
@@ -184,6 +189,13 @@ class BudgetCostPerformanceViewSet(viewsets.ModelViewSet):
             request.user, project_name, RBACDomain.FINANCIAL
         )
         instance = input_serializer.save()
+
+        schedule_billing_update_notification(
+            request.user,
+            resolve_project(project_name),
+            BillingModule.BUDGET_PERFORMANCE,
+            BillingAction.CREATE,
+        )
 
         # Cache invalidation: clear relevant cache keys
         project_name = input_serializer.validated_data.get('project_name', '').strip()

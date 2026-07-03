@@ -28,7 +28,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from accounts.permissions import IsAuthenticatedProjectRBAC
-from accounts.rbac import RBACDomain, extract_project_name_from_data
+from accounts.rbac import RBACDomain, extract_project_name_from_data, resolve_project
 from accounts.rbac_checks import (
     apply_project_rbac_to_queryset,
     enforce_instance_write,
@@ -37,6 +37,12 @@ from accounts.rbac_checks import (
 )
 
 from ..models.planned_earned_value import PlannedEarnedValue
+from services.billing_update_notifications import (
+    BillingAction,
+    BillingModule,
+    schedule_billing_update_notification,
+    schedule_billing_update_notification_for_instance,
+)
 from .planned_earned_value_serializer import PlannedEarnedValueSerializer
 
 logger = logging.getLogger(__name__)
@@ -489,6 +495,18 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
 
         self._invalidate_list_cache()
 
+        action = (
+            BillingAction.CREATE
+            if created_flags and any(created_flags)
+            else BillingAction.UPDATE
+        )
+        schedule_billing_update_notification(
+            request.user,
+            resolve_project(project_name),
+            BillingModule.PLANNED_EARNED_VALUE,
+            action,
+        )
+
         response_data = _build_month_dashboard_response(project_name, month, year)
         http_status = (
             status.HTTP_201_CREATED
@@ -582,6 +600,14 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
                 errors=str(exc),
                 http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+        action = BillingAction.UPDATE if existing else BillingAction.CREATE
+        schedule_billing_update_notification_for_instance(
+            request.user,
+            instance,
+            BillingModule.PLANNED_EARNED_VALUE,
+            action,
+        )
 
         self._invalidate_list_cache()
 
@@ -719,6 +745,13 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        schedule_billing_update_notification_for_instance(
+            request.user,
+            updated,
+            BillingModule.PLANNED_EARNED_VALUE,
+            BillingAction.UPDATE,
+        )
+
         self._invalidate_list_cache()
         return self._success(
             "Planned vs Earned Value record updated successfully",
@@ -746,6 +779,12 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
         enforce_instance_write(request.user, instance, RBACDomain.FINANCIAL)
 
         label = f"{instance.projectName} [{instance.value_type}] {instance.month:02d}/{instance.year}"
+        schedule_billing_update_notification_for_instance(
+            request.user,
+            instance,
+            BillingModule.PLANNED_EARNED_VALUE,
+            BillingAction.DELETE,
+        )
         instance.delete()
         self._invalidate_list_cache()
         return self._success(

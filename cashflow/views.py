@@ -13,7 +13,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from accounts.permissions import IsAuthenticatedProjectRBAC
-from accounts.rbac import RBACDomain
+from accounts.rbac import RBACDomain, resolve_project
 from accounts.rbac_checks import (
     apply_project_rbac_to_queryset,
     enforce_project_access_by_name,
@@ -21,6 +21,11 @@ from accounts.rbac_checks import (
 )
 
 from .models import CashFlow
+from services.billing_update_notifications import (
+    BillingAction,
+    BillingModule,
+    schedule_billing_update_notification,
+)
 from .serializers import (
     CashFlowInputSerializer,
     CashFlowSerializer,
@@ -157,6 +162,13 @@ class CashFlowViewSet(viewsets.ModelViewSet):
             request.user, project_name, RBACDomain.BILLING
         )
         instance = ser.save()
+
+        schedule_billing_update_notification(
+            request.user,
+            resolve_project(project_name),
+            BillingModule.CASH_FLOW,
+            BillingAction.CREATE,
+        )
 
         # Cache invalidation: clear relevant cache keys after creation
         project_name = ser.validated_data.get('project_name', '').strip()

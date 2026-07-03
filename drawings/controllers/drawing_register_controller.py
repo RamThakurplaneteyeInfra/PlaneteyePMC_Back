@@ -7,6 +7,11 @@ from rest_framework import status, viewsets
 from rest_framework.response import Response
 
 from ..models.drawing_register import DrawingRegisterItem
+from services.billing_update_notifications import (
+    BillingAction,
+    BillingModule,
+    schedule_billing_update_notification_for_instance,
+)
 from .drawing_controller import DrawingPagination, _flatten_errors
 from .drawing_export import client_report_csv_response
 from .drawing_report import (
@@ -182,6 +187,12 @@ class DrawingRegisterViewSet(viewsets.ModelViewSet):
             return self._error(
                 "Validation failed", errors=_flatten_errors(exc.message_dict)
             )
+        schedule_billing_update_notification_for_instance(
+            request.user,
+            instance,
+            BillingModule.DRAWING_SUMMARY,
+            BillingAction.CREATE,
+        )
         return self._success(
             "Drawing register row created successfully",
             self.get_serializer(instance).data,
@@ -209,6 +220,12 @@ class DrawingRegisterViewSet(viewsets.ModelViewSet):
             return self._error(
                 "Validation failed", errors=_flatten_errors(exc.message_dict)
             )
+        schedule_billing_update_notification_for_instance(
+            request.user,
+            updated,
+            BillingModule.DRAWING_SUMMARY,
+            BillingAction.UPDATE,
+        )
         return self._success(
             "Drawing register row updated successfully",
             self.get_serializer(updated).data,
@@ -224,5 +241,11 @@ class DrawingRegisterViewSet(viewsets.ModelViewSet):
         except DrawingRegisterItem.DoesNotExist:
             return self._error("Drawing register row not found", http_status=status.HTTP_404_NOT_FOUND)
         label = f"{instance.drawing_name} (#{instance.sr_no})"
+        schedule_billing_update_notification_for_instance(
+            request.user,
+            instance,
+            BillingModule.DRAWING_SUMMARY,
+            BillingAction.DELETE,
+        )
         instance.delete()
         return self._success(f"Drawing register row '{label}' deleted successfully", {})

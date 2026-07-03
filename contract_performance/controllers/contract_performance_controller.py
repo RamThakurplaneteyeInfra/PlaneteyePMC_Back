@@ -43,7 +43,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from accounts.permissions import IsAuthenticatedProjectRBAC
-from accounts.rbac import RBACDomain
+from accounts.rbac import RBACDomain, resolve_project
 from accounts.rbac_checks import (
     apply_project_rbac_to_queryset,
     enforce_instance_write,
@@ -52,6 +52,12 @@ from accounts.rbac_checks import (
 )
 
 from ..models.contract_performance import ContractPerformance
+from services.billing_update_notifications import (
+    BillingAction,
+    BillingModule,
+    schedule_billing_update_notification,
+    schedule_billing_update_notification_for_instance,
+)
 from .contract_performance_serializer import ContractPerformanceSerializer
 
 logger = logging.getLogger(__name__)
@@ -356,6 +362,14 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        action = BillingAction.UPDATE if existing else BillingAction.CREATE
+        schedule_billing_update_notification(
+            request.user,
+            resolve_project(project_name),
+            BillingModule.CONTRACT_PERFORMANCE,
+            action,
+        )
+
         self._invalidate_cache()
 
         http_status = status.HTTP_200_OK if existing else status.HTTP_201_CREATED
@@ -536,6 +550,13 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        schedule_billing_update_notification_for_instance(
+            request.user,
+            updated,
+            BillingModule.CONTRACT_PERFORMANCE,
+            BillingAction.UPDATE,
+        )
+
         self._invalidate_cache()
 
         return self._success(
@@ -573,6 +594,12 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
         enforce_instance_write(request.user, instance, RBACDomain.FINANCIAL)
 
         project_name = instance.projectName
+        schedule_billing_update_notification_for_instance(
+            request.user,
+            instance,
+            BillingModule.CONTRACT_PERFORMANCE,
+            BillingAction.DELETE,
+        )
         instance.delete()
         self._invalidate_cache()
 

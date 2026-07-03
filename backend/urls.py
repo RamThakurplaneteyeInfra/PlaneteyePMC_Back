@@ -71,6 +71,8 @@ urlpatterns = [
     path('api/auth/', include('accounts.auth_urls')),
     # User profile (legacy path — JWT required)
     path('api/accounts/', include('accounts.urls')),
+    # In-app alerts
+    path('api/alerts/', include('accounts.alerts_urls')),
     # Projects and Sites API
     path('api/projects-data/', include('projects.urls')),
     # Project Initialization API (PMC Head)
