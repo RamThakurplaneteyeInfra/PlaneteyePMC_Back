@@ -8,6 +8,7 @@ from .rbac import (
     normalize_project_name,
     project_from_instance,
     resolve_project,
+    resolve_project_for_instance,
     user_can_manage_contractors,
     user_can_read_domain,
     user_can_write_domain,
@@ -48,6 +49,11 @@ class IsAuthenticatedProjectRBAC(BasePermission):
         if pk and hasattr(view, "queryset") and view.queryset is not None:
             try:
                 obj = view.queryset.model.objects.filter(pk=pk).first()
+                user = getattr(request, "user", None)
+                if user and user.is_authenticated:
+                    project = resolve_project_for_instance(obj, user=user)
+                    if project is not None:
+                        return project
                 return project_from_instance(obj)
             except Exception:
                 pass

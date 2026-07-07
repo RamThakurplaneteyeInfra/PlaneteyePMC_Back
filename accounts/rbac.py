@@ -173,7 +173,20 @@ def resolve_project(name: str | None) -> Project | None:
     project = Project.objects.filter(name=name).first()
     if project:
         return project
-    return Project.objects.filter(name__iexact=name).first()
+    matches = list(Project.objects.filter(name__iexact=name).order_by("id"))
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0]
+    for project in matches:
+        if (
+            project.team_lead_id
+            or project.billing_site_engineer_id
+            or project.pmc_head_id
+            or project.site_engineer_id
+        ):
+            return project
+    return matches[0]
 
 
 def user_has_project_access(user, project: Project | None) -> bool:
@@ -185,10 +198,18 @@ def user_has_project_access(user, project: Project | None) -> bool:
 
 
 def user_has_project_name_access(user, project_name: str | None) -> bool:
-    project = resolve_project(project_name)
-    if project is None:
+    if not project_name:
         return is_admin_user(user)
-    return user_has_project_access(user, project)
+    project = resolve_project(project_name)
+    if project is not None and user_has_project_access(user, project):
+        return True
+    if is_admin_user(user):
+        return True
+    return (
+        get_user_assigned_projects_qs(user)
+        .filter(name__iexact=normalize_project_name(project_name))
+        .exists()
+    )
 
 
 def user_can_read_domain(user, project: Project | None, domain: str) -> bool:
@@ -237,19 +258,52 @@ def filter_queryset_by_project_access(
     return queryset.filter(q)
 
 
-def project_from_instance(obj) -> Project | None:
-    """Resolve Project from a model instance."""
+def resolve_project_for_instance(obj, user=None) -> Project | None:
+    """
+    Resolve the project linked to a model instance.
+
+  When *user* is provided, prefer the project_name match the user can access
+    (handles legacy rows whose FK points at a duplicate Project row).
+    """
     if obj is None:
         return None
     if isinstance(obj, Project):
         return obj
-    if hasattr(obj, "project_id") and obj.project_id:
-        return obj.project
+
+    name_project = None
+    if getattr(obj, "project_name", None):
+        name_project = resolve_project(obj.project_name)
+
+    fk_project = None
+    if getattr(obj, "project_id", None):
+        fk_project = obj.project
+
+    if user is not None:
+        if name_project and user_has_project_access(user, name_project):
+            return name_project
+        if fk_project and user_has_project_access(user, fk_project):
+            return fk_project
+        raw_name = getattr(obj, "project_name", None)
+        if raw_name:
+            assigned = (
+                get_user_assigned_projects_qs(user)
+                .filter(name__iexact=normalize_project_name(raw_name))
+                .first()
+            )
+            if assigned is not None:
+                return assigned
+        return None
+
+    return name_project or fk_project
+
+
+def project_from_instance(obj) -> Project | None:
+    """Resolve Project from a model instance."""
     if hasattr(obj, "projectName"):
-        return resolve_project(getattr(obj, "projectName", None))
-    if hasattr(obj, "project_name"):
-        return resolve_project(getattr(obj, "project_name", None))
-    return None
+        resolved = resolve_project(getattr(obj, "projectName", None))
+        if resolved:
+            return resolved
+    return resolve_project_for_instance(obj)
 
 
 def extract_project_name_from_data(data) -> str | None:

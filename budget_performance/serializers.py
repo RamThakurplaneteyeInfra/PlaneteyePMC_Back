@@ -19,6 +19,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from rest_framework import serializers
 
+from accounts.rbac import normalize_project_name, resolve_project
 from .models import BudgetCostPerformance
 from projects.models import Project
 
@@ -96,8 +97,10 @@ class BudgetCostPerformanceInputSerializer(serializers.Serializer):
     def validate_project_name(self, value: str) -> str:
         if not value or not value.strip():
             raise serializers.ValidationError("project_name cannot be empty.")
-        # Normalize project name: strip whitespace and title case for consistency
-        return value.strip().title()
+        resolved = resolve_project(value.strip())
+        if resolved is not None:
+            return resolved.name
+        return normalize_project_name(value)
 
     def validate_budget_at_completion(self, value: Decimal) -> Decimal:
         if value <= 0:
@@ -161,10 +164,13 @@ class BudgetCostPerformanceInputSerializer(serializers.Serializer):
         return cpi, eac, etg, vac, cv
 
     def _persist_record(self, project_name, bac, bcwp, acwp, instance=None):
-        project, _ = Project.objects.get_or_create(
-            name=project_name,
-            defaults={"budget": Decimal("0.00")},
-        )
+        project = resolve_project(project_name)
+        if project is None:
+            project = Project.objects.create(
+                name=normalize_project_name(project_name),
+                budget=Decimal("0.00"),
+            )
+        project_name = project.name
         cpi, eac, etg, vac, cv = self._compute_evm_metrics(bac, bcwp, acwp)
         values = {
             "project_name": project_name,

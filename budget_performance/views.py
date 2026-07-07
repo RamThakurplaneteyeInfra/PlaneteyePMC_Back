@@ -15,7 +15,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from accounts.permissions import IsAuthenticatedProjectRBAC
-from accounts.rbac import RBACDomain, resolve_project
+from accounts.rbac import RBACDomain, resolve_project, resolve_project_for_instance
 from accounts.rbac_checks import (
     apply_project_rbac_to_queryset,
     enforce_instance_write,
@@ -85,6 +85,24 @@ class BudgetCostPerformanceViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticatedProjectRBAC]
     rbac_domain = RBACDomain.FINANCIAL
     http_method_names = ["get", "post", "put", "patch", "head", "options"]
+
+    def get_rbac_project(self):
+        pk = self.kwargs.get("pk")
+        if pk:
+            obj = (
+                BudgetCostPerformance.objects.filter(pk=pk)
+                .only("id", "project_id", "project_name")
+                .select_related("project")
+                .first()
+            )
+            if obj is not None:
+                return resolve_project_for_instance(obj, user=self.request.user)
+
+        project_name = (
+            self.request.query_params.get("project_name")
+            or (self.request.data.get("project_name") if hasattr(self.request.data, "get") else None)
+        )
+        return resolve_project(project_name)
 
     def get_queryset(self):
         """

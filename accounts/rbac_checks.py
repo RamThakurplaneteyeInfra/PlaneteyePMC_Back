@@ -4,8 +4,11 @@ from rest_framework.exceptions import PermissionDenied
 
 from .rbac import (
     RBACDomain,
+    normalize_project_name,
     project_from_instance,
     resolve_project,
+    resolve_project_for_instance,
+    get_user_assigned_projects_qs,
     user_can_manage_contractors,
     user_can_write_domain,
     user_has_project_access,
@@ -61,13 +64,28 @@ def enforce_project_write_by_name(
     domain: str = RBACDomain.GENERAL,
 ) -> None:
     project = resolve_project(project_name)
-    if project is None:
-        raise PermissionDenied("Project not found or access denied.")
+    if project is None or not user_has_project_access(user, project):
+        assigned = None
+        if project_name:
+            assigned = (
+                get_user_assigned_projects_qs(user)
+                .filter(name__iexact=normalize_project_name(project_name))
+                .first()
+            )
+        if assigned is None:
+            raise PermissionDenied("Project not found or access denied.")
+        project = assigned
     enforce_project_write(user, project, domain)
 
 
 def enforce_instance_write(user, instance, domain: str = RBACDomain.GENERAL) -> None:
-    project = project_from_instance(instance)
+    project = resolve_project_for_instance(instance, user=user)
+    if project is None:
+        project_name = getattr(instance, "project_name", None)
+        if project_name:
+            enforce_project_write_by_name(user, project_name, domain)
+            return
+        raise PermissionDenied("You do not have access to this project.")
     enforce_project_write(user, project, domain)
 
 
