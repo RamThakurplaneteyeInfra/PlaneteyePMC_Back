@@ -73,6 +73,23 @@ class ContractorMasterAPITest(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["data"]["contact_person"], "Rahul Sharma")
 
+    def test_team_leader_via_assigned_users_can_create_contractor(self):
+        """Team Leaders assigned via assigned_users (not team_lead FK) can add contractors."""
+        self.project.team_lead = None
+        self.project.save()
+        self.project.assigned_users.add(self.user)
+
+        response = self.client.post(
+            self.LIST_URL.format(project="Thane%20Project"),
+            {"contractor_name": "Assigned TL Contractor"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(
+            response.data["data"]["contractor_name"],
+            "Assigned TL Contractor",
+        )
+
     def test_delete_marks_inactive(self):
         create = self.client.post(
             self.LIST_URL.format(project="Thane%20Project"),

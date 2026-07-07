@@ -65,6 +65,33 @@ class JWTAuthTestCase(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
         self.assertIn("Invalid username/password", str(response.data))
 
+    def test_login_with_email_field(self):
+        response = self.client.post(
+            TOKEN_URL,
+            {"email": "jwt@test.com", "password": "testpass123"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["user"]["username"], "jwt_test_user")
+
+    def test_login_with_email_as_username_value(self):
+        response = self.client.post(
+            TOKEN_URL,
+            {"username": "jwt@test.com", "password": "testpass123"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["user"]["email"], "jwt@test.com")
+
+    def test_login_case_insensitive_username(self):
+        response = self.client.post(
+            TOKEN_URL,
+            {"username": "JWT_TEST_USER", "password": "testpass123"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["user"]["username"], "jwt_test_user")
+
     def test_accounts_me_with_bearer(self):
         login = self._login()
         self.client.credentials(

@@ -97,6 +97,7 @@ def get_user_assigned_projects_qs(user) -> QuerySet:
         | Q(qaqc_site_engineer=user)
         | Q(coordinators=user)
         | Q(pmc_head=user)
+        | Q(assigned_users=user)
     ).distinct()
 
 

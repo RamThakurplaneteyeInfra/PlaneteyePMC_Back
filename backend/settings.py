@@ -304,6 +304,21 @@ REST_FRAMEWORK = {
     'EXCEPTION_HANDLER': 'core.exception_handlers.pmc_exception_handler',
 }
 
+if "test" in sys.argv:
+    REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = {
+        "anon": "10000/min",
+        "user": "10000/min",
+        "login": "10000/min",
+        "refresh": "10000/min",
+        "create": "10000/min",
+        "update": "10000/min",
+        "delete": "10000/min",
+        "export": "10000/min",
+        "upload": "10000/min",
+        "alerts": "10000/min",
+        "search": "10000/min",
+    }
+
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),

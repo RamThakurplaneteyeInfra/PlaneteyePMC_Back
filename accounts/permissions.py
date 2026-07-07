@@ -31,9 +31,12 @@ class IsAuthenticatedProjectRBAC(BasePermission):
         if hasattr(view, "get_rbac_project"):
             return view.get_rbac_project()
 
+        kwargs = getattr(view, "kwargs", {}) or {}
         project_name = (
             request.query_params.get("project_name")
             or request.query_params.get("projectName")
+            or kwargs.get("project_name")
+            or kwargs.get("projectName")
             or extract_project_name_from_data(request.data)
         )
         if project_name:

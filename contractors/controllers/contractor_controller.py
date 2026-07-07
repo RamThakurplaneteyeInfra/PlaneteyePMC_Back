@@ -80,6 +80,23 @@ class ContractorViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticatedProjectRBAC]
     rbac_domain = RBACDomain.GENERAL
 
+    def get_rbac_project(self):
+        """Resolve project from nested /projects/{project_name}/contractors/ routes."""
+        project_name = self.kwargs.get("project_name")
+        if project_name:
+            return _get_project_by_name(project_name)
+
+        pk = self.kwargs.get("pk")
+        if pk:
+            contractor = (
+                Contractor.objects.select_related("project")
+                .filter(pk=pk)
+                .first()
+            )
+            if contractor is not None:
+                return contractor.project
+        return None
+
     @swagger_auto_schema(
         method="get",
         operation_summary="List contractors for a project",
