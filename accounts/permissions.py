@@ -5,8 +5,10 @@ from rest_framework.permissions import BasePermission, SAFE_METHODS
 from .rbac import (
     RBACDomain,
     extract_project_name_from_data,
+    normalize_project_name,
     project_from_instance,
     resolve_project,
+    user_can_manage_contractors,
     user_can_read_domain,
     user_can_write_domain,
     user_has_project_access,
@@ -40,7 +42,7 @@ class IsAuthenticatedProjectRBAC(BasePermission):
             or extract_project_name_from_data(request.data)
         )
         if project_name:
-            return resolve_project(project_name)
+            return resolve_project(normalize_project_name(project_name))
 
         pk = view.kwargs.get("pk") or view.kwargs.get("project_pk")
         if pk and hasattr(view, "queryset") and view.queryset is not None:
@@ -77,6 +79,35 @@ class IsAuthenticatedProjectRBAC(BasePermission):
             return user_can_read_domain(request.user, project, domain)
 
         return user_can_write_domain(request.user, project, domain)
+
+
+class CanManageProjectContractors(BasePermission):
+    """
+    Contractor Master permissions.
+
+    - GET: any role with project read access
+    - POST/PATCH/DELETE: Team Leader (or admin) on the target project
+    """
+
+    message = "You do not have permission to manage contractors for this project."
+
+    def _resolve_project(self, view):
+        if hasattr(view, "get_rbac_project"):
+            return view.get_rbac_project()
+        return None
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+
+        project = self._resolve_project(view)
+        if project is None:
+            return True
+
+        if request.method in SAFE_METHODS:
+            return user_can_read_domain(request.user, project, RBACDomain.GENERAL)
+
+        return user_can_manage_contractors(request.user, project)
 
 
 class IsTeamLeaderOrAdmin(BasePermission):

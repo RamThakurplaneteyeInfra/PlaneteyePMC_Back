@@ -90,6 +90,25 @@ class ContractorMasterAPITest(APITestCase):
             "Assigned TL Contractor",
         )
 
+    def test_mapped_team_leader_can_create_contractor_for_khb_project(self):
+        """pmc_tl1 can add contractors to KHB even without team_lead FK set."""
+        khb_name = "KHB Multiplex, Kengeri (A-3462)"
+        khb_project = Project.objects.create(name=khb_name, status="active")
+
+        tl_group, _ = Group.objects.get_or_create(name="Team Leader")
+        pmc_tl1 = User.objects.create_user("pmc_tl1", password="testpass123")
+        pmc_tl1.groups.add(tl_group)
+        authenticate_client(self.client, username="pmc_tl1", password="testpass123")
+
+        response = self.client.post(
+            self.LIST_URL.format(project="KHB%20Multiplex%2C%20Kengeri%20(A-3462)"),
+            {"contractor_name": "KHB Contractor"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data["data"]["contractor_name"], "KHB Contractor")
+        self.assertEqual(Contractor.objects.filter(project=khb_project).count(), 1)
+
     def test_delete_marks_inactive(self):
         create = self.client.post(
             self.LIST_URL.format(project="Thane%20Project"),

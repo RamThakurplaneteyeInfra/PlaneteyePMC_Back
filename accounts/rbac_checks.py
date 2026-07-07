@@ -6,6 +6,7 @@ from .rbac import (
     RBACDomain,
     project_from_instance,
     resolve_project,
+    user_can_manage_contractors,
     user_can_write_domain,
     user_has_project_access,
     user_has_project_name_access,
@@ -68,6 +69,14 @@ def enforce_project_write_by_name(
 def enforce_instance_write(user, instance, domain: str = RBACDomain.GENERAL) -> None:
     project = project_from_instance(instance)
     enforce_project_write(user, project, domain)
+
+
+def enforce_contractor_manage(user, project) -> None:
+    """Raise PermissionDenied unless the user may manage contractors on this project."""
+    if not user_can_manage_contractors(user, project):
+        raise PermissionDenied(
+            "You do not have permission to manage contractors for this project."
+        )
 
 
 def site_engineer_cannot_delete_approved_dpr(user, instance) -> None:

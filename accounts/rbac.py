@@ -8,6 +8,8 @@ Enforces:
 
 from __future__ import annotations
 
+from urllib.parse import unquote
+
 from django.db.models import Q, QuerySet
 
 from projects.models import Project
@@ -20,6 +22,7 @@ ROLE_CEO = "CEO"
 ROLE_PMC_HEAD = "PMC Head"
 ROLE_COORDINATOR = "Coordinator"
 ROLE_TEAM_LEADER = "Team Leader"
+ROLE_TEAM_LEAD_ALIAS = "Team Lead"
 ROLE_SITE_ENGINEER = "Site Engineer"
 ROLE_BILLING_SITE_ENGINEER = "Billing Site Engineer"
 ROLE_QAQC_SITE_ENGINEER = "QAQC Site Engineer"
@@ -32,7 +35,14 @@ SITE_ENGINEER_ROLES = {
     ROLE_QAQC_SITE_ENGINEER,
 }
 
-ALL_PROJECT_ROLES = ADMIN_ROLES | SITE_ENGINEER_ROLES | {ROLE_TEAM_LEADER}
+ALL_PROJECT_ROLES = ADMIN_ROLES | SITE_ENGINEER_ROLES | {ROLE_TEAM_LEADER, ROLE_TEAM_LEAD_ALIAS}
+
+
+def normalize_project_name(name: str | None) -> str:
+    """Decode URL-encoded names and collapse extra whitespace."""
+    if not name:
+        return ""
+    return " ".join(unquote(str(name)).strip().split())
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +81,54 @@ def _user_role_names(user) -> set[str]:
         return set()
     if user.is_superuser:
         return ALL_PROJECT_ROLES | {"superuser"}
-    return set(user.groups.values_list("name", flat=True))
+    roles = set(user.groups.values_list("name", flat=True))
+    if ROLE_TEAM_LEAD_ALIAS in roles:
+        roles.add(ROLE_TEAM_LEADER)
+    try:
+        profile = user.profile
+        if profile.designation in (ROLE_TEAM_LEADER, ROLE_TEAM_LEAD_ALIAS, "PMC Team Leader"):
+            roles.add(ROLE_TEAM_LEADER)
+    except Exception:
+        pass
+    return roles
+
+
+def user_is_team_leader(user) -> bool:
+    return ROLE_TEAM_LEADER in _user_role_names(user)
+
+
+def is_mapped_team_leader_for_project(user, project: Project | None) -> bool:
+    """True when username/project match the canonical PMC TL mapping table."""
+    if not user or not project:
+        return False
+    try:
+        from projects.pmc_team_mappings import TL_PROJECT_MAPPINGS
+    except ImportError:
+        return False
+
+    uname = user.username.strip().lower()
+    pname = normalize_project_name(project.name).lower()
+    for tl_user, mapped_name in TL_PROJECT_MAPPINGS:
+        if tl_user.strip().lower() == uname and normalize_project_name(mapped_name).lower() == pname:
+            return True
+    return False
+
+
+def user_can_manage_contractors(user, project: Project | None) -> bool:
+    """Team Leaders (and admins) may add/update contractors for their projects."""
+    if project is None:
+        return False
+    if is_admin_user(user):
+        return True
+    if not user_is_team_leader(user):
+        return False
+    if project.team_lead_id == user.id:
+        return True
+    if project.assigned_users.filter(pk=user.pk).exists():
+        return True
+    if is_mapped_team_leader_for_project(user, project):
+        return True
+    return user_has_project_access(user, project)
 
 
 def is_admin_user(user) -> bool:
@@ -110,9 +167,9 @@ def get_user_assigned_project_names(user) -> set[str]:
 
 
 def resolve_project(name: str | None) -> Project | None:
-    if not name or not str(name).strip():
+    name = normalize_project_name(name)
+    if not name:
         return None
-    name = str(name).strip()
     project = Project.objects.filter(name=name).first()
     if project:
         return project

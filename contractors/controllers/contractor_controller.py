@@ -9,9 +9,12 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from accounts.permissions import IsAuthenticatedProjectRBAC
-from accounts.rbac import RBACDomain
-from accounts.rbac_checks import enforce_instance_write, enforce_project_access, enforce_project_write
+from accounts.permissions import CanManageProjectContractors
+from accounts.rbac import RBACDomain, normalize_project_name, resolve_project
+from accounts.rbac_checks import (
+    enforce_contractor_manage,
+    enforce_project_access,
+)
 from projects.models import Project
 
 from ..models import Contractor
@@ -60,7 +63,7 @@ def _error(message: str, errors=None, http_status=status.HTTP_400_BAD_REQUEST):
 
 
 def _get_project_by_name(project_name: str) -> Project | None:
-    return Project.objects.filter(name__iexact=project_name.strip()).first()
+    return resolve_project(project_name)
 
 
 def _contractor_has_references(contractor: Contractor) -> bool:
@@ -77,14 +80,14 @@ def _contractor_has_references(contractor: Contractor) -> bool:
 class ContractorViewSet(viewsets.ViewSet):
     """Contractor Master CRUD scoped to projects."""
 
-    permission_classes = [IsAuthenticatedProjectRBAC]
+    permission_classes = [CanManageProjectContractors]
     rbac_domain = RBACDomain.GENERAL
 
     def get_rbac_project(self):
         """Resolve project from nested /projects/{project_name}/contractors/ routes."""
         project_name = self.kwargs.get("project_name")
         if project_name:
-            return _get_project_by_name(project_name)
+            return _get_project_by_name(normalize_project_name(project_name))
 
         pk = self.kwargs.get("pk")
         if pk:
@@ -131,7 +134,7 @@ class ContractorViewSet(viewsets.ViewSet):
     @action(
         detail=False,
         methods=["get", "post"],
-        url_path=r"projects/(?P<project_name>[^/.]+)/contractors",
+        url_path=r"projects/(?P<project_name>[^/]+)/contractors",
     )
     def list_by_project(self, request, project_name=None):
         project = _get_project_by_name(project_name)
@@ -160,7 +163,7 @@ class ContractorViewSet(viewsets.ViewSet):
             data = ContractorListSerializer(qs, many=True).data
             return _success("Contractors retrieved successfully", data)
 
-        enforce_project_write(request.user, project, RBACDomain.GENERAL)
+        enforce_contractor_manage(request.user, project)
 
         serializer = ContractorCreateSerializer(
             data=request.data,
@@ -212,7 +215,7 @@ class ContractorViewSet(viewsets.ViewSet):
         except Contractor.DoesNotExist:
             return _error("Contractor not found", http_status=status.HTTP_404_NOT_FOUND)
 
-        enforce_instance_write(request.user, instance, RBACDomain.GENERAL)
+        enforce_contractor_manage(request.user, instance.project)
 
         serializer = ContractorUpdateSerializer(
             instance,
@@ -243,7 +246,7 @@ class ContractorViewSet(viewsets.ViewSet):
         except Contractor.DoesNotExist:
             return _error("Contractor not found", http_status=status.HTTP_404_NOT_FOUND)
 
-        enforce_instance_write(request.user, instance, RBACDomain.GENERAL)
+        enforce_contractor_manage(request.user, instance.project)
 
         if _contractor_has_references(instance):
             instance.status = Contractor.Status.INACTIVE
