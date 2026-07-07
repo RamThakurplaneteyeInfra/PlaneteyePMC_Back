@@ -95,8 +95,19 @@ class ProjectCostPerformanceInputSerializer(serializers.ModelSerializer):
         return value
 
     def validate(self, attrs):
-        # Normalize project_name once
-        project_name = (attrs.get("project_name") or "").strip()
+        if self.instance:
+            project_name = (
+                attrs.get("project_name") or self.instance.project.name
+            ).strip()
+            attrs.setdefault("month_year", self.instance.month_year)
+            attrs.setdefault("bcws", self.instance.bcws)
+            attrs.setdefault("bcwp", self.instance.bcwp)
+            attrs.setdefault("acwp", self.instance.acwp)
+            attrs.setdefault("fcst", self.instance.fcst)
+            if "bac" not in attrs:
+                attrs["bac"] = self.instance.bac
+        else:
+            project_name = (attrs.get("project_name") or "").strip()
         if not project_name:
             raise serializers.ValidationError({"project_name": "Required."})
 
@@ -157,6 +168,22 @@ class ProjectCostPerformanceInputSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"detail": f"Failed to save cost performance data: {str(e)}"}
             )
+
+    def update(self, instance, validated_data):
+        validated_data.pop("eac", None)
+        validated_data.pop("cv", None)
+        validated_data.pop("sv", None)
+        validated_data.pop("cpi", None)
+        validated_data.pop("vac", None)
+
+        project = validated_data.pop("project", instance.project)
+        validated_data.pop("project_name", None)
+
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.project = project
+        instance.save()
+        return instance
 
 
 class ProjectCostPerformanceSerializer(serializers.ModelSerializer):

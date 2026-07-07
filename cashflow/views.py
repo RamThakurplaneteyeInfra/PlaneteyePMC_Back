@@ -16,6 +16,7 @@ from accounts.permissions import IsAuthenticatedProjectRBAC
 from accounts.rbac import RBACDomain, resolve_project
 from accounts.rbac_checks import (
     apply_project_rbac_to_queryset,
+    enforce_instance_write,
     enforce_project_access_by_name,
     enforce_project_write_by_name,
 )
@@ -99,7 +100,7 @@ class CashFlowViewSet(viewsets.ModelViewSet):
     pagination_class = CashFlowPagination
     permission_classes = [IsAuthenticatedProjectRBAC]
     rbac_domain = RBACDomain.BILLING
-    http_method_names = ["get", "post", "head", "options"]
+    http_method_names = ["get", "post", "put", "patch", "head", "options"]
 
     def get_queryset(self):
         """
@@ -180,6 +181,50 @@ class CashFlowViewSet(viewsets.ModelViewSet):
             CashFlowSerializer(instance).data,
             status=status.HTTP_201_CREATED,
         )
+
+    def _invalidate_cashflow_cache(self, project_name: str) -> None:
+        pn = (project_name or "").strip()
+        cache.delete(f"cashflow_list:{pn or 'all'}")
+        cache.delete(f"cashflow_dashboard:{pn}")
+        cache.delete("cashflow_list:all")
+
+    @swagger_auto_schema(
+        tags=swagger_tags,
+        operation_summary="Cash flow: update monthly row (PUT/PATCH)",
+        operation_id="cashflow_update",
+        request_body=_CASHFLOW_POST_SCHEMA,
+        responses={200: CashFlowSerializer},
+    )
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        try:
+            instance = CashFlow.objects.get(pk=kwargs["pk"])
+        except CashFlow.DoesNotExist:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        enforce_instance_write(request.user, instance, RBACDomain.BILLING)
+
+        ser = CashFlowInputSerializer(
+            instance,
+            data=request.data,
+            partial=partial,
+        )
+        ser.is_valid(raise_exception=True)
+        updated = ser.save()
+
+        schedule_billing_update_notification(
+            request.user,
+            resolve_project(updated.project_name),
+            BillingModule.CASH_FLOW,
+            BillingAction.UPDATE,
+        )
+        self._invalidate_cashflow_cache(updated.project_name)
+
+        return Response(CashFlowSerializer(updated).data)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
 
     @swagger_auto_schema(
         tags=swagger_tags,

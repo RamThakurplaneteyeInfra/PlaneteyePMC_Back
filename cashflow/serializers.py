@@ -77,6 +77,9 @@ class CashFlowInputSerializer(serializers.ModelSerializer):
         return parse_month_year(value)
 
     def validate(self, attrs):
+        if self.instance:
+            attrs.setdefault("project_name", self.instance.project_name)
+            attrs.setdefault("month_year", self.instance.month_year)
         attrs["project_name"] = (attrs.get("project_name") or "").strip()
         if not attrs["project_name"]:
             raise serializers.ValidationError(
@@ -127,6 +130,23 @@ class CashFlowInputSerializer(serializers.ModelSerializer):
         transaction.on_commit(recalculate_after_commit)
 
         # Remove refresh_from_db() - not needed since we don't modify the instance after creation
+        return instance
+
+    def update(self, instance, validated_data):
+        old_project_name = instance.project_name
+        project_name = validated_data.get("project_name", instance.project_name)
+        month_year = validated_data.get("month_year", instance.month_year)
+
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        def recalculate_projects():
+            CashFlow.recalculate_cumulatives(project_name)
+            if project_name != old_project_name:
+                CashFlow.recalculate_cumulatives(old_project_name)
+
+        transaction.on_commit(recalculate_projects)
         return instance
 
 

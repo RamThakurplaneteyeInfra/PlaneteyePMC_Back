@@ -14,6 +14,8 @@ from pathlib import Path
 from datetime import timedelta
 import os
 
+import sys
+
 from dotenv import load_dotenv
 import dj_database_url
 
@@ -272,6 +274,34 @@ REST_FRAMEWORK = {
         'rest_framework.filters.SearchFilter',
         'rest_framework.filters.OrderingFilter',
     ],
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+        'core.throttling.LoginRateThrottle',
+        'core.throttling.RefreshRateThrottle',
+        'core.throttling.MethodScopedRateThrottle',
+        'core.throttling.CreateRateThrottle',
+        'core.throttling.UpdateRateThrottle',
+        'core.throttling.DeleteRateThrottle',
+        'core.throttling.ExportRateThrottle',
+        'core.throttling.UploadRateThrottle',
+        'core.throttling.NotificationRateThrottle',
+        'core.throttling.SearchRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '30/min',
+        'user': '300/min',
+        'login': '5/min',
+        'refresh': '30/min',
+        'create': '60/min',
+        'update': '120/min',
+        'delete': '20/min',
+        'export': '10/min',
+        'upload': '10/min',
+        'alerts': '120/min',
+        'search': '150/min',
+    },
+    'EXCEPTION_HANDLER': 'core.exception_handlers.pmc_exception_handler',
 }
 
 SIMPLE_JWT = {
@@ -296,13 +326,43 @@ SWAGGER_SETTINGS = {
 
 
 
-# Caching Configuration
-# Uses Redis cache backend which supports delete_pattern
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+# Caching Configuration — used by DRF throttling and API caches.
+# Prefer Redis when REDIS_URL is reachable; fall back to LocMem (dev/tests).
+def _build_cache_settings():
+    locmem = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        }
     }
-}
+    if "test" in sys.argv:
+        return locmem
+    if os.environ.get("USE_LOCMEM_CACHE", "").lower() == "true":
+        return locmem
+
+    redis_url = os.environ.get("REDIS_URL") or os.environ.get("REDIS_CACHE_URL")
+    if not redis_url:
+        return locmem
+
+    try:
+        import redis
+
+        client = redis.from_url(redis_url, socket_connect_timeout=1)
+        client.ping()
+    except Exception:
+        return locmem
+
+    return {
+        "default": {
+            "BACKEND": "django_redis.cache.RedisCache",
+            "LOCATION": redis_url,
+            "OPTIONS": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            },
+        }
+    }
+
+
+CACHES = _build_cache_settings()
 
 # Cache settings for API endpoints
 CACHE_MIDDLEWARE_ALIAS = 'default'

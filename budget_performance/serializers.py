@@ -117,6 +117,14 @@ class BudgetCostPerformanceInputSerializer(serializers.Serializer):
         return value
 
     def validate(self, attrs):
+        partial = self.context.get("partial", False)
+        instance = self.context.get("instance")
+        if partial and instance:
+            attrs.setdefault("project_name", instance.project_name)
+            attrs.setdefault("budget_at_completion", instance.bac)
+            attrs.setdefault("earned_value", instance.bcwp)
+            attrs.setdefault("actual_cost", instance.acwp)
+
         missing = [
             f
             for f in ("budget_at_completion", "earned_value", "actual_cost")
@@ -144,46 +152,55 @@ class BudgetCostPerformanceInputSerializer(serializers.Serializer):
             )
         return attrs
 
-    def create(self, validated_data):
-        # Get or create project using normalized name
-        project_name = validated_data["project_name"]
-        project, created = Project.objects.get_or_create(
-            name=project_name,
-            defaults={'budget': Decimal('0.00')}
-        )
-
-        # All values are already Decimal from validation
-        bac = validated_data["budget_at_completion"]
-        bcwp = validated_data["earned_value"]
-        acwp = validated_data["actual_cost"]
-
-        # Perform calculations in Decimal for precision
-        # CPI = BCWP / ACWP (ACWP > 0 and BCWP > 0 already enforced)
+    def _compute_evm_metrics(self, bac, bcwp, acwp):
         cpi = (bcwp / acwp).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
-        # EAC = BAC / CPI
         eac = (bac / cpi).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
-        # ETG = EAC - ACWP
         etg = (eac - acwp).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
-        # VAC = BAC - EAC
         vac = (bac - eac).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
-        # CV = BCWP - ACWP
         cv = (bcwp - acwp).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+        return cpi, eac, etg, vac, cv
 
-        return BudgetCostPerformance.objects.create(
-            project_name=project_name,  # Keep for backward compatibility during transition
-            project=project,  # New ForeignKey field
-            bac=bac,
-            bcwp=bcwp,
-            acwp=acwp,
-            cpi=cpi,
-            eac=eac,
-            etg=etg,
-            vac=vac,
-            cv=cv,
+    def _persist_record(self, project_name, bac, bcwp, acwp, instance=None):
+        project, _ = Project.objects.get_or_create(
+            name=project_name,
+            defaults={"budget": Decimal("0.00")},
+        )
+        cpi, eac, etg, vac, cv = self._compute_evm_metrics(bac, bcwp, acwp)
+        values = {
+            "project_name": project_name,
+            "project": project,
+            "bac": bac,
+            "bcwp": bcwp,
+            "acwp": acwp,
+            "cpi": cpi,
+            "eac": eac,
+            "etg": etg,
+            "vac": vac,
+            "cv": cv,
+        }
+        if instance is None:
+            return BudgetCostPerformance.objects.create(**values)
+        for field, value in values.items():
+            setattr(instance, field, value)
+        instance.save()
+        return instance
+
+    def create(self, validated_data):
+        return self._persist_record(
+            validated_data["project_name"],
+            validated_data["budget_at_completion"],
+            validated_data["earned_value"],
+            validated_data["actual_cost"],
         )
 
     def update(self, instance, validated_data):
-        raise NotImplementedError("Updates use a separate flow if needed.")
+        return self._persist_record(
+            validated_data["project_name"],
+            validated_data["budget_at_completion"],
+            validated_data["earned_value"],
+            validated_data["actual_cost"],
+            instance=instance,
+        )
 
 
 class BudgetCostPerformanceSerializer(serializers.ModelSerializer):

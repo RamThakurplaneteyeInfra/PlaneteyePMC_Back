@@ -16,7 +16,8 @@ Custom endpoint:
   GET    /api/project-dates/project/{projectName}/        -> both SCL + CONTRACTOR + BG lists
   GET    /api/project-dates/project/{projectName}/bg-status/  -> BG Status lists + summary
   POST   /api/project-dates/project/{projectName}/bg-status/  -> create BG entry
-  PATCH  /api/project-dates/bg-status/{id}/             -> update BG entry
+  PATCH  /api/project-dates/bg-status/{id}/             -> partial update BG entry
+  PUT    /api/project-dates/bg-status/{id}/             -> full update BG entry
   DELETE /api/project-dates/bg-status/{id}/             -> delete BG entry
 
 Filtering:
@@ -479,7 +480,7 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
 
     # -------------------------------------------------------------------------
     # BG STATUS  GET/POST /api/project-dates/project/{projectName}/bg-status/
-    #            PATCH/DELETE /api/project-dates/bg-status/{id}/
+    #            PUT/PATCH/DELETE /api/project-dates/bg-status/{id}/
     # -------------------------------------------------------------------------
 
     @swagger_auto_schema(
@@ -594,7 +595,7 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
 
     @swagger_auto_schema(
         method="patch",
-        operation_summary="Update BG Status Entry",
+        operation_summary="Update BG Status Entry (PUT/PATCH)",
         operation_description="Partially update a single bank guarantee entry by ID.",
         request_body=_BG_STATUS_UPDATE_SCHEMA,
         responses={200: _BG_ENTRY_SCHEMA, 400: "Validation error", 404: "Not found"},
@@ -609,12 +610,12 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
     )
     @action(
         detail=False,
-        methods=["patch", "delete"],
+        methods=["put", "patch", "delete"],
         url_path=r"bg-status/(?P<bgId>\d+)",
         url_name="bg-status-by-id",
     )
     def bg_status_by_id(self, request, bgId: str = None):
-        """PATCH or DELETE a single BG entry."""
+        """PUT, PATCH, or DELETE a single BG entry."""
         try:
             instance = BGStatus.objects.select_related(
                 "project_date",
@@ -640,7 +641,7 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
         serializer = BGStatusUpdateSerializer(
             instance,
             data=request.data,
-            partial=True,
+            partial=request.method == "PATCH",
         )
         if not serializer.is_valid():
             return self._error("Validation failed", errors=serializer.errors)

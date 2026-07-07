@@ -16,6 +16,7 @@ from accounts.permissions import IsAuthenticatedProjectRBAC
 from accounts.rbac import RBACDomain, resolve_project
 from accounts.rbac_checks import (
     apply_project_rbac_to_queryset,
+    enforce_instance_write,
     enforce_project_access_by_name,
     enforce_project_write_by_name,
 )
@@ -88,7 +89,7 @@ class ProjectCostPerformanceViewSet(viewsets.ModelViewSet):
     serializer_class = ProjectCostPerformanceSerializer
     permission_classes = [IsAuthenticatedProjectRBAC]
     rbac_domain = RBACDomain.FINANCIAL
-    http_method_names = ["get", "post", "head", "options"]
+    http_method_names = ["get", "post", "put", "patch", "head", "options"]
     pagination_class = PageNumberPagination
 
     def get_queryset(self):
@@ -175,6 +176,52 @@ class ProjectCostPerformanceViewSet(viewsets.ModelViewSet):
     @swagger_auto_schema(auto_schema=None)
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
+
+    def _invalidate_cost_performance_cache(self, project_name: str) -> None:
+        pn = (project_name or "").strip()
+        cache.delete("cost_performance_list:all")
+        cache.delete(f"cost_performance_list:{pn}")
+        cache.delete(f"cost_performance_dashboard:{pn}")
+
+    @swagger_auto_schema(
+        tags=swagger_tags,
+        operation_summary="Cost performance: update monthly EVM row (PUT/PATCH)",
+        operation_id="cost_performance_update",
+        request_body=_POST_SCHEMA,
+        responses={200: ProjectCostPerformanceSerializer},
+    )
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        try:
+            instance = ProjectCostPerformance.objects.select_related("project").get(
+                pk=kwargs["pk"]
+            )
+        except ProjectCostPerformance.DoesNotExist:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        enforce_instance_write(request.user, instance, RBACDomain.FINANCIAL)
+
+        ser = ProjectCostPerformanceInputSerializer(
+            instance,
+            data=request.data,
+            partial=partial,
+        )
+        ser.is_valid(raise_exception=True)
+        updated = ser.save()
+
+        schedule_billing_update_notification_for_instance(
+            request.user,
+            updated,
+            BillingModule.COST_PERFORMANCE,
+            BillingAction.UPDATE,
+        )
+        self._invalidate_cost_performance_cache(updated.project.name)
+
+        return Response(ProjectCostPerformanceSerializer(updated).data)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
 
     @swagger_auto_schema(
         tags=swagger_tags,

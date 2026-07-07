@@ -18,6 +18,7 @@ from accounts.permissions import IsAuthenticatedProjectRBAC
 from accounts.rbac import RBACDomain, resolve_project
 from accounts.rbac_checks import (
     apply_project_rbac_to_queryset,
+    enforce_instance_write,
     enforce_project_write_by_name,
 )
 
@@ -83,7 +84,7 @@ class BudgetCostPerformanceViewSet(viewsets.ModelViewSet):
     pagination_class = BudgetPerformancePagination
     permission_classes = [IsAuthenticatedProjectRBAC]
     rbac_domain = RBACDomain.FINANCIAL
-    http_method_names = ["get", "post", "head", "options"]
+    http_method_names = ["get", "post", "put", "patch", "head", "options"]
 
     def get_queryset(self):
         """
@@ -224,3 +225,43 @@ class BudgetCostPerformanceViewSet(viewsets.ModelViewSet):
         queryset = self.filter_queryset(self.get_queryset())
         serializer = BudgetCostPerformanceSerializer(queryset, many=True)
         return Response(serializer.data)
+
+    def _invalidate_budget_cache(self, project_name: str) -> None:
+        pn = (project_name or "").strip()
+        cache.delete(f"budget_performance_list:{pn or 'all'}")
+        cache.delete("budget_performance_list:all")
+
+    @swagger_auto_schema(
+        operation_summary="Update budget vs cost performance (EVM)",
+        request_body=_BUDGET_PERFORMANCE_POST_SCHEMA,
+        responses={200: openapi.Response("Calculated metrics", BudgetCostPerformanceSerializer)},
+    )
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        try:
+            instance = BudgetCostPerformance.objects.get(pk=kwargs["pk"])
+        except BudgetCostPerformance.DoesNotExist:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        enforce_instance_write(request.user, instance, RBACDomain.FINANCIAL)
+
+        input_serializer = BudgetCostPerformanceInputSerializer(
+            data=request.data,
+            partial=partial,
+            context={"partial": partial, "instance": instance},
+        )
+        input_serializer.is_valid(raise_exception=True)
+        updated = input_serializer.update(instance, input_serializer.validated_data)
+
+        schedule_billing_update_notification(
+            request.user,
+            resolve_project(updated.project_name),
+            BillingModule.BUDGET_PERFORMANCE,
+            BillingAction.UPDATE,
+        )
+        self._invalidate_budget_cache(updated.project_name)
+        return Response(BudgetCostPerformanceSerializer(updated).data)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)

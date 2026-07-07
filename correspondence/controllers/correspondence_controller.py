@@ -400,7 +400,8 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
         request_body=_DOC_POST_SCHEMA,
         tags=["Correspondence Documents"],
     )
-    def partial_update(self, request, *args, **kwargs):
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
         try:
             instance = CorrespondenceDocument.objects.get(pk=kwargs["pk"])
         except CorrespondenceDocument.DoesNotExist:
@@ -411,7 +412,7 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
 
         payload = _normalise_payload(request.data)
         serializer = CorrespondenceDocumentSerializer(
-            instance, data=payload, partial=True
+            instance, data=payload, partial=partial
         )
 
         if not serializer.is_valid():
@@ -446,6 +447,10 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
             "Correspondence document updated successfully",
             CorrespondenceDocumentSerializer(updated).data,
         )
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
 
     @swagger_auto_schema(tags=["Correspondence Documents"])
     def destroy(self, request, *args, **kwargs):

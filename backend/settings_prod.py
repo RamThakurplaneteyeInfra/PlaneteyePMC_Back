@@ -147,6 +147,11 @@ LOGGING = {
             'level': 'WARNING',
             'propagate': False,
         },
+        'pmc.throttling': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
         'site_images': {
             'handlers': ['console'],
             'level': 'INFO',
