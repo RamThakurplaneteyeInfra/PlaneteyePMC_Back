@@ -270,3 +270,52 @@ class ContractorSummaryInvoicingAPITest(APITestCase):
         self.assertEqual(Decimal(summary["gross_certified_billed"]), Decimal("140.00"))
         self.assertEqual(Decimal(summary["difference"]), Decimal("60.00"))
         self.assertEqual(Decimal(summary["certification_efficiency"]), Decimal("70.00"))
+
+
+class InvoicingDuplicateProjectContractorTest(APITestCase):
+    """Contractor id must resolve when duplicate Project rows share the same name."""
+
+    CREATE_URL = "/api/invoicing/"
+
+    def setUp(self):
+        self.project_name = "KHB Multiplex, Kengeri (A-3462)"
+        self.canonical_project = Project.objects.create(
+            name=self.project_name,
+            status="active",
+        )
+        self.duplicate_project = Project.objects.create(
+            name="Khb Multiplex, Kengeri (A-3462)",
+            status="active",
+        )
+        self.contractor = Contractor.objects.create(
+            project=self.canonical_project,
+            contractor_name="ABC",
+            status=Contractor.Status.ACTIVE,
+        )
+
+        bse_group, _ = Group.objects.get_or_create(name="Billing Site Engineer")
+        self.user = User.objects.create_user("inv_khb_bse", password="testpass123")
+        self.user.groups.add(bse_group)
+        self.canonical_project.billing_site_engineer = self.user
+        self.canonical_project.save()
+        authenticate_client(self.client, username="inv_khb_bse", password="testpass123")
+
+    def test_contractor_id_resolves_with_duplicate_project_rows(self):
+        response = self.client.post(
+            self.CREATE_URL,
+            {
+                "project_name": self.project_name,
+                "invoice_type": "Contractor",
+                "contractor_id": self.contractor.id,
+                "contractor_name": "ABC",
+                "gross_billed": "0",
+                "gross_certified_billed": "0",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(
+            response.data["data"]["contractor"]["id"],
+            self.contractor.id,
+        )
+

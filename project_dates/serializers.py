@@ -16,7 +16,11 @@ from rest_framework import serializers
 
 from projects.models import Project
 
-from contractors.resolvers import contractor_payload, resolve_contractor_for_write
+from contractors.resolvers import (
+    contractor_payload,
+    resolve_contractor_for_write,
+    resolve_project_for_module,
+)
 
 from .bg_status import bg_status_for_project_date
 from .models import ProjectDates
@@ -162,12 +166,7 @@ class ProjectDatesSerializer(serializers.ModelSerializer):
                     {"project_name": "project_name is required."}
                 )
         else:
-            try:
-                project = Project.objects.get(name__iexact=project_name)
-            except Project.DoesNotExist:
-                raise serializers.ValidationError(
-                    {"project_name": f"No project found with name '{project_name}'."}
-                )
+            project = resolve_project_for_module(project_name)
             attrs["project"] = project
 
         instance = self.instance

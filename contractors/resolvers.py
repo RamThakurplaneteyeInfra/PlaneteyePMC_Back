@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from rest_framework import serializers
 
+from accounts.rbac import normalize_project_name, resolve_project
 from projects.models import Project
 
 from .models import Contractor
@@ -18,6 +19,28 @@ def contractor_payload(contractor: Contractor | None) -> dict | None:
     }
 
 
+def resolve_project_for_module(project_name: str) -> Project:
+    """Resolve the canonical Project row for API writes."""
+    project = resolve_project(project_name)
+    if project is None:
+        raise serializers.ValidationError(
+            {"project_name": f"No project found with name '{project_name}'."}
+        )
+    return project
+
+
+def _contractor_belongs_to_project(contractor: Contractor, project: Project) -> bool:
+    if contractor.project_id == project.id:
+        return True
+    if contractor.project.name.lower() == project.name.lower():
+        return True
+    canonical = resolve_project(project.name)
+    if canonical is not None and contractor.project_id == canonical.id:
+        return True
+    pname = normalize_project_name(project.name)
+    return contractor.project.name.lower() == pname.lower()
+
+
 def get_active_contractor_for_project(
     project: Project,
     contractor_id: int | None,
@@ -29,9 +52,12 @@ def get_active_contractor_for_project(
             {"contractor_id": "contractor_id is required for CONTRACTOR records."}
         )
 
-    try:
-        contractor = Contractor.objects.get(pk=contractor_id, project=project)
-    except Contractor.DoesNotExist:
+    contractor = (
+        Contractor.objects.select_related("project")
+        .filter(pk=contractor_id)
+        .first()
+    )
+    if contractor is None or not _contractor_belongs_to_project(contractor, project):
         raise serializers.ValidationError(
             {"contractor_id": f"No contractor with id {contractor_id} found for this project."}
         )
@@ -75,6 +101,17 @@ def resolve_contractor_for_write(
     ).first()
 
     if contractor is None:
+        canonical = resolve_project(project.name) or project
+        if canonical.id != project.id:
+            contractor = Contractor.objects.filter(
+                project=canonical,
+                contractor_name__iexact=name,
+            ).first()
+    if contractor is None:
+        contractor = Contractor.objects.filter(
+            project__name__iexact=normalize_project_name(project.name),
+            contractor_name__iexact=name,
+        ).first()
         raise serializers.ValidationError(
             {
                 "contractor_id": (

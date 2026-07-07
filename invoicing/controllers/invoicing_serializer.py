@@ -9,8 +9,11 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
-from contractors.resolvers import contractor_payload, resolve_contractor_for_write
-from projects.models import Project
+from contractors.resolvers import (
+    contractor_payload,
+    resolve_contractor_for_write,
+    resolve_project_for_module,
+)
 
 from ..models.invoicing_information import InvoicingInformation
 from .invoicing_metrics import metrics_from_record
@@ -184,11 +187,7 @@ class InvoicingInformationSerializer(serializers.ModelSerializer):
             attrs["contractor"] = None
             attrs["contractor_name"] = None
         elif invoice_type == InvoicingInformation.InvoiceType.CONTRACTOR:
-            project = Project.objects.filter(name__iexact=str(project_name).strip()).first()
-            if project is None:
-                raise serializers.ValidationError(
-                    {"project_name": f"No project found with name '{project_name}'."}
-                )
+            project = resolve_project_for_module(str(project_name).strip())
             contractor = resolve_contractor_for_write(
                 project,
                 contractor_id=contractor_id,
