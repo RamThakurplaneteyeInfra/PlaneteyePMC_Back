@@ -29,6 +29,15 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        migrations.RemoveIndex(
+            model_name="invoicinginformation",
+            name="invoicing_i_project_b594ae_idx",
+        ),
+        migrations.RemoveIndex(
+            model_name="invoicinginformation",
+            name="invoicing_i_project_7c5626_idx",
+        ),
+
         # ── Step 1: Rename project_name → projectName ─────────────────────
         migrations.RenameField(
             model_name="invoicinginformation",
@@ -160,9 +169,9 @@ class Migration(migrations.Migration):
             sql="""
                 DELETE FROM invoicing_invoicinginformation
                 WHERE id NOT IN (
-                    SELECT DISTINCT ON ("projectName", "invoiceType") id
+                    SELECT MAX(id)
                     FROM invoicing_invoicinginformation
-                    ORDER BY "projectName", "invoiceType", created_at DESC
+                    GROUP BY "projectName", "invoiceType"
                 )
             """,
             reverse_sql=migrations.RunSQL.noop,

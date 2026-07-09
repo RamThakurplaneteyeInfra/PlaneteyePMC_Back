@@ -11,14 +11,6 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RemoveIndex(
-            model_name='contractperformance',
-            name='contract_pe_project_bb13ca_idx',
-        ),
-        migrations.RemoveIndex(
-            model_name='contractperformance',
-            name='contract_pe_perform_cd5942_idx',
-        ),
         migrations.AlterField(
             model_name='contractperformance',
             name='performancePercentage',

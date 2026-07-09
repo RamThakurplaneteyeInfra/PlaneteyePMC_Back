@@ -11,18 +11,6 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RemoveIndex(
-            model_name='contractvalue',
-            name='cv_project_name_idx',
-        ),
-        migrations.RemoveIndex(
-            model_name='contractvalue',
-            name='cv_contract_type_idx',
-        ),
-        migrations.RemoveIndex(
-            model_name='contractvalue',
-            name='cv_project_type_idx',
-        ),
         migrations.AlterField(
             model_name='contractvalue',
             name='created_at',

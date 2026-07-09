@@ -227,7 +227,7 @@ __all__ = [
 
 
 class LoginRateThrottle(PMCScopedRateThrottle):
-    """Per-IP login limit (default 30/min; override with LOGIN_THROTTLE_RATE)."""
+    """Per-IP login limit (default 100/min; override with LOGIN_THROTTLE_RATE)."""
 
     scope = "login"
 

@@ -25,6 +25,22 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        migrations.RemoveConstraint(
+            model_name="invoicinginformation",
+            name="inv_unique_project_invoice_type",
+        ),
+        migrations.RemoveIndex(
+            model_name="invoicinginformation",
+            name="inv_project_name_idx",
+        ),
+        migrations.RemoveIndex(
+            model_name="invoicinginformation",
+            name="inv_invoice_type_idx",
+        ),
+        migrations.RemoveIndex(
+            model_name="invoicinginformation",
+            name="inv_project_type_idx",
+        ),
         migrations.RenameField(
             model_name="invoicinginformation",
             old_name="projectName",
@@ -47,10 +63,6 @@ class Migration(migrations.Migration):
                 "verbose_name": "Invoicing Information",
                 "verbose_name_plural": "Invoicing Information",
             },
-        ),
-        migrations.RemoveConstraint(
-            model_name="invoicinginformation",
-            name="inv_unique_project_invoice_type",
         ),
         migrations.AddConstraint(
             model_name="invoicinginformation",

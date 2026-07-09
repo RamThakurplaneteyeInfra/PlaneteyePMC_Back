@@ -83,6 +83,7 @@ INSTALLED_APPS = [
     'contractors',
     'site_images.apps.SiteImagesConfig',
     'bottlenecks',
+    'meeting_documents',
 ]
 
 MIDDLEWARE = [
@@ -291,7 +292,7 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'anon': os.environ.get('ANON_THROTTLE_RATE', '30/min'),
         'user': os.environ.get('USER_THROTTLE_RATE', '300/min'),
-        'login': os.environ.get('LOGIN_THROTTLE_RATE', '30/min'),
+        'login': os.environ.get('LOGIN_THROTTLE_RATE', '100/min'),
         'refresh': os.environ.get('REFRESH_THROTTLE_RATE', '60/min'),
         'create': '60/min',
         'update': '120/min',
@@ -434,6 +435,6 @@ AWS_S3_UPLOAD_PREFIX = os.environ.get('AWS_S3_UPLOAD_PREFIX', 'upload')
 AWS_S3_CUSTOM_DOMAIN = os.environ.get('AWS_S3_CUSTOM_DOMAIN', '')
 # Primary: s3 | cloudinary (falls back to the other unless SITE_IMAGE_S3_ONLY=True)
 SITE_IMAGE_STORAGE_PRIMARY = os.environ.get('SITE_IMAGE_STORAGE_PRIMARY', 's3')
-
+MEETING_DOCUMENTS_S3_PREFIX = os.environ.get('MEETING_DOCUMENTS_S3_PREFIX', 'pmc')
 
 

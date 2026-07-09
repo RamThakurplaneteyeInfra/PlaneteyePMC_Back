@@ -46,6 +46,10 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        migrations.RemoveIndex(
+            model_name="correspondence",
+            name="corr_project_name_idx",
+        ),
         migrations.AddField(
             model_name="correspondence",
             name="project",
@@ -129,10 +133,6 @@ class Migration(migrations.Migration):
         migrations.AlterUniqueTogether(
             name="correspondencestatus",
             unique_together={("project", "month", "year", "correspondence_type")},
-        ),
-        migrations.RemoveIndex(
-            model_name="correspondencestatus",
-            name="corr_project_name_idx",
         ),
         migrations.AddIndex(
             model_name="correspondencestatus",

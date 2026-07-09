@@ -33,6 +33,18 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        migrations.RemoveConstraint(
+            model_name="correspondencedocument",
+            name="corr_doc_unique_project_party_sr",
+        ),
+        migrations.RemoveIndex(
+            model_name="correspondencedocument",
+            name="corr_doc_party_idx",
+        ),
+        migrations.RemoveIndex(
+            model_name="correspondencedocument",
+            name="corr_doc_proj_party_idx",
+        ),
         migrations.AddField(
             model_name="correspondencedocument",
             name="month",
@@ -57,18 +69,6 @@ class Migration(migrations.Migration):
             model_name="correspondencedocument",
             old_name="party_type",
             new_name="correspondence_type",
-        ),
-        migrations.RemoveConstraint(
-            model_name="correspondencedocument",
-            name="corr_doc_unique_project_party_sr",
-        ),
-        migrations.RemoveIndex(
-            model_name="correspondencedocument",
-            name="corr_doc_party_idx",
-        ),
-        migrations.RemoveIndex(
-            model_name="correspondencedocument",
-            name="corr_doc_proj_party_idx",
         ),
         migrations.AlterModelOptions(
             name="correspondencedocument",

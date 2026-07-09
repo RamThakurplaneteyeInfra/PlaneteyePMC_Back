@@ -12,12 +12,18 @@ Correspondence document routes.
 from rest_framework.routers import DefaultRouter
 
 from ..controllers.correspondence_controller import CorrespondenceDocumentViewSet
+from ..controllers.attachment_controller import CorrespondenceAttachmentViewSet
 
 router = DefaultRouter()
 router.register(
     r"correspondence-documents",
     CorrespondenceDocumentViewSet,
     basename="correspondence-documents",
+)
+router.register(
+    r"correspondence-documents/attachments",
+    CorrespondenceAttachmentViewSet,
+    basename="correspondence-attachments",
 )
 # Legacy frontend path (same ViewSet as correspondence-documents)
 router.register(

@@ -150,6 +150,9 @@ urlpatterns = [
 
     # Bottleneck register (Issue / Concern / Risk / Action)
     path('api/', include('bottlenecks.urls')),
+
+    # Meeting Documents (MoM / EDL) stored in private S3
+    path('api/', include('meeting_documents.urls')),
 ]
 
 if settings.DEBUG:

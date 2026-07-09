@@ -13,15 +13,18 @@ import logging
 
 from django.core.cache import cache
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db.models import Count, Q
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from ..models.correspondence import CorrespondenceDocument
+from ..models.attachment import CorrespondenceDocumentAttachment
 from services.billing_update_notifications import (
     BillingAction,
     BillingModule,
@@ -38,7 +41,22 @@ from .correspondence_metrics import (
     normalize_view,
     scl_delivered_metrics,
 )
-from .correspondence_serializer import CorrespondenceDocumentSerializer
+from .correspondence_serializer import (
+    ATTACHMENT_PREFETCH,
+    CorrespondenceDocumentReadSerializer,
+    CorrespondenceDocumentSerializer,
+)
+from .attachment_serializer import (
+    CorrespondenceAttachmentDetailSerializer,
+    CorrespondenceAttachmentSerializer,
+    CorrespondenceAttachmentUploadSerializer,
+)
+from correspondence.permissions import (
+    can_upload_correspondence_attachment,
+    can_view_correspondence_attachment,
+)
+from correspondence.services.attachment_service import upload_correspondence_attachment
+from services.s3_correspondence_documents import generate_presigned_download_url
 from .inbound_serializer import InboundCorrespondenceSerializer
 from .scl_delivered_serializer import SCLDeliveredCorrespondenceSerializer
 from ..models.inbound_summary import InboundCorrespondenceSummary
@@ -230,6 +248,15 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
     pagination_class = CorrespondencePagination
     http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
 
+    def _read_queryset(self):
+        return self.get_queryset().prefetch_related(ATTACHMENT_PREFETCH).annotate(
+            attachment_count=Count(
+                "attachments",
+                filter=Q(attachments__is_active=True),
+                distinct=True,
+            )
+        )
+
     def get_queryset(self):
         qs = CorrespondenceDocument.objects.all()
         params = self.request.query_params
@@ -357,11 +384,11 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
             if cached is not None:
                 return Response(cached)
 
-        queryset = self.get_queryset()
+        queryset = self._read_queryset()
         page = self.paginate_queryset(queryset)
 
         if page is not None:
-            serializer = CorrespondenceDocumentSerializer(page, many=True)
+            serializer = CorrespondenceDocumentReadSerializer(page, many=True)
             paginated = self.get_paginated_response(serializer.data)
             payload = {
                 "success": True,
@@ -372,7 +399,7 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
                 cache.set(_CACHE_KEY_LIST, payload, _CACHE_TIMEOUT)
             return Response(payload)
 
-        serializer = CorrespondenceDocumentSerializer(queryset, many=True)
+        serializer = CorrespondenceDocumentReadSerializer(queryset, many=True)
         payload = {
             "success": True,
             "message": "Correspondence documents retrieved successfully",
@@ -385,7 +412,7 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
     @swagger_auto_schema(tags=["Correspondence Documents"])
     def retrieve(self, request, *args, **kwargs):
         try:
-            instance = CorrespondenceDocument.objects.get(pk=kwargs["pk"])
+            instance = self._read_queryset().get(pk=kwargs["pk"])
         except CorrespondenceDocument.DoesNotExist:
             return self._error(
                 "Correspondence document not found",
@@ -393,7 +420,10 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
             )
         return self._success(
             "Correspondence document retrieved successfully",
-            CorrespondenceDocumentSerializer(instance).data,
+            CorrespondenceDocumentReadSerializer(
+                instance,
+                context={"include_attachments": True},
+            ).data,
         )
 
     @swagger_auto_schema(
@@ -451,6 +481,76 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
     def partial_update(self, request, *args, **kwargs):
         kwargs["partial"] = True
         return self.update(request, *args, **kwargs)
+
+    @swagger_auto_schema(
+        operation_summary="List or upload correspondence attachments",
+        methods=["get", "post"],
+        tags=["Correspondence Attachments"],
+    )
+    @action(
+        detail=True,
+        methods=["get", "post"],
+        url_path="attachments",
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def attachments(self, request, pk=None):
+        try:
+            correspondence = CorrespondenceDocument.objects.get(pk=pk)
+        except CorrespondenceDocument.DoesNotExist:
+            return self._error(
+                "Correspondence document not found",
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not can_view_correspondence_attachment(request.user, correspondence):
+            return self._error(
+                "You do not have permission to view correspondence attachments.",
+                http_status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if request.method == "GET":
+            attachments = CorrespondenceDocumentAttachment.objects.filter(
+                correspondence=correspondence,
+                is_active=True,
+            ).order_by("-uploaded_at", "-document_version")
+            return self._success(
+                "Correspondence attachments retrieved successfully.",
+                CorrespondenceAttachmentSerializer(attachments, many=True).data,
+            )
+
+        if not can_upload_correspondence_attachment(request.user, correspondence):
+            return self._error(
+                "You do not have permission to upload correspondence attachments.",
+                http_status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = CorrespondenceAttachmentUploadSerializer(data=request.data)
+        if not serializer.is_valid():
+            return self._error(
+                "Validation failed",
+                errors=_flatten_errors(serializer.errors),
+            )
+
+        data = serializer.validated_data
+        attachment, error = upload_correspondence_attachment(
+            request,
+            correspondence,
+            uploaded_file=data["file"],
+            description=data.get("description", ""),
+            document_type=data.get("document_type", ""),
+        )
+        if error:
+            message, errors, code = error
+            return self._error(message, errors=errors, http_status=code)
+
+        attachment._download_url = generate_presigned_download_url(attachment.s3_key)
+        attachment._download_url_expires_in_seconds = 600
+        self._invalidate_list_cache()
+        return self._success(
+            "Attachment uploaded successfully.",
+            CorrespondenceAttachmentDetailSerializer(attachment).data,
+            http_status=status.HTTP_201_CREATED,
+        )
 
     @swagger_auto_schema(tags=["Correspondence Documents"])
     def destroy(self, request, *args, **kwargs):

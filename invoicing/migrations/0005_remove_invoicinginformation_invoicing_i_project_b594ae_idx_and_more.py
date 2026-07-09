@@ -12,26 +12,6 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RemoveIndex(
-            model_name='invoicinginformation',
-            name='invoicing_i_project_b594ae_idx',
-        ),
-        migrations.RemoveIndex(
-            model_name='invoicinginformation',
-            name='invoicing_i_project_7c5626_idx',
-        ),
-        migrations.RemoveIndex(
-            model_name='invoicinginformation',
-            name='inv_project_name_idx',
-        ),
-        migrations.RemoveIndex(
-            model_name='invoicinginformation',
-            name='inv_invoice_type_idx',
-        ),
-        migrations.RemoveIndex(
-            model_name='invoicinginformation',
-            name='inv_project_type_idx',
-        ),
         migrations.AlterField(
             model_name='invoicinginformation',
             name='created_at',

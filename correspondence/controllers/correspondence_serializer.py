@@ -6,8 +6,10 @@ Writable: project_name, month, year, correspondence_type, description,
 Auto: sr_no, deadline_date, delivered_status
 """
 
+from django.db.models import Prefetch
 from rest_framework import serializers
 
+from ..models.attachment import CorrespondenceDocumentAttachment
 from ..models.correspondence import CorrespondenceDocument
 
 _STRIP_ON_WRITE = {
@@ -269,3 +271,68 @@ class CorrespondenceDocumentSerializer(serializers.ModelSerializer):
             flow_direction=flow,
         )
         return CorrespondenceDocument.objects.create(**validated_data)
+
+
+class CorrespondenceDocumentReadSerializer(CorrespondenceDocumentSerializer):
+    attachment_count = serializers.SerializerMethodField()
+    latest_attachment = serializers.SerializerMethodField()
+    attachments = serializers.SerializerMethodField()
+
+    class Meta(CorrespondenceDocumentSerializer.Meta):
+        fields = CorrespondenceDocumentSerializer.Meta.fields + [
+            "attachment_count",
+            "latest_attachment",
+            "attachments",
+        ]
+
+    def _active_attachments(self, obj):
+        prefetched = getattr(obj, "_prefetched_objects_cache", {})
+        if "attachments" in prefetched:
+            return [item for item in prefetched["attachments"] if item.is_active]
+        return list(
+            CorrespondenceDocumentAttachment.objects.filter(
+                correspondence=obj,
+                is_active=True,
+            ).order_by("-uploaded_at", "-document_version")
+        )
+
+    def get_attachment_count(self, obj):
+        count = getattr(obj, "attachment_count", None)
+        if count is not None:
+            return count
+        return len(self._active_attachments(obj))
+
+    def get_latest_attachment(self, obj):
+        attachments = self._active_attachments(obj)
+        if not attachments:
+            return None
+        latest = attachments[0]
+        return {
+            "id": latest.id,
+            "file_name": latest.file_name,
+            "document_type": latest.document_type,
+            "uploaded_at": latest.uploaded_at,
+        }
+
+    def get_attachments(self, obj):
+        if not self.context.get("include_attachments"):
+            return None
+        from services.s3_correspondence_documents import generate_presigned_download_url
+
+        from .attachment_serializer import CorrespondenceAttachmentDetailSerializer
+
+        attachments = self._active_attachments(obj)
+        payload = []
+        for attachment in attachments:
+            attachment._download_url = generate_presigned_download_url(attachment.s3_key)
+            attachment._download_url_expires_in_seconds = 600
+            payload.append(CorrespondenceAttachmentDetailSerializer(attachment).data)
+        return payload
+
+
+ATTACHMENT_PREFETCH = Prefetch(
+    "attachments",
+    queryset=CorrespondenceDocumentAttachment.objects.filter(
+        is_active=True,
+    ).order_by("-uploaded_at", "-document_version"),
+)

@@ -48,6 +48,14 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        migrations.RemoveIndex(
+            model_name="contractperformance",
+            name="contract_pe_project_bb13ca_idx",
+        ),
+        migrations.RemoveIndex(
+            model_name="contractperformance",
+            name="contract_pe_perform_cd5942_idx",
+        ),
 
         # ── Step 1: Rename project_name → projectName ─────────────────────
         migrations.RenameField(
@@ -195,9 +203,9 @@ class Migration(migrations.Migration):
             sql="""
                 DELETE FROM contract_performance_contractperformance
                 WHERE id NOT IN (
-                    SELECT DISTINCT ON ("projectName") id
+                    SELECT MAX(id)
                     FROM contract_performance_contractperformance
-                    ORDER BY "projectName", created_at DESC
+                    GROUP BY "projectName"
                 )
             """,
             reverse_sql=migrations.RunSQL.noop,

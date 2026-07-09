@@ -22,6 +22,22 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        migrations.RemoveConstraint(
+            model_name="contractvalue",
+            name="cv_unique_project_contract_type",
+        ),
+        migrations.RemoveIndex(
+            model_name="contractvalue",
+            name="cv_project_name_idx",
+        ),
+        migrations.RemoveIndex(
+            model_name="contractvalue",
+            name="cv_contract_type_idx",
+        ),
+        migrations.RemoveIndex(
+            model_name="contractvalue",
+            name="cv_project_type_idx",
+        ),
         migrations.RenameField(
             model_name="contractvalue",
             old_name="projectName",
@@ -44,10 +60,6 @@ class Migration(migrations.Migration):
                 "verbose_name": "Contract Value",
                 "verbose_name_plural": "Contract Values",
             },
-        ),
-        migrations.RemoveConstraint(
-            model_name="contractvalue",
-            name="cv_unique_project_contract_type",
         ),
         migrations.AddConstraint(
             model_name="contractvalue",

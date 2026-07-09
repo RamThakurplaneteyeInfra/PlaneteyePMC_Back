@@ -5,6 +5,7 @@ Django admin registration for the Correspondence app.
 from django.contrib import admin
 
 from .models.correspondence import CorrespondenceDocument
+from .models.attachment import CorrespondenceDocumentAttachment
 from .models.inbound_summary import InboundCorrespondenceSummary
 from .models.scl_delivered_summary import SCLDeliveredCorrespondenceSummary
 
@@ -119,3 +120,20 @@ class CorrespondenceDocumentAdmin(admin.ModelAdmin):
             {"fields": ("created_at", "updated_at"), "classes": ("collapse",)},
         ),
     )
+
+
+@admin.register(CorrespondenceDocumentAttachment)
+class CorrespondenceDocumentAttachmentAdmin(admin.ModelAdmin):
+    list_display = [
+        "file_name",
+        "correspondence",
+        "project",
+        "document_version",
+        "document_type",
+        "uploaded_by",
+        "uploaded_at",
+        "is_active",
+    ]
+    list_filter = ["is_active", "document_type", "uploaded_at"]
+    search_fields = ["file_name", "correspondence__project_name", "s3_key"]
+    readonly_fields = ["s3_key", "s3_url", "uploaded_at", "updated_at"]

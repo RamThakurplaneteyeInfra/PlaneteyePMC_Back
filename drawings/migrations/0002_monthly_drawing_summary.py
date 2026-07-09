@@ -48,6 +48,10 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        migrations.RemoveIndex(
+            model_name="drawing",
+            name="drawing_project_name_idx",
+        ),
         migrations.AddField(
             model_name="drawing",
             name="project",
@@ -120,10 +124,6 @@ class Migration(migrations.Migration):
         migrations.AlterUniqueTogether(
             name="drawingsummary",
             unique_together={("project", "month", "year")},
-        ),
-        migrations.RemoveIndex(
-            model_name="drawingsummary",
-            name="drawing_project_name_idx",
         ),
         migrations.AddIndex(
             model_name="drawingsummary",
