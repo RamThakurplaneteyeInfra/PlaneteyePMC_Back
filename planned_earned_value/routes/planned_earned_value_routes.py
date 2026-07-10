@@ -1,15 +1,11 @@
 """
-Planned vs Earned Value URL routes.
+Planned vs Actual URL routes.
 
-  POST   /api/planned-earned-value/
-  GET    /api/planned-earned-value/
-  GET    /api/planned-earned-value/{id}/
-  PUT    /api/planned-earned-value/{id}/
-  PATCH  /api/planned-earned-value/{id}/
-  DELETE /api/planned-earned-value/{id}/
-  GET    /api/planned-earned-value/project/{projectName}/
-  GET    /api/planned-earned-value/project/{projectName}/month/{month}/year/{year}/
-  GET    /api/planned-earned-value/project/{projectName}/year/{year}/summary/
+Primary:
+  /api/planned-vs-actual/
+
+Legacy alias (same ViewSet):
+  /api/planned-earned-value/
 """
 
 from rest_framework.routers import DefaultRouter
@@ -17,6 +13,11 @@ from rest_framework.routers import DefaultRouter
 from ..controllers.planned_earned_value_controller import PlannedEarnedValueViewSet
 
 router = DefaultRouter()
+router.register(
+    r"planned-vs-actual",
+    PlannedEarnedValueViewSet,
+    basename="planned-vs-actual",
+)
 router.register(
     r"planned-earned-value",
     PlannedEarnedValueViewSet,

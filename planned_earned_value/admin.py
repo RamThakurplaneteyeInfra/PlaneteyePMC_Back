@@ -1,7 +1,3 @@
-"""
-Django admin registration for the Planned vs Earned Value app.
-"""
-
 from django.contrib import admin
 
 from .models.planned_earned_value import PlannedEarnedValue
@@ -9,41 +5,33 @@ from .models.planned_earned_value import PlannedEarnedValue
 
 @admin.register(PlannedEarnedValue)
 class PlannedEarnedValueAdmin(admin.ModelAdmin):
-    """Admin view for Planned vs Earned Value records."""
-
     list_display = [
-        "projectName",
-        "value_type",
+        "project_name",
+        "planned_type",
+        "contractor_name",
         "month",
         "year",
-        "plannedValue",
-        "earnedValue",
-        "variance",
-        "variancePercentage",
-        "performancePercentage",
-        "created_at",
+        "planned_value",
+        "actual_value",
+        "collection",
+        "difference",
+        "variance_status",
         "updated_at",
     ]
-    list_filter = ["value_type", "year", "month", "created_at"]
-    search_fields = ["projectName"]
+    list_filter = ["planned_type", "year", "month", "variance_status"]
+    search_fields = [
+        "project_name",
+        "contractor_name",
+        "reason_for_difference",
+        "remarks",
+    ]
     readonly_fields = [
-        "variance",
-        "variancePercentage",
-        "performancePercentage",
+        "difference",
+        "achievement_percentage",
+        "collection_percentage",
+        "variance_percentage",
+        "variance_status",
         "created_at",
         "updated_at",
     ]
-    ordering = ["projectName", "year", "month", "value_type"]
-
-    fieldsets = (
-        ("Project & Period", {"fields": ("projectName", "value_type", "month", "year")}),
-        ("Input Values", {"fields": ("plannedValue", "earnedValue")}),
-        (
-            "Auto-Calculated KPIs",
-            {"fields": ("variance", "variancePercentage", "performancePercentage")},
-        ),
-        (
-            "Timestamps",
-            {"fields": ("created_at", "updated_at"), "classes": ("collapse",)},
-        ),
-    )
+    ordering = ["project_name", "year", "month", "planned_type"]

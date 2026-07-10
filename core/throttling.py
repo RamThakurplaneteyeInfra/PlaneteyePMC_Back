@@ -64,6 +64,7 @@ FINANCIAL_API_PREFIXES = (
     "/api/cost-performance",
     "/api/cashflow",
     "/api/planned-earned-value",
+    "/api/planned-vs-actual",
     "/api/contract-performance",
 )
 

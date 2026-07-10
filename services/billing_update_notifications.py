@@ -37,7 +37,8 @@ class BillingModule:
     BUDGET_PERFORMANCE = "Budget Performance"
     COST_PERFORMANCE = "Cost Performance"
     CASH_FLOW = "Cash Flow"
-    PLANNED_EARNED_VALUE = "Planned Earned Value"
+    PLANNED_EARNED_VALUE = "Planned vs Actual"
+    PLANNED_VS_ACTUAL = "Planned vs Actual"
     CONTRACT_PERFORMANCE = "Contract Performance"
 
 
