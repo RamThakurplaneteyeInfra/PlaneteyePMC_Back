@@ -13,6 +13,7 @@ class Project(models.Model):
         ('active', 'Active'),
         ('completed', 'Completed'),
         ('on_hold', 'On Hold'),
+        ('merged', 'Merged into another project'),
     ]
 
     name = models.CharField(max_length=255, db_index=True)
@@ -58,6 +59,14 @@ class Project(models.Model):
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_projects')
 
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='planning', db_index=True)
+    merged_into = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='merged_duplicates',
+        help_text='If status=merged, the surviving project this record was merged into',
+    )
     start_date = models.DateField(null=True, blank=True) # Keeping for compatibility
     end_date = models.DateField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)

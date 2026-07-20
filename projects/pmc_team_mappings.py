@@ -12,7 +12,7 @@ TL_PROJECT_MAPPINGS: list[tuple[str, str]] = [
     ("pmc_tl9", "FOX SAGAR – Hyderabad"),
     ("pmc_tl10", "Mayapur Flyover"),
     ("pmc_tl11", "Nongstoin-Rambrai Road, Meghalaya (NHIDCL)"),
-    ("pmc_tl12", "Multi-Modal Transit Hub – Thane (TSCL)"),
+    ("pmc_tl12", "Satis Thane"),
     ("pmc_tl13", "4-Lane ROB – Rawanfonda, Margao, Goa (GSIDC)"),
     ("pmc_tl14", "New Promenade – Margao, Goa (GSIDC)"),
     ("pmc_tl15", "Police HSG at MIDC Metro Station (MMRCL)"),
