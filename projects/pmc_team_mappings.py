@@ -10,7 +10,7 @@ TL_PROJECT_MAPPINGS: list[tuple[str, str]] = [
     ("pmc_tl7", "KBR Park -I Flyover – Hyderabad (GHMC)"),
     ("pmc_tl8", "KBR Park -II Flyover – Hyderabad (GHMC)"),
     ("pmc_tl9", "FOX SAGAR – Hyderabad"),
-    ("pmc_tl10", "Mayapur Flyover"),
+    ("pmc_tl10", "Miyapur Flyover"),
     ("pmc_tl11", "Nongstoin-Rambrai Road, Meghalaya (NHIDCL)"),
     ("pmc_tl12", "Satis Thane"),
     ("pmc_tl13", "4-Lane ROB – Rawanfonda, Margao, Goa (GSIDC)"),

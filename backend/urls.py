@@ -153,6 +153,9 @@ urlpatterns = [
 
     # Meeting Documents (MoM / EDL) stored in private S3
     path('api/', include('meeting_documents.urls')),
+
+    # Testing Documents (PDF / image / video) stored in private S3 under testing/
+    path('api/', include('testing_documents.urls')),
 ]
 
 if settings.DEBUG:

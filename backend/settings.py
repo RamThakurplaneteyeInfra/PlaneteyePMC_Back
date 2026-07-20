@@ -84,6 +84,7 @@ INSTALLED_APPS = [
     'site_images.apps.SiteImagesConfig',
     'bottlenecks',
     'meeting_documents',
+    'testing_documents',
 ]
 
 MIDDLEWARE = [
