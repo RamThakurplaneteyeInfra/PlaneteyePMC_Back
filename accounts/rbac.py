@@ -174,10 +174,28 @@ def get_user_assigned_project_names(user) -> set[str]:
     return set(get_user_assigned_projects_qs(user).values_list("name", flat=True))
 
 
-def resolve_project(name: str | None) -> Project | None:
+def resolve_project(name: str | None, user=None) -> Project | None:
+    """
+    Resolve a Project by name.
+
+    When *user* is provided, prefer a project that user is assigned to
+    (case-insensitive). This avoids false denials when duplicate project
+    rows exist that differ only by casing (e.g. "Khb …" vs "KHB …").
+    """
     name = normalize_project_name(name)
     if not name:
         return None
+
+    if user is not None and getattr(user, "is_authenticated", False) and not is_admin_user(user):
+        assigned = (
+            get_user_assigned_projects_qs(user)
+            .filter(name__iexact=name)
+            .order_by("id")
+            .first()
+        )
+        if assigned is not None:
+            return assigned
+
     project = Project.objects.filter(name=name).first()
     if project:
         return project
@@ -192,6 +210,8 @@ def resolve_project(name: str | None) -> Project | None:
             or project.billing_site_engineer_id
             or project.pmc_head_id
             or project.site_engineer_id
+            or project.qaqc_site_engineer_id
+            or getattr(project, "hse_site_engineer_id", None)
         ):
             return project
     return matches[0]
@@ -208,7 +228,7 @@ def user_has_project_access(user, project: Project | None) -> bool:
 def user_has_project_name_access(user, project_name: str | None) -> bool:
     if not project_name:
         return is_admin_user(user)
-    project = resolve_project(project_name)
+    project = resolve_project(project_name, user=user)
     if project is not None and user_has_project_access(user, project):
         return True
     if is_admin_user(user):

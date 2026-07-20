@@ -63,7 +63,7 @@ def enforce_project_write_by_name(
     project_name: str | None,
     domain: str = RBACDomain.GENERAL,
 ) -> None:
-    project = resolve_project(project_name)
+    project = resolve_project(project_name, user=user)
     if project is None or not user_has_project_access(user, project):
         assigned = None
         if project_name:

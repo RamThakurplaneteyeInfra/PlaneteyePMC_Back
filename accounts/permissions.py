@@ -43,7 +43,7 @@ class IsAuthenticatedProjectRBAC(BasePermission):
             or extract_project_name_from_data(request.data)
         )
         if project_name:
-            return resolve_project(normalize_project_name(project_name))
+            return resolve_project(normalize_project_name(project_name), user=request.user)
 
         pk = view.kwargs.get("pk") or view.kwargs.get("project_pk")
         if pk and hasattr(view, "queryset") and view.queryset is not None:
