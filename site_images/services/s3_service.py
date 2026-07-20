@@ -94,15 +94,14 @@ def upload_image(uploaded_file, *, folder: str) -> dict:
     logger.info("S3 upload start: file=%s key=%s bucket=%s", file_name, object_key, bucket)
 
     uploaded_file.seek(0)
-    body = uploaded_file.read()
-
     client = get_s3_client()
     try:
-        client.put_object(
-            Bucket=bucket,
-            Key=object_key,
-            Body=body,
-            ContentType=content_type,
+        # Stream upload — avoids loading the full file into memory.
+        client.upload_fileobj(
+            uploaded_file,
+            bucket,
+            object_key,
+            ExtraArgs={"ContentType": content_type},
         )
     except Exception as exc:
         logger.exception(

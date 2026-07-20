@@ -26,6 +26,7 @@ ROLE_TEAM_LEAD_ALIAS = "Team Lead"
 ROLE_SITE_ENGINEER = "Site Engineer"
 ROLE_BILLING_SITE_ENGINEER = "Billing Site Engineer"
 ROLE_QAQC_SITE_ENGINEER = "QAQC Site Engineer"
+ROLE_HSE_SITE_ENGINEER = "HSE Site Engineer"
 
 ADMIN_ROLES = {ROLE_CEO, ROLE_PMC_HEAD, ROLE_COORDINATOR}
 
@@ -33,6 +34,7 @@ SITE_ENGINEER_ROLES = {
     ROLE_SITE_ENGINEER,
     ROLE_BILLING_SITE_ENGINEER,
     ROLE_QAQC_SITE_ENGINEER,
+    ROLE_HSE_SITE_ENGINEER,
 }
 
 ALL_PROJECT_ROLES = ADMIN_ROLES | SITE_ENGINEER_ROLES | {ROLE_TEAM_LEADER, ROLE_TEAM_LEAD_ALIAS}
@@ -63,7 +65,12 @@ WRITE_ROLES_BY_DOMAIN: dict[str, set[str]] = {
     RBACDomain.ENGINEERING: ADMIN_ROLES | {ROLE_TEAM_LEADER, ROLE_SITE_ENGINEER},
     RBACDomain.BILLING: ADMIN_ROLES | {ROLE_TEAM_LEADER, ROLE_BILLING_SITE_ENGINEER},
     RBACDomain.FINANCIAL: ADMIN_ROLES | {ROLE_TEAM_LEADER, ROLE_BILLING_SITE_ENGINEER},
-    RBACDomain.QAQC: ADMIN_ROLES | {ROLE_TEAM_LEADER, ROLE_QAQC_SITE_ENGINEER},
+    # HSE Site Engineer can write health & safety (same domain as QA/QC).
+    RBACDomain.QAQC: ADMIN_ROLES | {
+        ROLE_TEAM_LEADER,
+        ROLE_QAQC_SITE_ENGINEER,
+        ROLE_HSE_SITE_ENGINEER,
+    },
 }
 
 # Roles allowed to READ per domain (assigned to project + role in set)
@@ -152,6 +159,7 @@ def get_user_assigned_projects_qs(user) -> QuerySet:
         | Q(site_engineers=user)
         | Q(billing_site_engineer=user)
         | Q(qaqc_site_engineer=user)
+        | Q(hse_site_engineer=user)
         | Q(coordinators=user)
         | Q(pmc_head=user)
         | Q(assigned_users=user)
@@ -251,11 +259,15 @@ def filter_queryset_by_project_access(
     if project_name_field == "project__name":
         return queryset.filter(project__name__in=names)
 
-    # Case-insensitive match for string project_name fields
-    q = Q()
-    for name in names:
-        q |= Q(**{f"{project_name_field}__iexact": name})
-    return queryset.filter(q)
+    # Case-insensitive match without building a giant OR of __iexact clauses.
+    # Lower(field)__in preserves the same visibility as per-name iexact matching.
+    from django.db.models.functions import Lower
+
+    lowered = {str(name).lower() for name in names}
+    alias_name = "_rbac_project_name_lower"
+    return queryset.alias(**{alias_name: Lower(project_name_field)}).filter(
+        **{f"{alias_name}__in": lowered}
+    )
 
 
 def resolve_project_for_instance(obj, user=None) -> Project | None:

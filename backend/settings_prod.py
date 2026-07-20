@@ -71,9 +71,11 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedStaticFilesStorage'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
-# Site image uploads: up to 20 × 10 MB (+ multipart overhead)
-DATA_UPLOAD_MAX_MEMORY_SIZE = 262144000  # 250 MB
-FILE_UPLOAD_MAX_MEMORY_SIZE = 262144000
+# Site image uploads: up to 20 × 10 MB (+ multipart overhead).
+# Keep total request body limit high so existing large uploads still succeed.
+# Cap per-file in-memory buffering so large files spill to TemporaryUploadedFile.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 262144000  # 250 MB (unchanged total request limit)
+FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024  # 5 MB → TemporaryUploadedFile above this
 
 # ================= MIDDLEWARE (order matters for CORS + static) =================
 _EXCLUDED_MIDDLEWARE = {

@@ -41,6 +41,10 @@ class Command(BaseCommand):
                 'name': 'QAQC Site Engineer',
                 'description': 'QAQC Site Engineer - Quality Assurance and Quality Control'
             },
+            {
+                'name': 'HSE Site Engineer',
+                'description': 'HSE Site Engineer - Health, Safety & Environment'
+            },
         ]
 
         created_count = 0

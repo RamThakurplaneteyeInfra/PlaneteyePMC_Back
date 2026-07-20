@@ -3,8 +3,6 @@ Cash-in vs cash-out API: monthly plan/actual, cumulatives, dashboard for charts.
 """
 
 from django.core.cache import cache
-from django.utils.decorators import method_decorator
-from django.views.decorators.cache import cache_page
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status, viewsets
@@ -20,6 +18,7 @@ from accounts.rbac_checks import (
     enforce_project_access_by_name,
     enforce_project_write_by_name,
 )
+from core.cache_keys import build_rbac_list_cache_key, invalidate_list_cache
 
 from .models import CashFlow
 from services.billing_update_notifications import (
@@ -125,6 +124,9 @@ class CashFlowViewSet(viewsets.ModelViewSet):
             if pn:
                 qs = qs.filter(project_name__iexact=pn.strip())
 
+            # Always enforce project RBAC before returning (no unrestricted path).
+            qs = apply_project_rbac_to_queryset(qs, self.request, "project_name")
+
             # Use database-level ordering to match original chronological sorting
             # Extract year and month from "Mon-YYYY" format for proper ordering
             return qs.extra(
@@ -140,13 +142,17 @@ class CashFlowViewSet(viewsets.ModelViewSet):
         return apply_project_rbac_to_queryset(qs, self.request, "project_name")
 
     def _get_cache_key(self, request):
-        """Generate cache key based on project_name filter."""
-        pn = request.query_params.get("project_name", "").strip()
-        return f"cashflow_list:{pn or 'all'}"
+        """Generate RBAC-aware cache key based on query params."""
+        return build_rbac_list_cache_key("cashflow_list", request)
 
-    def _get_dashboard_cache_key(self, project_name):
-        """Generate cache key for dashboard endpoint."""
-        return f"cashflow_dashboard:{project_name}"
+    def _get_dashboard_cache_key(self, request, project_name):
+        """Generate RBAC-aware cache key for dashboard endpoint."""
+        return build_rbac_list_cache_key(
+            "cashflow_dashboard",
+            request,
+            extra_parts=[f"pn:{(project_name or '').strip().lower()}"],
+            use_query_string=False,
+        )
 
     @swagger_auto_schema(
         tags=swagger_tags,
@@ -172,6 +178,8 @@ class CashFlowViewSet(viewsets.ModelViewSet):
         )
 
         # Cache invalidation: clear relevant cache keys after creation
+        invalidate_list_cache("cashflow_list")
+        invalidate_list_cache("cashflow_dashboard")
         project_name = ser.validated_data.get('project_name', '').strip()
         cache.delete(f"cashflow_list:{project_name or 'all'}")
         cache.delete(f"cashflow_dashboard:{project_name}")
@@ -183,6 +191,8 @@ class CashFlowViewSet(viewsets.ModelViewSet):
         )
 
     def _invalidate_cashflow_cache(self, project_name: str) -> None:
+        invalidate_list_cache("cashflow_list")
+        invalidate_list_cache("cashflow_dashboard")
         pn = (project_name or "").strip()
         cache.delete(f"cashflow_list:{pn or 'all'}")
         cache.delete(f"cashflow_dashboard:{pn}")
@@ -254,21 +264,29 @@ class CashFlowViewSet(viewsets.ModelViewSet):
         ],
         responses={200: CashFlowSerializer(many=True)},
     )
-    @method_decorator(cache_page(300))  # 5 minutes cache
     def list(self, request, *args, **kwargs):
         """
         Cached list endpoint with pagination.
         Uses database-level sorting instead of Python sorting.
         """
+        cache_key = self._get_cache_key(request)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+
         queryset = self.filter_queryset(self.get_queryset())
         page = self.paginate_queryset(queryset)
 
         if page is not None:
             serializer = self.get_serializer(page, many=True)
-            return self.get_paginated_response(serializer.data)
+            response = self.get_paginated_response(serializer.data)
+            cache.set(cache_key, response.data, 300)
+            return response
 
         serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data)
+        payload = serializer.data
+        cache.set(cache_key, payload, 300)
+        return Response(payload)
 
     @swagger_auto_schema(auto_schema=None)
     def retrieve(self, request, *args, **kwargs):
@@ -362,7 +380,7 @@ class CashFlowViewSet(viewsets.ModelViewSet):
         enforce_project_access_by_name(request.user, pn)
 
         # Check cache first
-        cache_key = self._get_dashboard_cache_key(pn)
+        cache_key = self._get_dashboard_cache_key(request, pn)
         cached_response = cache.get(cache_key)
         if cached_response is not None:
             return Response(cached_response)

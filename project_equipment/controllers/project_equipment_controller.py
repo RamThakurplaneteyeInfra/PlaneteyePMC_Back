@@ -45,6 +45,8 @@ from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
+from core.cache_keys import build_rbac_list_cache_key, invalidate_list_cache
+
 from ..models.project_equipment import ProjectEquipment
 from .project_equipment_serializer import ProjectEquipmentSerializer
 
@@ -230,7 +232,7 @@ class ProjectEquipmentViewSet(viewsets.ModelViewSet):
     # -------------------------------------------------------------------------
 
     def _invalidate_cache(self):
-        cache.delete(_CACHE_KEY_LIST)
+        invalidate_list_cache(_CACHE_KEY_LIST)
 
     def _success(self, message: str, data, http_status=status.HTTP_200_OK):
         return Response(
@@ -330,9 +332,10 @@ class ProjectEquipmentViewSet(viewsets.ModelViewSet):
         search_filter = request.query_params.get("search")
         page_param = request.query_params.get("page", "1")
         use_cache = not any([project_filter, month_filter, search_filter]) and page_param == "1"
+        cache_key = build_rbac_list_cache_key(_CACHE_KEY_LIST, request)
 
         if use_cache:
-            cached = cache.get(_CACHE_KEY_LIST)
+            cached = cache.get(cache_key)
             if cached is not None:
                 return Response(cached)
 
@@ -348,7 +351,7 @@ class ProjectEquipmentViewSet(viewsets.ModelViewSet):
                 "data": paginated.data,
             }
             if use_cache:
-                cache.set(_CACHE_KEY_LIST, payload, _CACHE_TIMEOUT)
+                cache.set(cache_key, payload, _CACHE_TIMEOUT)
             return Response(payload)
 
         serializer = ProjectEquipmentSerializer(queryset, many=True)
@@ -358,7 +361,7 @@ class ProjectEquipmentViewSet(viewsets.ModelViewSet):
             "data": serializer.data,
         }
         if use_cache:
-            cache.set(_CACHE_KEY_LIST, payload, _CACHE_TIMEOUT)
+            cache.set(cache_key, payload, _CACHE_TIMEOUT)
         return Response(payload)
 
     # -------------------------------------------------------------------------

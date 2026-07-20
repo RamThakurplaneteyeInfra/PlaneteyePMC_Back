@@ -1,4 +1,6 @@
 # Health & Safety Models
+from decimal import Decimal
+
 from django.db import models
 from django.core.validators import MinValueValidator
 from django.core.exceptions import ValidationError
@@ -274,10 +276,12 @@ class HealthSafetyRecord(models.Model):
     One record per (project_name, month, year).
     Yearly totals are aggregated dynamically — never stored.
 
-    Computed properties (not stored):
-      - total_incidents  = fatalities + significant + major + minor + near_miss
-      - ltifr            = (loss_of_manhours / total_manhours) * 1,000,000
-      - incident_rate    = (total_incidents / total_manhours) * 1,000,000
+    Computed / auto-updated:
+      - man_days_worked       = average_daily_manpower × working_days
+      - man_hours_worked      = man_days_worked × 8  (also syncs total_manhours)
+      - medical_checkup_total = medical_checkup_workers + medical_checkup_staff
+      - total_incidents       = fatalities + significant + major + minor + near_miss
+      - ltifr / incident_rate from manhours
     """
 
     # -------------------------------------------------------------------------
@@ -298,7 +302,7 @@ class HealthSafetyRecord(models.Model):
     )
 
     # -------------------------------------------------------------------------
-    # Incident counts
+    # Incident counts (legacy severity pyramid — preserved)
     # -------------------------------------------------------------------------
     fatalities = models.PositiveIntegerField(
         default=0,
@@ -327,7 +331,7 @@ class HealthSafetyRecord(models.Model):
     )
 
     # -------------------------------------------------------------------------
-    # Manhour data
+    # Manhour data (legacy fields — preserved; total_manhours synced from stats)
     # -------------------------------------------------------------------------
     total_manhours = models.DecimalField(
         max_digits=14,
@@ -341,7 +345,106 @@ class HealthSafetyRecord(models.Model):
         decimal_places=2,
         default=0,
         validators=[MinValueValidator(0)],
-        help_text="Manhours lost due to incidents this month",
+        help_text="Manhours lost due to incidents this month (Man Hours Lost)",
+    )
+
+    # -------------------------------------------------------------------------
+    # Monthly Health & Safety Statistics
+    # -------------------------------------------------------------------------
+    average_daily_manpower = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Average daily manpower for the month",
+    )
+    working_days = models.PositiveIntegerField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Working days in the month (must be > 0 when entering manpower stats)",
+    )
+    man_days_worked = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Auto: average_daily_manpower × working_days",
+    )
+    man_hours_worked = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Auto: man_days_worked × 8 (synced to total_manhours)",
+    )
+    reportable_accident_lti = models.PositiveIntegerField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Reportable accidents (LTI) this month",
+    )
+    dangerous_occurrences = models.PositiveIntegerField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Dangerous occurrences this month",
+    )
+    first_aid_cases = models.PositiveIntegerField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="First aid cases this month",
+    )
+    medical_treatment_cases = models.PositiveIntegerField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Medical treatment cases this month",
+    )
+    utility_damage = models.PositiveIntegerField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Utility damage incidences this month",
+    )
+    internal_training_count = models.PositiveIntegerField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Internal training sessions count",
+    )
+    internal_training_hours = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Internal training hours",
+    )
+    external_training_count = models.PositiveIntegerField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="External training sessions count",
+    )
+    external_training_hours = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="External training hours",
+    )
+    mock_drills = models.PositiveIntegerField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Mock drills conducted this month",
+    )
+    medical_checkup_workers = models.PositiveIntegerField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Medical checkups — workers",
+    )
+    medical_checkup_staff = models.PositiveIntegerField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Medical checkups — staff",
+    )
+    medical_checkup_total = models.PositiveIntegerField(
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text="Auto: medical_checkup_workers + medical_checkup_staff",
     )
 
     # -------------------------------------------------------------------------
@@ -349,6 +452,25 @@ class HealthSafetyRecord(models.Model):
     # -------------------------------------------------------------------------
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    # =========================================================================
+    # Auto calculations
+    # =========================================================================
+
+    def recalculate_statistics(self) -> None:
+        """Update derived monthly statistics fields in memory."""
+        adm = self.average_daily_manpower if self.average_daily_manpower is not None else Decimal("0")
+        days = self.working_days if self.working_days is not None else 0
+        # Only drive man-day / man-hour calcs when working_days > 0
+        if days > 0:
+            self.man_days_worked = (Decimal(adm) * Decimal(days)).quantize(Decimal("0.01"))
+            self.man_hours_worked = (self.man_days_worked * Decimal("8")).quantize(Decimal("0.01"))
+            # Keep legacy total_manhours in sync for LTIFR / incident_rate
+            self.total_manhours = self.man_hours_worked
+
+        workers = self.medical_checkup_workers or 0
+        staff = self.medical_checkup_staff or 0
+        self.medical_checkup_total = workers + staff
 
     # =========================================================================
     # Validation
@@ -362,6 +484,9 @@ class HealthSafetyRecord(models.Model):
 
         if self.year is not None and not (2000 <= self.year <= 2100):
             errors["year"] = "year must be between 2000 and 2100."
+
+        # Recalc before cross-field checks so loss vs total stays consistent
+        self.recalculate_statistics()
 
         if (
             self.loss_of_manhours is not None
@@ -379,6 +504,7 @@ class HealthSafetyRecord(models.Model):
     def save(self, *args, **kwargs):
         if self.project_name:
             self.project_name = self.project_name.strip()
+        self.recalculate_statistics()
         self.full_clean()
         super().save(*args, **kwargs)
 

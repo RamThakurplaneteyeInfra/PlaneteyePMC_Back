@@ -1,4 +1,4 @@
-"""Shared PMC Team Leader ↔ project name mappings (23 projects)."""
+"""Shared PMC Team Leader ↔ project name mappings."""
 
 TL_PROJECT_MAPPINGS: list[tuple[str, str]] = [
     ("pmc_tl1", "KHB Multiplex, Kengeri (A-3462)"),
@@ -24,4 +24,6 @@ TL_PROJECT_MAPPINGS: list[tuple[str, str]] = [
     ("pmc_tl21", "Uppal Hyderabad"),
     ("pmc_tl22", "Avissa G+40, Mahim"),
     ("pmc_tl23", "Shivalik Building Santacruz"),
+    ("pmc_tl24", "AVISSA"),
+    ("pmc_tl25", "SHIVALIKA"),
 ]

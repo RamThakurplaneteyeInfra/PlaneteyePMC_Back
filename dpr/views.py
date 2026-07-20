@@ -23,6 +23,7 @@ from accounts.rbac_checks import (
     enforce_project_write_by_name,
     site_engineer_cannot_delete_approved_dpr,
 )
+from core.cache_keys import build_rbac_list_cache_key, invalidate_list_cache
 
 import logging
 logger = logging.getLogger(__name__)
@@ -30,15 +31,17 @@ logger = logging.getLogger(__name__)
 
 def safe_cache_delete_pattern(pattern):
     """
-    Safely delete cache patterns, handling backends that don't support delete_pattern
+    Safely invalidate DPR list caches across LocMem and Redis backends.
     """
+    prefix = pattern.rstrip("*").rstrip(":")
+    if prefix in {"dpr_list", "dpr_pending_approval", "dpr_rejected"}:
+        invalidate_list_cache(prefix)
+        return
     try:
         if isinstance(cache, LocMemCache):
-            # For LocMemCache, we can't delete patterns, so we'll skip
             return
         cache.delete_pattern(pattern)
     except AttributeError:
-        # If delete_pattern is not supported, skip silently
         pass
 
 
@@ -107,7 +110,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         responses={200: DailyProgressReportSerializer(many=True)}
     )
     def list(self, request, *args, **kwargs):
-        cache_key = f"dpr_list:{request.get_full_path()}"
+        cache_key = build_rbac_list_cache_key("dpr_list", request)
         data = cache.get(cache_key)
         if data is not None:
             return Response(data)
@@ -755,7 +758,12 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        cache_key = f"dpr_pending_approval:{role}"
+        cache_key = build_rbac_list_cache_key(
+            "dpr_pending_approval",
+            request,
+            extra_parts=[f"role:{role}"],
+            use_query_string=False,
+        )
         data = cache.get(cache_key)
         if data is not None:
             return Response(data)
@@ -818,7 +826,12 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        cache_key = f"dpr_rejected:{role}"
+        cache_key = build_rbac_list_cache_key(
+            "dpr_rejected",
+            request,
+            extra_parts=[f"role:{role}"],
+            use_query_string=False,
+        )
         data = cache.get(cache_key)
         if data is not None:
             return Response(data)

@@ -17,6 +17,8 @@ from accounts.rbac_checks import (
     enforce_project_write_by_name,
 )
 
+from core.cache_keys import build_rbac_list_cache_key, invalidate_list_cache
+
 from .models import HealthSafetyReport
 from .serializers import HealthSafetyReportSerializer, HealthSafetyInputSerializer
 from .services import calculate_health_safety_status, validate_input
@@ -280,7 +282,10 @@ class HealthSafetyReportViewSet(viewsets.ModelViewSet):
         )
 
     def list(self, request, *args, **kwargs):
-        cache_key = f"health_safety_reports:{request.get_full_path()}"
+        cache_key = build_rbac_list_cache_key(
+            "health_safety_reports",
+            request,
+        )
         data = cache.get(cache_key)
         if data is not None:
             return Response(data)
@@ -294,16 +299,7 @@ class HealthSafetyReportViewSet(viewsets.ModelViewSet):
         Safely invalidate health & safety cache.
         Works with LocMemCache (development) and Redis (production).
         """
-        try:
-            if hasattr(cache, 'delete_pattern'):
-                cache.delete_pattern("health_safety_reports:*")
-            else:
-                cache.clear()
-        except Exception:
-            try:
-                cache.clear()
-            except Exception:
-                pass
+        invalidate_list_cache("health_safety_reports")
 
     def perform_create(self, serializer):
         super().perform_create(serializer)
@@ -506,7 +502,7 @@ class HSERecordViewSet(viewsets.ModelViewSet):
 
     def _invalidate_cache(self):
         """Invalidate the list cache whenever data changes."""
-        cache.delete(_HSE_CACHE_KEY_LIST)
+        invalidate_list_cache(_HSE_CACHE_KEY_LIST)
 
     def _success(self, message: str, data, http_status=status.HTTP_200_OK):
         """Uniform success response: {success, message, data}."""
@@ -645,9 +641,10 @@ class HSERecordViewSet(viewsets.ModelViewSet):
         project_filter = request.query_params.get("project_name")
         page_param = request.query_params.get("page", "1")
         use_cache = not project_filter and page_param == "1"
+        cache_key = build_rbac_list_cache_key(_HSE_CACHE_KEY_LIST, request)
 
         if use_cache:
-            cached = cache.get(_HSE_CACHE_KEY_LIST)
+            cached = cache.get(cache_key)
             if cached is not None:
                 return Response(cached)
 
@@ -663,7 +660,7 @@ class HSERecordViewSet(viewsets.ModelViewSet):
                 "data": paginated.data,
             }
             if use_cache:
-                cache.set(_HSE_CACHE_KEY_LIST, payload, _HSE_CACHE_TIMEOUT)
+                cache.set(cache_key, payload, _HSE_CACHE_TIMEOUT)
             return Response(payload)
 
         serializer = HSERecordSerializer(queryset, many=True)
@@ -673,7 +670,7 @@ class HSERecordViewSet(viewsets.ModelViewSet):
             "data": serializer.data,
         }
         if use_cache:
-            cache.set(_HSE_CACHE_KEY_LIST, payload, _HSE_CACHE_TIMEOUT)
+            cache.set(cache_key, payload, _HSE_CACHE_TIMEOUT)
         return Response(payload)
 
     # -------------------------------------------------------------------------
@@ -866,7 +863,7 @@ MONTH_NAMES = {
 
 
 def _record_data(record: HealthSafetyRecord) -> dict:
-    """Return core monthly HSE fields for API responses."""
+    """Return core monthly HSE fields for API responses (backward-compatible + stats)."""
     return {
         "month": record.month,
         "year": record.year,
@@ -877,6 +874,23 @@ def _record_data(record: HealthSafetyRecord) -> dict:
         "near_miss": record.near_miss,
         "total_manhours": record.total_manhours,
         "loss_of_manhours": record.loss_of_manhours,
+        "average_daily_manpower": record.average_daily_manpower,
+        "working_days": record.working_days,
+        "man_days_worked": record.man_days_worked,
+        "man_hours_worked": record.man_hours_worked,
+        "reportable_accident_lti": record.reportable_accident_lti,
+        "dangerous_occurrences": record.dangerous_occurrences,
+        "first_aid_cases": record.first_aid_cases,
+        "medical_treatment_cases": record.medical_treatment_cases,
+        "utility_damage": record.utility_damage,
+        "internal_training_count": record.internal_training_count,
+        "internal_training_hours": record.internal_training_hours,
+        "external_training_count": record.external_training_count,
+        "external_training_hours": record.external_training_hours,
+        "mock_drills": record.mock_drills,
+        "medical_checkup_workers": record.medical_checkup_workers,
+        "medical_checkup_staff": record.medical_checkup_staff,
+        "medical_checkup_total": record.medical_checkup_total,
     }
 
 
@@ -893,6 +907,29 @@ def _aggregate_records(queryset) -> dict:
         near_miss=Coalesce(Sum("near_miss"), Value(0)),
         total_manhours=Coalesce(Sum("total_manhours"), Value(Decimal("0.00"))),
         loss_of_manhours=Coalesce(Sum("loss_of_manhours"), Value(Decimal("0.00"))),
+        average_daily_manpower=Coalesce(
+            Sum("average_daily_manpower"), Value(Decimal("0.00"))
+        ),
+        working_days=Coalesce(Sum("working_days"), Value(0)),
+        man_days_worked=Coalesce(Sum("man_days_worked"), Value(Decimal("0.00"))),
+        man_hours_worked=Coalesce(Sum("man_hours_worked"), Value(Decimal("0.00"))),
+        reportable_accident_lti=Coalesce(Sum("reportable_accident_lti"), Value(0)),
+        dangerous_occurrences=Coalesce(Sum("dangerous_occurrences"), Value(0)),
+        first_aid_cases=Coalesce(Sum("first_aid_cases"), Value(0)),
+        medical_treatment_cases=Coalesce(Sum("medical_treatment_cases"), Value(0)),
+        utility_damage=Coalesce(Sum("utility_damage"), Value(0)),
+        internal_training_count=Coalesce(Sum("internal_training_count"), Value(0)),
+        internal_training_hours=Coalesce(
+            Sum("internal_training_hours"), Value(Decimal("0.00"))
+        ),
+        external_training_count=Coalesce(Sum("external_training_count"), Value(0)),
+        external_training_hours=Coalesce(
+            Sum("external_training_hours"), Value(Decimal("0.00"))
+        ),
+        mock_drills=Coalesce(Sum("mock_drills"), Value(0)),
+        medical_checkup_workers=Coalesce(Sum("medical_checkup_workers"), Value(0)),
+        medical_checkup_staff=Coalesce(Sum("medical_checkup_staff"), Value(0)),
+        medical_checkup_total=Coalesce(Sum("medical_checkup_total"), Value(0)),
     )
 
     return {
@@ -903,8 +940,24 @@ def _aggregate_records(queryset) -> dict:
         "near_miss": agg["near_miss"],
         "total_manhours": agg["total_manhours"],
         "loss_of_manhours": agg["loss_of_manhours"],
+        "average_daily_manpower": agg["average_daily_manpower"],
+        "working_days": agg["working_days"],
+        "man_days_worked": agg["man_days_worked"],
+        "man_hours_worked": agg["man_hours_worked"],
+        "reportable_accident_lti": agg["reportable_accident_lti"],
+        "dangerous_occurrences": agg["dangerous_occurrences"],
+        "first_aid_cases": agg["first_aid_cases"],
+        "medical_treatment_cases": agg["medical_treatment_cases"],
+        "utility_damage": agg["utility_damage"],
+        "internal_training_count": agg["internal_training_count"],
+        "internal_training_hours": agg["internal_training_hours"],
+        "external_training_count": agg["external_training_count"],
+        "external_training_hours": agg["external_training_hours"],
+        "mock_drills": agg["mock_drills"],
+        "medical_checkup_workers": agg["medical_checkup_workers"],
+        "medical_checkup_staff": agg["medical_checkup_staff"],
+        "medical_checkup_total": agg["medical_checkup_total"],
     }
-
 
 class HealthSafetyRecordPagination(PageNumberPagination):
     page_size = 20

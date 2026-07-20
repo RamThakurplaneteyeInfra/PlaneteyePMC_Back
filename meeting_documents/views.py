@@ -4,7 +4,7 @@ import logging
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
-from django.db.models import Max, Q, Sum
+from django.db.models import Count, Max, Q, Sum
 from django.utils import timezone
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
@@ -480,23 +480,24 @@ class MeetingDocumentViewSet(viewsets.ModelViewSet):
             "title",
             "-document_version",
         )
-        grouped = {"MOM": [], "EDL": []}
-        seen = set()
-        for doc in base_qs:
+        # One query: group versions in memory (avoids N+1 older_versions lookups).
+        from collections import OrderedDict
+
+        version_groups: OrderedDict = OrderedDict()
+        for doc in base_qs.select_related(
+            "project", "uploaded_by", "created_by", "updated_by"
+        ):
             key = (doc.meeting_type, doc.meeting_number, doc.title)
-            item = MeetingDocumentSerializer(doc).data
-            if key not in seen:
-                item["is_latest_version"] = True
-                item["older_versions"] = MeetingDocumentSerializer(
-                    base_qs.filter(
-                        meeting_type=doc.meeting_type,
-                        meeting_number=doc.meeting_number,
-                        title=doc.title,
-                    ).exclude(pk=doc.pk),
-                    many=True,
-                ).data
-                grouped[doc.meeting_type].append(item)
-                seen.add(key)
+            version_groups.setdefault(key, []).append(doc)
+
+        grouped = {"MOM": [], "EDL": []}
+        for versions in version_groups.values():
+            latest = versions[0]
+            older = versions[1:]
+            item = MeetingDocumentSerializer(latest).data
+            item["is_latest_version"] = True
+            item["older_versions"] = MeetingDocumentSerializer(older, many=True).data
+            grouped[latest.meeting_type].append(item)
 
         return self._success(
             "Project meeting documents retrieved successfully.",
@@ -511,21 +512,35 @@ class MeetingDocumentViewSet(viewsets.ModelViewSet):
     def dashboard(self, request):
         qs = self.get_queryset()
         now = timezone.now()
-        month_qs = qs.filter(uploaded_at__year=now.year, uploaded_at__month=now.month)
-        total_original = qs.aggregate(total=Sum("original_file_size"))["total"] or 0
-        total_compressed = qs.aggregate(total=Sum("compressed_file_size"))["total"] or 0
+        stats = qs.aggregate(
+            total_mom=Count("id", filter=Q(meeting_type="MOM")),
+            total_edl=Count("id", filter=Q(meeting_type="EDL")),
+            documents_uploaded_this_month=Count(
+                "id",
+                filter=Q(
+                    uploaded_at__year=now.year,
+                    uploaded_at__month=now.month,
+                ),
+            ),
+            total_original=Sum("original_file_size"),
+            total_compressed=Sum("compressed_file_size"),
+        )
         recent = qs.order_by("-uploaded_at")[:5]
         latest_meetings = qs.order_by("-meeting_date", "-document_version")[:5]
+        total_original = stats["total_original"] or 0
+        total_compressed = stats["total_compressed"] or 0
 
         return self._success(
             "Meeting documents dashboard retrieved successfully.",
             {
-                "total_mom": qs.filter(meeting_type="MOM").count(),
-                "total_edl": qs.filter(meeting_type="EDL").count(),
-                "documents_uploaded_this_month": month_qs.count(),
+                "total_mom": stats["total_mom"] or 0,
+                "total_edl": stats["total_edl"] or 0,
+                "documents_uploaded_this_month": stats["documents_uploaded_this_month"] or 0,
                 "recent_uploads": MeetingDocumentSerializer(recent, many=True).data,
                 "latest_meetings": MeetingDocumentSerializer(latest_meetings, many=True).data,
                 "storage_used": int(total_compressed),
-                "storage_saved_through_compression": int(max(total_original - total_compressed, 0)),
+                "storage_saved_through_compression": int(
+                    max(total_original - total_compressed, 0)
+                ),
             },
         )

@@ -52,6 +52,7 @@ from accounts.rbac_checks import (
 )
 
 from ..models.contract_performance import ContractPerformance
+from core.cache_keys import build_rbac_list_cache_key, invalidate_list_cache
 from services.billing_update_notifications import (
     BillingAction,
     BillingModule,
@@ -247,16 +248,7 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
 
     def _invalidate_cache(self):
         """Invalidate all contract performance list caches on any write."""
-        try:
-            if hasattr(cache, "delete_pattern"):
-                cache.delete_pattern(f"{_CACHE_KEY_LIST}:*")
-            else:
-                cache.delete(_CACHE_KEY_LIST)
-        except Exception:
-            try:
-                cache.clear()
-            except Exception:
-                pass
+        invalidate_list_cache(_CACHE_KEY_LIST)
 
     def _success(self, message: str, data, http_status=status.HTTP_200_OK):
         """Uniform success response: {success, message, data}."""
@@ -432,8 +424,11 @@ class ContractPerformanceViewSet(viewsets.ModelViewSet):
         page_param = request.query_params.get("page", "1")
 
         use_cache = not any([project_filter, search_filter]) and page_param == "1"
-        cache_key = (
-            f"{_CACHE_KEY_LIST}:p:{project_filter or ''}:pg:{page_param}"
+        cache_key = build_rbac_list_cache_key(
+            _CACHE_KEY_LIST,
+            request,
+            extra_parts=[f"p:{project_filter or ''}", f"pg:{page_param}"],
+            use_query_string=False,
         )
 
         if use_cache:

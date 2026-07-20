@@ -38,6 +38,8 @@ from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
+from core.cache_keys import build_rbac_list_cache_key, invalidate_list_cache
+
 from accounts.permissions import IsAuthenticatedProjectRBAC
 from accounts.rbac import RBACDomain, resolve_project
 from accounts.rbac_checks import (
@@ -321,16 +323,21 @@ def _build_queryset(
 
 
 def _cache_key_for_filters(
-    project_name=None, invoice_type=None, page="1"
+    request, project_name=None, invoice_type=None, page="1"
 ) -> str:
-    """Generate a deterministic cache key from active filters."""
+    """Generate a deterministic RBAC-aware cache key from active filters."""
     parts = []
     if project_name:
         parts.append(f"p:{project_name.strip().lower()}")
     if invoice_type:
         parts.append(f"t:{invoice_type.strip()}")
     parts.append(f"pg:{page}")
-    return f"{_CACHE_KEY_LIST}:{':'.join(parts) if parts else 'all'}"
+    return build_rbac_list_cache_key(
+        _CACHE_KEY_LIST,
+        request,
+        extra_parts=parts,
+        use_query_string=False,
+    )
 
 
 # =============================================================================
@@ -383,16 +390,7 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
 
     def _invalidate_cache(self):
         """Invalidate all invoicing list caches on any write."""
-        try:
-            if hasattr(cache, "delete_pattern"):
-                cache.delete_pattern(f"{_CACHE_KEY_LIST}:*")
-            else:
-                cache.delete(_CACHE_KEY_LIST)
-        except Exception:
-            try:
-                cache.clear()
-            except Exception:
-                pass
+        invalidate_list_cache(_CACHE_KEY_LIST)
 
     def _success(self, message: str, data, http_status=status.HTTP_200_OK):
         """Uniform success response: {success, message, data}."""
@@ -579,7 +577,9 @@ class InvoicingInformationViewSet(viewsets.ModelViewSet):
             not any([project_filter, type_filter, search_filter])
             and page_param == "1"
         )
-        cache_key = _cache_key_for_filters(project_filter, type_filter, page_param)
+        cache_key = _cache_key_for_filters(
+            request, project_filter, type_filter, page_param
+        )
 
         if use_cache:
             cached = cache.get(cache_key)

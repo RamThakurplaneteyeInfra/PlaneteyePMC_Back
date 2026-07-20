@@ -18,6 +18,8 @@ from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+
+from core.cache_keys import build_rbac_list_cache_key, invalidate_list_cache
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny
@@ -294,7 +296,7 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
         )
 
     def _invalidate_list_cache(self):
-        cache.delete(_CACHE_KEY_LIST)
+        invalidate_list_cache(_CACHE_KEY_LIST)
 
     def _success(self, message: str, data, http_status=status.HTTP_200_OK):
         return Response(
@@ -378,9 +380,10 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
         )
         page_param = request.query_params.get("page", "1")
         use_cache = not has_filters and page_param == "1"
+        cache_key = build_rbac_list_cache_key(_CACHE_KEY_LIST, request)
 
         if use_cache:
-            cached = cache.get(_CACHE_KEY_LIST)
+            cached = cache.get(cache_key)
             if cached is not None:
                 return Response(cached)
 
@@ -396,7 +399,7 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
                 "data": paginated.data,
             }
             if use_cache:
-                cache.set(_CACHE_KEY_LIST, payload, _CACHE_TIMEOUT)
+                cache.set(cache_key, payload, _CACHE_TIMEOUT)
             return Response(payload)
 
         serializer = CorrespondenceDocumentReadSerializer(queryset, many=True)
@@ -406,7 +409,7 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
             "data": serializer.data,
         }
         if use_cache:
-            cache.set(_CACHE_KEY_LIST, payload, _CACHE_TIMEOUT)
+            cache.set(cache_key, payload, _CACHE_TIMEOUT)
         return Response(payload)
 
     @swagger_auto_schema(tags=["Correspondence Documents"])

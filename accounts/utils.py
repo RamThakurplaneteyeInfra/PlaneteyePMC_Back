@@ -24,6 +24,7 @@ def get_user_role(user):
         'Coordinator',
         'Billing Site Engineer',
         'QAQC Site Engineer',
+        'HSE Site Engineer',
         'Site Engineer',
     ]
     
@@ -60,7 +61,12 @@ def is_site_engineer(user):
     if not user:
         return False
     return user.groups.filter(
-        name__in=['Site Engineer', 'Billing Site Engineer', 'QAQC Site Engineer']
+        name__in=[
+            'Site Engineer',
+            'Billing Site Engineer',
+            'QAQC Site Engineer',
+            'HSE Site Engineer',
+        ]
     ).exists()
 
 
@@ -74,10 +80,16 @@ def is_qaqc_site_engineer(user):
     return user.groups.filter(name='QAQC Site Engineer').exists() if user else False
 
 
+def is_hse_site_engineer(user):
+    """Check if user is HSE Site Engineer"""
+    return user.groups.filter(name='HSE Site Engineer').exists() if user else False
+
+
 def get_site_engineer_type(user):
     """
     Get the type of site engineer
-    Returns: 'site_engineer', 'billing_site_engineer', 'qaqc_site_engineer', or None
+    Returns: 'site_engineer', 'billing_site_engineer', 'qaqc_site_engineer',
+    'hse_site_engineer', or None
     """
     if not user:
         return None
@@ -85,12 +97,14 @@ def get_site_engineer_type(user):
     try:
         profile = user.profile
         return profile.site_engineer_type
-    except:
+    except Exception:
         # Fallback to group-based detection
         if user.groups.filter(name='Billing Site Engineer').exists():
             return 'billing_site_engineer'
         elif user.groups.filter(name='QAQC Site Engineer').exists():
             return 'qaqc_site_engineer'
+        elif user.groups.filter(name='HSE Site Engineer').exists():
+            return 'hse_site_engineer'
         elif user.groups.filter(name='Site Engineer').exists():
             return 'site_engineer'
         return None

@@ -27,6 +27,7 @@ class ProjectSerializer(serializers.ModelSerializer):
     site_engineer_name = serializers.SerializerMethodField()
     billing_engineer_name = serializers.SerializerMethodField()
     qaqc_engineer_name = serializers.SerializerMethodField()
+    hse_engineer_name = serializers.SerializerMethodField()
     documentation_file_url = serializers.SerializerMethodField()
     created_by_name = serializers.SerializerMethodField()
 
@@ -110,6 +111,9 @@ class ProjectSerializer(serializers.ModelSerializer):
 
     def get_qaqc_engineer_name(self, obj):
         return self._get_user_full_name_or_username(obj.qaqc_site_engineer)
+
+    def get_hse_engineer_name(self, obj):
+        return self._get_user_full_name_or_username(obj.hse_site_engineer)
 
     def get_documentation_file_url(self, obj):
         if obj.documentation_file:

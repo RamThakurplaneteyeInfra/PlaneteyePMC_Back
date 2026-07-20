@@ -5,6 +5,8 @@ from django.contrib.auth.models import Group
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from accounts.models import UserProfile
+
 from .models import ProjectProgressStatus
 
 User = get_user_model()
@@ -18,6 +20,7 @@ class ProjectProgressAPITest(APITestCase):
         )
         group, _ = Group.objects.get_or_create(name="Team Leader")
         self.user.groups.add(group)
+        UserProfile.objects.get_or_create(user=self.user)
 
         ProjectProgressStatus.objects.create(
             project_name="Thane Project",
@@ -46,3 +49,26 @@ class ProjectProgressAPITest(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertGreaterEqual(len(response.data), 1)
+
+    def test_client_supplied_role_cannot_elevate_access(self):
+        """Site Engineer cannot spoof PMC Head via query/header/body."""
+        se = User.objects.create_user(username="progress_se", password="testpass123")
+        se_group, _ = Group.objects.get_or_create(name="Site Engineer")
+        se.groups.add(se_group)
+        UserProfile.objects.get_or_create(user=se)
+
+        login = self.client.post(
+            "/api/token/",
+            {"username": "progress_se", "password": "testpass123"},
+            format="json",
+        )
+        self.assertEqual(login.status_code, status.HTTP_200_OK)
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {login.data['access']}"
+        )
+
+        forbidden = self.client.get(
+            "/api/project-progress/?role=PMC%20Head",
+            HTTP_X_ROLE="PMC Head",
+        )
+        self.assertEqual(forbidden.status_code, status.HTTP_403_FORBIDDEN)

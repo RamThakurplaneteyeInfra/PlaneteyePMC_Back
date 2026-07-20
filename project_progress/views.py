@@ -25,29 +25,20 @@ def _get_role_from_request(request) -> str | None:
     """
     Resolve the caller's role for permission checks.
 
-    Priority:
-    1. Explicit role in body (POST/PUT/PATCH)
-    2. Query param ?role= or header X-Role (legacy)
-    3. Authenticated user's primary role from profile / Django groups (JWT)
+    Authorization MUST use the authenticated user's role only.
+    Client-supplied role (body / query / X-Role) is ignored for access control
+    so callers cannot spoof elevated privileges.
     """
-    role = None
-    try:
-        role = request.data.get("role")
-    except Exception:
-        role = None
-    if not role:
-        role = request.query_params.get("role") or request.headers.get("X-Role")
-
     user = getattr(request, "user", None)
-    if not role and user and user.is_authenticated:
-        try:
-            role = user.profile.get_primary_role()
-        except Exception:
-            groups = user.groups.all()
-            if groups.exists():
-                role = groups.first().name
-
-    return role
+    if not user or not user.is_authenticated:
+        return None
+    try:
+        return user.profile.get_primary_role()
+    except Exception:
+        groups = user.groups.all()
+        if groups.exists():
+            return groups.first().name
+    return None
 
 
 class ProjectProgressStatusViewSet(viewsets.ModelViewSet):

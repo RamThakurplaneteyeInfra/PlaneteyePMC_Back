@@ -21,6 +21,8 @@ from accounts.rbac_checks import (
     enforce_project_write_by_name,
 )
 
+from core.cache_keys import build_rbac_list_cache_key, invalidate_list_cache
+
 from .models import ProjectCostPerformance
 from services.billing_update_notifications import (
     BillingAction,
@@ -156,7 +158,12 @@ class ProjectCostPerformanceViewSet(viewsets.ModelViewSet):
     )
     def list(self, request, *args, **kwargs):
         pn = self.request.query_params.get("project_name")
-        cache_key = f"cost_performance_list:{pn}" if pn else "cost_performance_list:all"
+        cache_key = build_rbac_list_cache_key(
+            "cost_performance_list",
+            request,
+            extra_parts=[f"pn:{(pn or '').strip().lower() or 'all'}"],
+            use_query_string=True,
+        )
         data = cache.get(cache_key)
         if data is not None:
             return Response(data)
@@ -178,10 +185,13 @@ class ProjectCostPerformanceViewSet(viewsets.ModelViewSet):
         return super().retrieve(request, *args, **kwargs)
 
     def _invalidate_cost_performance_cache(self, project_name: str) -> None:
+        invalidate_list_cache("cost_performance_list")
+        invalidate_list_cache("cost_performance_dashboard")
         pn = (project_name or "").strip()
+        if pn:
+            cache.delete(f"cost_performance_list:{pn}")
+            cache.delete(f"cost_performance_dashboard:{pn}")
         cache.delete("cost_performance_list:all")
-        cache.delete(f"cost_performance_list:{pn}")
-        cache.delete(f"cost_performance_dashboard:{pn}")
 
     @swagger_auto_schema(
         tags=swagger_tags,
@@ -276,7 +286,12 @@ class ProjectCostPerformanceViewSet(viewsets.ModelViewSet):
 
         enforce_project_access_by_name(request.user, pn)
 
-        cache_key = f"cost_performance_dashboard:{pn}"
+        cache_key = build_rbac_list_cache_key(
+            "cost_performance_dashboard",
+            request,
+            extra_parts=[f"pn:{pn.lower()}"],
+            use_query_string=False,
+        )
         data = cache.get(cache_key)
         if data is not None:
             return Response(data)

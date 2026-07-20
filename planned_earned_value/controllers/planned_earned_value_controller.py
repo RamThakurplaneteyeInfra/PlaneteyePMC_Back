@@ -599,10 +599,11 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
 
         if contractor_id or len(records) <= 1:
             record = records[0] if records else None
+            # Match SCL behaviour: missing data is not an error (form can load empty).
             if record is None:
-                return self._error(
-                    "Contractor Planned vs Actual not found.",
-                    http_status=status.HTTP_404_NOT_FOUND,
+                return self._success(
+                    "Contractor Planned vs Actual retrieved successfully.",
+                    None,
                 )
             return self._success(
                 "Contractor Planned vs Actual retrieved successfully.",
@@ -802,25 +803,34 @@ class PlannedEarnedValueViewSet(viewsets.ModelViewSet):
                 "name",
             )
         )
+        accessible_ids = [p.id for p in accessible_projects]
+        accessible_names_lower = {p.name.lower() for p in accessible_projects}
+
         period_records = PlannedEarnedValue.objects.filter(
             month=month_int,
             year=year_int,
         ).select_related("contractor")
+        if accessible_names_lower:
+            from django.db.models.functions import Lower
+
+            period_records = period_records.alias(
+                _pn_lower=Lower("project_name")
+            ).filter(_pn_lower__in=accessible_names_lower)
+        else:
+            period_records = period_records.none()
 
         by_project: dict[str, list] = {}
         for record in period_records:
             key = record.project_name.lower()
             by_project.setdefault(key, []).append(record)
 
-        active_contractors = {
-            p.id: list(
-                Contractor.objects.filter(
-                    project=p,
-                    status=Contractor.Status.ACTIVE,
-                ).values_list("id", flat=True)
-            )
-            for p in accessible_projects
-        }
+        active_contractors: dict[int, list] = {pid: [] for pid in accessible_ids}
+        if accessible_ids:
+            for project_id, contractor_id in Contractor.objects.filter(
+                project_id__in=accessible_ids,
+                status=Contractor.Status.ACTIVE,
+            ).values_list("project_id", "id"):
+                active_contractors.setdefault(project_id, []).append(contractor_id)
 
         pending_projects = []
         for project in accessible_projects:

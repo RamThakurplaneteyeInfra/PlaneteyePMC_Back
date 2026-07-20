@@ -6,8 +6,6 @@ GET: list all records for dashboard consumption (with pagination, caching, and o
 """
 
 from django.core.cache import cache
-from django.utils.decorators import method_decorator
-from django.views.decorators.cache import cache_page
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status, viewsets
@@ -21,6 +19,7 @@ from accounts.rbac_checks import (
     enforce_instance_write,
     enforce_project_write_by_name,
 )
+from core.cache_keys import build_rbac_list_cache_key, invalidate_list_cache
 
 from .models import BudgetCostPerformance
 from services.billing_update_notifications import (
@@ -127,9 +126,8 @@ class BudgetCostPerformanceViewSet(viewsets.ModelViewSet):
         return apply_project_rbac_to_queryset(qs, self.request, "project_name")
 
     def _get_cache_key(self, request):
-        """Generate cache key based on project_name filter."""
-        pn = request.query_params.get("project_name", "").strip()
-        return f"budget_performance_list:{pn or 'all'}"
+        """Generate RBAC-aware cache key based on query params."""
+        return build_rbac_list_cache_key("budget_performance_list", request)
 
     @swagger_auto_schema(
         operation_summary="List budget vs cost performance records",
@@ -167,21 +165,29 @@ class BudgetCostPerformanceViewSet(viewsets.ModelViewSet):
             )
         },
     )
-    @method_decorator(cache_page(300))  # 5 minutes cache
     def list(self, request, *args, **kwargs):
         """
         Cached list endpoint with pagination.
         Returns all calculated records for the dashboard.
         """
+        cache_key = self._get_cache_key(request)
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+
         queryset = self.filter_queryset(self.get_queryset())
         page = self.paginate_queryset(queryset)
 
         if page is not None:
             serializer = self.get_serializer(page, many=True)
-            return self.get_paginated_response(serializer.data)
+            response = self.get_paginated_response(serializer.data)
+            cache.set(cache_key, response.data, 300)
+            return response
 
         serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data)
+        payload = serializer.data
+        cache.set(cache_key, payload, 300)
+        return Response(payload)
 
     @swagger_auto_schema(
         operation_summary="Create budget vs cost performance (EVM)",
@@ -217,6 +223,7 @@ class BudgetCostPerformanceViewSet(viewsets.ModelViewSet):
         )
 
         # Cache invalidation: clear relevant cache keys
+        invalidate_list_cache("budget_performance_list")
         project_name = input_serializer.validated_data.get('project_name', '').strip()
         cache.delete(f"budget_performance_list:{project_name or 'all'}")
         cache.delete("budget_performance_list:all")  # Clear general cache too
@@ -238,13 +245,8 @@ class BudgetCostPerformanceViewSet(viewsets.ModelViewSet):
         headers = self.get_success_headers(response_body)
         return Response(response_body, status=status.HTTP_201_CREATED, headers=headers)
 
-    def list(self, request, *args, **kwargs):
-        """Return all calculated records for the dashboard."""
-        queryset = self.filter_queryset(self.get_queryset())
-        serializer = BudgetCostPerformanceSerializer(queryset, many=True)
-        return Response(serializer.data)
-
     def _invalidate_budget_cache(self, project_name: str) -> None:
+        invalidate_list_cache("budget_performance_list")
         pn = (project_name or "").strip()
         cache.delete(f"budget_performance_list:{pn or 'all'}")
         cache.delete("budget_performance_list:all")

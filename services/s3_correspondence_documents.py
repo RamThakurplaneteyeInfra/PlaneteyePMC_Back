@@ -140,14 +140,24 @@ def generate_presigned_url(
     *,
     expires_in: int = PRESIGNED_EXPIRY_SECONDS,
 ) -> str:
-    ready, message = check_s3_ready()
-    if not ready:
-        raise RuntimeError(message)
-    logger.info("Correspondence attachment presigned URL generated: key=%s", s3_key)
-    return get_s3_client().generate_presigned_url(
-        "get_object",
-        Params={"Bucket": settings.AWS_STORAGE_BUCKET_NAME, "Key": s3_key},
-        ExpiresIn=expires_in,
+    from services.presigned_url_cache import cached_presigned_url
+
+    def _sign(key: str, *, expires_in: int) -> str:
+        ready, message = check_s3_ready()
+        if not ready:
+            raise RuntimeError(message)
+        logger.info("Correspondence attachment presigned URL generated: key=%s", key)
+        return get_s3_client().generate_presigned_url(
+            "get_object",
+            Params={"Bucket": settings.AWS_STORAGE_BUCKET_NAME, "Key": key},
+            ExpiresIn=expires_in,
+        )
+
+    return cached_presigned_url(
+        cache_namespace="correspondence",
+        s3_key=s3_key,
+        expires_in=expires_in,
+        generator=_sign,
     )
 
 

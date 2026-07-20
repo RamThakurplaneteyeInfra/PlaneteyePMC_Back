@@ -11,6 +11,7 @@ class UserProfile(models.Model):
         ('site_engineer', 'Site Engineer'),
         ('billing_site_engineer', 'Billing Site Engineer'),
         ('qaqc_site_engineer', 'QAQC Site Engineer'),
+        ('hse_site_engineer', 'HSE Site Engineer'),
     ]
 
     user = models.OneToOneField(
@@ -59,6 +60,7 @@ class UserProfile(models.Model):
             'Coordinator',
             'Billing Site Engineer',
             'QAQC Site Engineer',
+            'HSE Site Engineer',
             'Site Engineer',
         ]
         

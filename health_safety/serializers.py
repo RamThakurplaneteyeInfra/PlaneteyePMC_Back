@@ -219,18 +219,25 @@ class HealthSafetyRecordSerializer(serializers.ModelSerializer):
     """
     Serializer for HealthSafetyRecord.
 
-    Writable fields:
-      project_name, month, year,
-      fatalities, significant, major, minor, near_miss,
-      total_manhours, loss_of_manhours
+    Writable fields include legacy incidents/manhours plus monthly statistics.
+    Auto-calculated (read-only on write path via model.save):
+      man_days_worked, man_hours_worked, medical_checkup_total
+      (total_manhours synced from man_hours_worked when working_days > 0)
 
-    Read-only computed fields (not stored in DB):
+    Read-only computed:
       total_incidents, ltifr, incident_rate
     """
 
     total_incidents = serializers.IntegerField(read_only=True)
     ltifr = serializers.FloatField(read_only=True)
     incident_rate = serializers.FloatField(read_only=True)
+    man_days_worked = serializers.DecimalField(
+        max_digits=14, decimal_places=2, read_only=True
+    )
+    man_hours_worked = serializers.DecimalField(
+        max_digits=14, decimal_places=2, read_only=True
+    )
+    medical_checkup_total = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = HealthSafetyRecord
@@ -246,6 +253,24 @@ class HealthSafetyRecordSerializer(serializers.ModelSerializer):
             "near_miss",
             "total_manhours",
             "loss_of_manhours",
+            # Monthly statistics
+            "average_daily_manpower",
+            "working_days",
+            "man_days_worked",
+            "man_hours_worked",
+            "reportable_accident_lti",
+            "dangerous_occurrences",
+            "first_aid_cases",
+            "medical_treatment_cases",
+            "utility_damage",
+            "internal_training_count",
+            "internal_training_hours",
+            "external_training_count",
+            "external_training_hours",
+            "mock_drills",
+            "medical_checkup_workers",
+            "medical_checkup_staff",
+            "medical_checkup_total",
             # Computed
             "total_incidents",
             "ltifr",
@@ -255,6 +280,9 @@ class HealthSafetyRecordSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "id",
+            "man_days_worked",
+            "man_hours_worked",
+            "medical_checkup_total",
             "total_incidents",
             "ltifr",
             "incident_rate",
@@ -284,6 +312,8 @@ class HealthSafetyRecordSerializer(serializers.ModelSerializer):
         return value
 
     def _validate_non_negative(self, value, field_name: str):
+        if value is None:
+            return value
         if value < 0:
             raise serializers.ValidationError(f"{field_name} must be >= 0.")
         return value
@@ -309,6 +339,52 @@ class HealthSafetyRecordSerializer(serializers.ModelSerializer):
     def validate_loss_of_manhours(self, v):
         return self._validate_non_negative(v, "loss_of_manhours")
 
+    def validate_average_daily_manpower(self, v):
+        return self._validate_non_negative(v, "average_daily_manpower")
+
+    def validate_working_days(self, v):
+        if v is None:
+            return v
+        if v < 0:
+            raise serializers.ValidationError("working_days must be >= 0.")
+        return v
+
+    def validate_reportable_accident_lti(self, v):
+        return self._validate_non_negative(v, "reportable_accident_lti")
+
+    def validate_dangerous_occurrences(self, v):
+        return self._validate_non_negative(v, "dangerous_occurrences")
+
+    def validate_first_aid_cases(self, v):
+        return self._validate_non_negative(v, "first_aid_cases")
+
+    def validate_medical_treatment_cases(self, v):
+        return self._validate_non_negative(v, "medical_treatment_cases")
+
+    def validate_utility_damage(self, v):
+        return self._validate_non_negative(v, "utility_damage")
+
+    def validate_internal_training_count(self, v):
+        return self._validate_non_negative(v, "internal_training_count")
+
+    def validate_internal_training_hours(self, v):
+        return self._validate_non_negative(v, "internal_training_hours")
+
+    def validate_external_training_count(self, v):
+        return self._validate_non_negative(v, "external_training_count")
+
+    def validate_external_training_hours(self, v):
+        return self._validate_non_negative(v, "external_training_hours")
+
+    def validate_mock_drills(self, v):
+        return self._validate_non_negative(v, "mock_drills")
+
+    def validate_medical_checkup_workers(self, v):
+        return self._validate_non_negative(v, "medical_checkup_workers")
+
+    def validate_medical_checkup_staff(self, v):
+        return self._validate_non_negative(v, "medical_checkup_staff")
+
     # -------------------------------------------------------------------------
     # Cross-field validation
     # -------------------------------------------------------------------------
@@ -316,10 +392,37 @@ class HealthSafetyRecordSerializer(serializers.ModelSerializer):
     def validate(self, attrs: dict) -> dict:
         instance = self.instance
 
-        total_manhours = attrs.get(
-            "total_manhours",
-            getattr(instance, "total_manhours", 0) if instance else 0,
+        average_daily_manpower = attrs.get(
+            "average_daily_manpower",
+            getattr(instance, "average_daily_manpower", 0) if instance else 0,
         )
+        working_days = attrs.get(
+            "working_days",
+            getattr(instance, "working_days", 0) if instance else 0,
+        )
+
+        # When submitting manpower stats, working_days must be > 0
+        try:
+            adm = float(average_daily_manpower or 0)
+        except (TypeError, ValueError):
+            adm = 0
+        if adm > 0 and (working_days is None or working_days <= 0):
+            raise serializers.ValidationError(
+                {"working_days": "working_days must be > 0 when average_daily_manpower is set."}
+            )
+
+        # Preview totals for loss_of_manhours check (mirrors model recalculate)
+        if working_days and working_days > 0:
+            from decimal import Decimal
+
+            man_days = Decimal(str(average_daily_manpower or 0)) * Decimal(working_days)
+            total_manhours = (man_days * Decimal("8")).quantize(Decimal("0.01"))
+        else:
+            total_manhours = attrs.get(
+                "total_manhours",
+                getattr(instance, "total_manhours", 0) if instance else 0,
+            )
+
         loss_of_manhours = attrs.get(
             "loss_of_manhours",
             getattr(instance, "loss_of_manhours", 0) if instance else 0,
@@ -350,6 +453,23 @@ class HealthSafetyRecordDataSerializer(serializers.Serializer):
     near_miss = serializers.IntegerField()
     total_manhours = serializers.DecimalField(max_digits=18, decimal_places=2)
     loss_of_manhours = serializers.DecimalField(max_digits=18, decimal_places=2)
+    average_daily_manpower = serializers.DecimalField(max_digits=18, decimal_places=2)
+    working_days = serializers.IntegerField()
+    man_days_worked = serializers.DecimalField(max_digits=18, decimal_places=2)
+    man_hours_worked = serializers.DecimalField(max_digits=18, decimal_places=2)
+    reportable_accident_lti = serializers.IntegerField()
+    dangerous_occurrences = serializers.IntegerField()
+    first_aid_cases = serializers.IntegerField()
+    medical_treatment_cases = serializers.IntegerField()
+    utility_damage = serializers.IntegerField()
+    internal_training_count = serializers.IntegerField()
+    internal_training_hours = serializers.DecimalField(max_digits=18, decimal_places=2)
+    external_training_count = serializers.IntegerField()
+    external_training_hours = serializers.DecimalField(max_digits=18, decimal_places=2)
+    mock_drills = serializers.IntegerField()
+    medical_checkup_workers = serializers.IntegerField()
+    medical_checkup_staff = serializers.IntegerField()
+    medical_checkup_total = serializers.IntegerField()
 
 
 class YearlySummarySerializer(serializers.Serializer):
@@ -364,3 +484,20 @@ class YearlySummarySerializer(serializers.Serializer):
     near_miss = serializers.IntegerField()
     total_manhours = serializers.DecimalField(max_digits=18, decimal_places=2)
     loss_of_manhours = serializers.DecimalField(max_digits=18, decimal_places=2)
+    average_daily_manpower = serializers.DecimalField(max_digits=18, decimal_places=2)
+    working_days = serializers.IntegerField()
+    man_days_worked = serializers.DecimalField(max_digits=18, decimal_places=2)
+    man_hours_worked = serializers.DecimalField(max_digits=18, decimal_places=2)
+    reportable_accident_lti = serializers.IntegerField()
+    dangerous_occurrences = serializers.IntegerField()
+    first_aid_cases = serializers.IntegerField()
+    medical_treatment_cases = serializers.IntegerField()
+    utility_damage = serializers.IntegerField()
+    internal_training_count = serializers.IntegerField()
+    internal_training_hours = serializers.DecimalField(max_digits=18, decimal_places=2)
+    external_training_count = serializers.IntegerField()
+    external_training_hours = serializers.DecimalField(max_digits=18, decimal_places=2)
+    mock_drills = serializers.IntegerField()
+    medical_checkup_workers = serializers.IntegerField()
+    medical_checkup_staff = serializers.IntegerField()
+    medical_checkup_total = serializers.IntegerField()

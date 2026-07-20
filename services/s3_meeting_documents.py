@@ -138,12 +138,10 @@ def validate_upload_file(uploaded_file) -> tuple[str, str]:
 
 
 def _copy_to_spooled_file(source) -> tempfile.SpooledTemporaryFile:
-    source.seek(0)
+    from core.uploads import copy_file_obj_chunked
+
     target = tempfile.SpooledTemporaryFile(max_size=25 * 1024 * 1024, mode="w+b")
-    for chunk in iter(lambda: source.read(1024 * 1024), b""):
-        target.write(chunk)
-    target.seek(0)
-    source.seek(0)
+    copy_file_obj_chunked(source, target)
     return target
 
 
@@ -356,14 +354,24 @@ def delete_meeting_document(s3_key: str) -> None:
 
 
 def generate_presigned_url(s3_key: str, *, expires_in: int = PRESIGNED_EXPIRY_SECONDS) -> str:
-    ready, message = check_s3_ready()
-    if not ready:
-        raise RuntimeError(message)
-    logger.info("Meeting document presigned URL generated: key=%s", s3_key)
-    return get_s3_client().generate_presigned_url(
-        "get_object",
-        Params={"Bucket": settings.AWS_STORAGE_BUCKET_NAME, "Key": s3_key},
-        ExpiresIn=expires_in,
+    from services.presigned_url_cache import cached_presigned_url
+
+    def _sign(key: str, *, expires_in: int) -> str:
+        ready, message = check_s3_ready()
+        if not ready:
+            raise RuntimeError(message)
+        logger.info("Meeting document presigned URL generated: key=%s", key)
+        return get_s3_client().generate_presigned_url(
+            "get_object",
+            Params={"Bucket": settings.AWS_STORAGE_BUCKET_NAME, "Key": key},
+            ExpiresIn=expires_in,
+        )
+
+    return cached_presigned_url(
+        cache_namespace="meeting_docs",
+        s3_key=s3_key,
+        expires_in=expires_in,
+        generator=_sign,
     )
 
 

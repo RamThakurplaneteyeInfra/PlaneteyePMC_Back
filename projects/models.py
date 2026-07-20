@@ -46,6 +46,14 @@ class Project(models.Model):
     # Separate fields for different site engineer types
     billing_site_engineer = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='billing_engineer_projects')
     qaqc_site_engineer = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='qaqc_engineer_projects')
+    hse_site_engineer = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='hse_engineer_projects',
+        help_text='Health, Safety & Environment Site Engineer for this project',
+    )
     coordinators = models.ManyToManyField(User, blank=True, related_name='coordinator_projects')
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_projects')
 

@@ -38,10 +38,10 @@ class ContractValueSerializer(serializers.ModelSerializer):
     contractor = serializers.SerializerMethodField()
     contractor_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
 
-    projectName = serializers.SerializerMethodField()
-    contractType = serializers.SerializerMethodField()
-    originalContractValue = serializers.SerializerMethodField()
-    excessValue = serializers.SerializerMethodField()
+    projectName = serializers.ReadOnlyField(source="project_name")
+    contractType = serializers.ReadOnlyField(source="contract_type")
+    originalContractValue = serializers.ReadOnlyField(source="original_contract_value")
+    excessValue = serializers.ReadOnlyField(source="excess_value")
     revisedContractValue = serializers.SerializerMethodField()
     approvedVOPercentage = serializers.SerializerMethodField()
 
@@ -86,23 +86,18 @@ class ContractValueSerializer(serializers.ModelSerializer):
     def get_contractor(self, obj):
         return contractor_payload(obj.contractor)
 
-    def get_projectName(self, obj) -> str:
-        return obj.project_name
-
-    def get_contractType(self, obj) -> str:
-        return obj.contract_type
-
-    def get_originalContractValue(self, obj):
-        return obj.original_contract_value
-
-    def get_excessValue(self, obj):
-        return obj.excess_value
+    def _metrics(self, obj) -> dict:
+        cached = getattr(obj, "_contract_value_metrics_cache", None)
+        if cached is None:
+            cached = metrics_from_record(obj)
+            setattr(obj, "_contract_value_metrics_cache", cached)
+        return cached
 
     def get_revised_value(self, obj) -> Decimal:
-        return metrics_from_record(obj)["revised_value"]
+        return self._metrics(obj)["revised_value"]
 
     def get_increase_percentage(self, obj) -> Decimal:
-        return metrics_from_record(obj)["increase_percentage"]
+        return self._metrics(obj)["increase_percentage"]
 
     def get_revisedContractValue(self, obj) -> Decimal:
         return self.get_revised_value(obj)

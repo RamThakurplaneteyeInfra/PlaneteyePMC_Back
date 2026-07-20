@@ -2,8 +2,6 @@ from decimal import Decimal, InvalidOperation, DivisionByZero
 
 from django.core.cache import cache
 from django.utils.dateparse import parse_date
-from django.utils.decorators import method_decorator
-from django.views.decorators.cache import cache_page
 from django.db.models import Sum
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -17,6 +15,7 @@ from .serializers import ContractSerializer
 from accounts.permissions import IsAuthenticatedProjectRBAC
 from accounts.rbac import RBACDomain, filter_queryset_by_project_access
 from accounts.rbac_checks import enforce_project_write_by_name
+from core.cache_keys import build_rbac_list_cache_key, invalidate_list_cache
 
 
 # Role normalization mapping for case-insensitive input
@@ -101,7 +100,7 @@ class ContractViewSet(viewsets.ModelViewSet):
         return getattr(self, '_cached_role', None)
 
     def _get_cache_key(self, request, action="list"):
-        """Generate cache key based on action and query parameters."""
+        """Generate RBAC-aware cache key based on action and query parameters."""
         params = []
         project_name = request.query_params.get("project_name", "").strip()
         if project_name:
@@ -116,8 +115,12 @@ class ContractViewSet(viewsets.ModelViewSet):
         if role:
             params.append(f"role:{role}")
 
-        param_str = "|".join(params) if params else "default"
-        return f"contracts_{action}:{param_str}"
+        return build_rbac_list_cache_key(
+            f"contracts_{action}",
+            request,
+            extra_parts=params,
+            use_query_string=False,
+        )
 
     def _get_latest_pending_contract(self, project_name: str) -> Contract | None:
         """
@@ -134,20 +137,8 @@ class ContractViewSet(viewsets.ModelViewSet):
         Safely invalidate contract-related cache.
         Works with LocMemCache (development) and Redis (production).
         """
-        try:
-            if hasattr(cache, 'delete_pattern'):
-                # Redis / django-redis backend
-                cache.delete_pattern("contracts_list:*")
-                cache.delete_pattern("contracts_summary:*")
-            else:
-                # LocMemCache (current development setup) - clear entire cache
-                cache.clear()
-        except Exception:
-            # Last resort: clear everything
-            try:
-                cache.clear()
-            except Exception:
-                pass  # Avoid crashing on cache issues
+        invalidate_list_cache("contracts_list")
+        invalidate_list_cache("contracts_summary")
 
     # ---- Swagger schemas (fix DecimalField showing as string in Swagger UI) ----
     # drf-yasg (Swagger 2.0) often models Decimal as "string". Swagger UI then
@@ -285,12 +276,16 @@ class ContractViewSet(viewsets.ModelViewSet):
         ],
         responses={200: ContractSerializer(many=True), 403: "Forbidden"}
     )
-    @method_decorator(cache_page(300))  # 5 minutes cache
     def list(self, request, *args, **kwargs):
         """
         Dashboard list: ONLY approved contracts.
         Returns clean structured response format with caching.
         """
+        cache_key = self._get_cache_key(request, "list")
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+
         queryset = self.filter_queryset(self.get_queryset())
         page = self.paginate_queryset(queryset)
         serializer = self.get_serializer(page if page is not None else queryset, many=True)
@@ -308,7 +303,10 @@ class ContractViewSet(viewsets.ModelViewSet):
 
         data = [clean(x) for x in serializer.data]
         if page is not None:
-            return self.get_paginated_response(data)
+            response = self.get_paginated_response(data)
+            cache.set(cache_key, response.data, 300)
+            return response
+        cache.set(cache_key, data, 300)
         return Response(data)
 
     @swagger_auto_schema(

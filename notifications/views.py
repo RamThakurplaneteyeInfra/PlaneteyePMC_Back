@@ -4,17 +4,79 @@ from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 import json
 from datetime import datetime
+from functools import wraps
 from django.core.mail import send_mail
 from django.conf import settings
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import BasePermission, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework_simplejwt.authentication import JWTAuthentication
 from services.notifications import notify_dpr_submitted, notify_dpr_approved, notify_dpr_rejected, notify_project_created, notify_project_assigned, notify_site_engineer_assigned
 from dpr.models import DailyProgressReport
 from projects.models import Project
 from django.contrib.auth.models import User
+from accounts.rbac import is_admin_user
 
 
+class IsStaffOrAdminRole(BasePermission):
+    """Staff/superuser or PMC admin roles (CEO / PMC Head / Coordinator)."""
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        return bool(
+            user.is_staff
+            or user.is_superuser
+            or is_admin_user(user)
+        )
+
+
+def _authenticate_jwt_if_needed(request):
+    """Attach JWT user on plain Django views (Bearer token)."""
+    user = getattr(request, "user", None)
+    if user and user.is_authenticated:
+        return user
+    try:
+        result = JWTAuthentication().authenticate(request)
+        if result:
+            request.user = result[0]
+            return result[0]
+    except Exception:
+        pass
+    return None
+
+
+def admin_required(view_func):
+    """
+    Protect notification test/debug helpers.
+    Accepts session or JWT; requires staff/superuser or PMC admin role.
+    """
+
+    @wraps(view_func)
+    def _wrapped(request, *args, **kwargs):
+        user = _authenticate_jwt_if_needed(request)
+        if not user or not user.is_authenticated:
+            return JsonResponse(
+                {"detail": "Authentication credentials were not provided."},
+                status=401,
+            )
+        if not (
+            user.is_staff
+            or user.is_superuser
+            or is_admin_user(user)
+        ):
+            return JsonResponse(
+                {"detail": "You do not have permission to perform this action."},
+                status=403,
+            )
+        return view_func(request, *args, **kwargs)
+
+    return _wrapped
+
+
+@admin_required
 def notifications_test(request):
     """
     Test page for real-time notifications via WebSocket
@@ -22,6 +84,7 @@ def notifications_test(request):
     return render(request, 'notifications_test.html')
 
 
+@admin_required
 def send_test_notification(request):
     """
     Send a test notification to the test group
@@ -43,6 +106,7 @@ def send_test_notification(request):
     return JsonResponse({'status': 'Notification sent'})
 
 
+@admin_required
 def send_test_email(request):
     """
     Send a test email notification
@@ -72,6 +136,7 @@ def send_test_email(request):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated, IsStaffOrAdminRole])
 def test_sync_email(request):
     """
     Test email sending synchronously (without Celery)

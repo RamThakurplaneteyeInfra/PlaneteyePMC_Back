@@ -1,11 +1,12 @@
 """
-Provision Site Engineer, Billing Site Engineer, and QA/QC Site Engineer users
-and assign one of each to every PMC project (pmc_tl1–pmc_tl23 mapping).
+Provision Site Engineer, Billing Site Engineer, QA/QC Site Engineer, and
+HSE Site Engineer users and assign one of each to every PMC project
+(pmc_tl1–pmc_tl25 mapping).
 
 Does NOT modify Team Leader assignments.
 
 Run:
-  py -3.11 manage.py setup_project_engineering_team
+  python manage.py setup_project_engineering_team
 """
 
 from django.contrib.auth import authenticate, get_user_model
@@ -45,6 +46,15 @@ ENGINEER_ROLES = [
         "project_field": "qaqc_site_engineer",
         "sync_m2m": False,
     },
+    {
+        "username_prefix": "pmc_hse",
+        "password_prefix": "Pmc@HSE",
+        "group": "HSE Site Engineer",
+        "profile_type": "hse_site_engineer",
+        "designation": "HSE Site Engineer",
+        "project_field": "hse_site_engineer",
+        "sync_m2m": False,
+    },
 ]
 
 
@@ -58,7 +68,7 @@ def _resolve_project(name: str) -> Project | None:
 
 class Command(BaseCommand):
     help = (
-        "Create pmc_se1–23, pmc_bse1–23, pmc_qaqc1–23; assign groups, profiles, "
+        "Create pmc_se*, pmc_bse*, pmc_qaqc*, pmc_hse*; assign groups, profiles, "
         "and map each engineer type to the same project as pmc_tlX. Idempotent."
     )
 
@@ -72,14 +82,12 @@ class Command(BaseCommand):
         projects_mapped = 0
         projects_created = 0
         failures: list[str] = []
-        mapping_table: list[tuple[int, str, str, str, str, str, str, str]] = []
+        mapping_table: list[tuple] = []
 
         groups: dict[str, Group] = {}
         for spec in ENGINEER_ROLES:
             group, _ = Group.objects.get_or_create(name=spec["group"])
             groups[spec["group"]] = group
-
-        users_cache: dict[str, User] = {}
 
         for index, (_tl_username, project_name) in enumerate(TL_PROJECT_MAPPINGS, start=1):
             project = _resolve_project(project_name)
@@ -94,9 +102,12 @@ class Command(BaseCommand):
             tl_user = User.objects.filter(username=_tl_username).first()
             tl_label = _tl_username if tl_user else f"{_tl_username} (missing)"
 
-            se_name = "-"
-            bse_name = "-"
-            qaqc_name = "-"
+            row_users = {
+                "pmc_se": "-",
+                "pmc_bse": "-",
+                "pmc_qaqc": "-",
+                "pmc_hse": "-",
+            }
             status = "ASSIGNED"
 
             for spec in ENGINEER_ROLES:
@@ -131,38 +142,42 @@ class Command(BaseCommand):
                     failures.append(f"{username}: password verification failed")
                     status = "PARTIAL"
 
-                users_cache[username] = user
                 field = spec["project_field"]
                 setattr(project, field, user)
                 if spec["sync_m2m"]:
                     project.site_engineers.add(user)
 
-                if spec["username_prefix"] == "pmc_se":
-                    se_name = username
-                elif spec["username_prefix"] == "pmc_bse":
-                    bse_name = username
-                elif spec["username_prefix"] == "pmc_qaqc":
-                    qaqc_name = username
+                row_users[spec["username_prefix"]] = username
 
             project.save(
                 update_fields=[
                     "site_engineer",
                     "billing_site_engineer",
                     "qaqc_site_engineer",
+                    "hse_site_engineer",
                     "updated_at",
                 ]
             )
             projects_mapped += 1
             mapping_table.append(
-                (index, project.name, tl_label, se_name, bse_name, qaqc_name, status, "")
+                (
+                    index,
+                    project.name,
+                    tl_label,
+                    row_users["pmc_se"],
+                    row_users["pmc_bse"],
+                    row_users["pmc_qaqc"],
+                    row_users["pmc_hse"],
+                    status,
+                )
             )
 
         self.stdout.write("")
-        self.stdout.write("=" * 100)
+        self.stdout.write("=" * 120)
         self.stdout.write(
             self.style.SUCCESS("PMC engineering team setup complete")
         )
-        self.stdout.write("=" * 100)
+        self.stdout.write("=" * 120)
         self.stdout.write(f"Users created:        {users_created}")
         self.stdout.write(f"Users updated:        {users_updated}")
         self.stdout.write(f"Role assignments:     {role_assignments}")
@@ -171,7 +186,7 @@ class Command(BaseCommand):
         self.stdout.write(f"Failed mappings:      {len(failures)}")
 
         self.stdout.write("")
-        self.stdout.write("Verification counts (expected 23 each for mapped set):")
+        self.stdout.write("Verification counts:")
         for spec in ENGINEER_ROLES:
             count = User.objects.filter(
                 username__regex=rf"^{spec['username_prefix']}[0-9]+$",
@@ -193,13 +208,16 @@ class Command(BaseCommand):
 
         self.stdout.write("")
         self.stdout.write(
-            f"{'#':<3} {'Project':<45} {'Team Leader':<12} {'Site Eng.':<12} "
-            f"{'Billing SE':<12} {'QA/QC SE':<12} {'Status'}"
+            f"{'#':<3} {'Project':<40} {'TL':<12} {'SE':<12} {'BSE':<12} "
+            f"{'QAQC':<12} {'HSE':<12} {'Status'}"
         )
-        self.stdout.write("-" * 100)
+        self.stdout.write("-" * 120)
         for row in mapping_table:
-            idx, proj, tl, se, bse, qa, st, _ = row
+            idx, proj, tl, se, bse, qa, hse, st = row
             self.stdout.write(
-                f"{idx:<3} {proj[:44]:<45} {tl:<12} {se:<12} {bse:<12} {qa:<12} {st}"
+                f"{idx:<3} {proj[:39]:<40} {tl:<12} {se:<12} {bse:<12} "
+                f"{qa:<12} {hse:<12} {st}"
             )
-        self.stdout.write("=" * 100)
+        self.stdout.write("=" * 120)
+        self.stdout.write("")
+        self.stdout.write("HSE login pattern: username=pmc_hse{N}  password=Pmc@HSE{N}")

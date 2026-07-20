@@ -51,6 +51,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
             'site_engineer',
             'billing_site_engineer',
             'qaqc_site_engineer',
+            'hse_site_engineer',
             'created_by'
         ).prefetch_related(
             'sites',
@@ -72,6 +73,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
             'site_engineer',
             'billing_site_engineer',
             'qaqc_site_engineer',
+            'hse_site_engineer',
             'created_by',
         ).prefetch_related(
             'sites',
@@ -120,13 +122,30 @@ class ProjectViewSet(viewsets.ModelViewSet):
         API: GET /api/projects-data/projects/documents/
         Returns all projects that have documentation files uploaded.
         """
-        queryset = self.get_queryset()
-
-        # Filter to only projects with documentation
-        docs_projects = queryset.filter(
-            has_documentation=True,
-            documentation_file__isnull=False
-        ).exclude(documentation_file='')
+        # Preserve RBAC from get_queryset, then reload a lean projection.
+        accessible_ids = list(
+            self.get_queryset()
+            .filter(
+                has_documentation=True,
+                documentation_file__isnull=False,
+            )
+            .exclude(documentation_file='')
+            .values_list('id', flat=True)
+        )
+        docs_projects = (
+            Project.objects.filter(id__in=accessible_ids)
+            .select_related('pmc_head')
+            .only(
+                'id',
+                'name',
+                'documentation_file',
+                'updated_at',
+                'created_at',
+                'pmc_head_id',
+                'pmc_head__username',
+            )
+            .order_by('-created_at')
+        )
 
         documents = []
         for project in docs_projects:
@@ -397,7 +416,8 @@ class ProjectViewSet(viewsets.ModelViewSet):
         # without needing a separate re-fetch that could race or return stale data.
         project_refreshed = Project.objects.select_related(
             'dashboard_data', 'pmc_head', 'team_lead',
-            'billing_site_engineer', 'qaqc_site_engineer', 'created_by',
+            'billing_site_engineer', 'qaqc_site_engineer', 'hse_site_engineer',
+            'created_by',
         ).prefetch_related('sites', 'coordinators', 'site_engineers').get(pk=project.pk)
 
         from .serializers import ProjectSerializer as _ProjectSerializer
@@ -585,6 +605,46 @@ class ProjectViewSet(viewsets.ModelViewSet):
         except User.DoesNotExist:
             return Response({'error': 'User not found'}, status=404)
 
+    @action(detail=True, methods=['post'], url_path='add-hse-site-engineer')
+    def add_hse_site_engineer(self, request, pk=None):
+        """
+        Add an HSE Site Engineer to the project.
+        API: POST /api/projects/{id}/add-hse-site-engineer/
+        Body: { "user_id": <user_id> }
+        """
+        project = self.get_object()
+        user = request.user
+
+        if not (user.groups.filter(name__in=['Team Leader', 'PMC Head', 'CEO']).exists() or
+                user.is_superuser or
+                project.team_lead == user or
+                project.pmc_head == user):
+            return Response({'error': 'You do not have permission to add an HSE site engineer'}, status=403)
+
+        user_id = request.data.get('user_id')
+        if not user_id:
+            return Response({'error': 'user_id is required'}, status=400)
+
+        try:
+            hse_engineer = User.objects.get(id=user_id)
+            if not hse_engineer.groups.filter(name='HSE Site Engineer').exists():
+                return Response({'error': 'Selected user must have HSE Site Engineer role'}, status=400)
+
+            if project.hse_site_engineer == hse_engineer:
+                return Response({'error': 'This user is already assigned as HSE Site Engineer'}, status=400)
+
+            project.hse_site_engineer = hse_engineer
+            project.save()
+            serializer = ProjectSerializer(project, context={'request': request})
+
+            return Response({
+                'success': True,
+                'message': f'HSE Site Engineer {hse_engineer.username} added successfully',
+                'project': serializer.data
+            })
+        except User.DoesNotExist:
+            return Response({'error': 'User not found'}, status=404)
+
     @action(detail=True, methods=['post'], url_path='assign-coordinator')
     def assign_coordinator(self, request, pk=None):
         """
@@ -646,7 +706,12 @@ class ProjectViewSet(viewsets.ModelViewSet):
             excluded_user_ids.update(
                 active_tl_projects.values_list('team_lead_id', flat=True)
             )
-        elif group_name in ['Site Engineer', 'Billing Site Engineer', 'QAQC Site Engineer']:
+        elif group_name in [
+            'Site Engineer',
+            'Billing Site Engineer',
+            'QAQC Site Engineer',
+            'HSE Site Engineer',
+        ]:
             # Exclude Site Engineers who are already assigned to active projects
             # Check all site engineer fields
             active_se_projects = Project.objects.exclude(
@@ -668,6 +733,12 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 active_se_projects.exclude(
                     qaqc_site_engineer__isnull=True
                 ).values_list('qaqc_site_engineer_id', flat=True)
+            )
+            # HSE Site Engineer
+            excluded_user_ids.update(
+                active_se_projects.exclude(
+                    hse_site_engineer__isnull=True
+                ).values_list('hse_site_engineer_id', flat=True)
             )
         
         # Filter out users who are already assigned to active projects

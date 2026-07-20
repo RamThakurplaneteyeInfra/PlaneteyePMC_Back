@@ -10,6 +10,8 @@ from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
+from core.cache_keys import build_rbac_list_cache_key, invalidate_list_cache
+
 from .models import ProjectManpower
 from .serializers import (
     dashboard_month_label,
@@ -97,12 +99,8 @@ class ProjectManpowerViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         super().perform_create(serializer)
         # Cache invalidation (safe for both LocMemCache and Redis backends)
-        try:
-            cache.delete_pattern("manpower_list:*")
-            cache.delete_pattern("manpower_dashboard:*")
-        except AttributeError:
-            # LocMemCache doesn't support delete_pattern; clear all cache
-            cache.clear()
+        invalidate_list_cache("manpower_list")
+        invalidate_list_cache("manpower_dashboard")
 
     def create(self, request, *args, **kwargs):
         ser = ProjectManpowerInputSerializer(data=request.data)
@@ -128,7 +126,7 @@ class ProjectManpowerViewSet(viewsets.ModelViewSet):
         responses={200: ProjectManpowerSerializer(many=True)},
     )
     def list(self, request, *args, **kwargs):
-        cache_key = f"manpower_list:{request.get_full_path()}"
+        cache_key = build_rbac_list_cache_key("manpower_list", request)
         data = cache.get(cache_key)
         if data is not None:
             return Response(data)
@@ -201,7 +199,12 @@ class ProjectManpowerViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        cache_key = f"manpower_dashboard:{pn}"
+        cache_key = build_rbac_list_cache_key(
+            "manpower_dashboard",
+            request,
+            extra_parts=[f"pn:{pn.lower()}"],
+            use_query_string=False,
+        )
         data = cache.get(cache_key)
         if data is not None:
             return Response(data)

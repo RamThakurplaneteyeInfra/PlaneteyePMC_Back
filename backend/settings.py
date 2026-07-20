@@ -125,9 +125,9 @@ ASGI_APPLICATION = 'backend.asgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-# Database — use DATABASE_URL when set (Render/Neon). Fallback to SQLite for
-# local tooling only; production must set DATABASE_URL (see settings_prod).
+# Prefer DATABASE_URL; else USE_POSTGRESQL + DB_* from .env; else SQLite.
 DATABASE_URL = os.environ.get('DATABASE_URL')
+_use_postgresql = os.environ.get('USE_POSTGRESQL', '').lower() in ('1', 'true', 'yes')
 if DATABASE_URL:
     DATABASES = {
         'default': dj_database_url.parse(
@@ -135,6 +135,21 @@ if DATABASE_URL:
             conn_max_age=600,
             ssl_require=True,
         )
+    }
+elif _use_postgresql and os.environ.get('DB_NAME') and os.environ.get('DB_HOST'):
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('DB_NAME'),
+            'USER': os.environ.get('DB_USER'),
+            'PASSWORD': os.environ.get('DB_PASSWORD'),
+            'HOST': os.environ.get('DB_HOST'),
+            'PORT': os.environ.get('DB_PORT', '5432'),
+            'OPTIONS': {
+                'sslmode': os.environ.get('DB_SSLMODE', 'require'),
+            },
+            'CONN_MAX_AGE': 600,
+        }
     }
 else:
     DATABASES = {
@@ -180,6 +195,12 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+
+# Upload memory: keep small files in RAM; spill larger files to temp disk.
+# DATA_UPLOAD_MAX_MEMORY_SIZE remains high so multi-file / large document
+# requests that are already allowed by validation still succeed.
+FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024  # 5 MB
+DATA_UPLOAD_MAX_MEMORY_SIZE = 262144000  # 250 MB
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_DIRS = [
     
@@ -244,10 +265,19 @@ CSRF_TRUSTED_ORIGINS = [
     'http://localhost:3000',
     'http://127.0.0.1:5173',
     'http://127.0.0.1:3000',
+    'http://localhost:5174',
+    # VS Code / Cursor Dev Tunnels (backend + prior tunnels)
+    'https://ds0df43l-8000.inc1.devtunnels.ms',
+    'http://ds0df43l-8000.inc1.devtunnels.ms',
     'https://fv5k8l3m-8000.inc1.devtunnels.ms',
     'http://fv5k8l3m-8000.inc1.devtunnels.ms',
-    "http://localhost:5174",
 ]
+# Extra origins from .env (comma-separated), e.g. frontend tunnel URLs
+_csrf_env = os.environ.get('CSRF_TRUSTED_ORIGINS', '')
+for _origin in _csrf_env.split(','):
+    _origin = _origin.strip()
+    if _origin and _origin not in CSRF_TRUSTED_ORIGINS:
+        CSRF_TRUSTED_ORIGINS.append(_origin)
 
 # Disable CSRF for API endpoints (using JWT authentication)
 CSRF_COOKIE_SECURE = True  # Set to True in production with HTTPS
@@ -436,5 +466,19 @@ AWS_S3_CUSTOM_DOMAIN = os.environ.get('AWS_S3_CUSTOM_DOMAIN', '')
 # Primary: s3 | cloudinary (falls back to the other unless SITE_IMAGE_S3_ONLY=True)
 SITE_IMAGE_STORAGE_PRIMARY = os.environ.get('SITE_IMAGE_STORAGE_PRIMARY', 's3')
 MEETING_DOCUMENTS_S3_PREFIX = os.environ.get('MEETING_DOCUMENTS_S3_PREFIX', 'pmc')
+
+# ==============================
+# CELERY (optional background jobs — eager by default, no broker required)
+# Existing API flows do not depend on Celery. Set CELERY_TASK_ALWAYS_EAGER=false
+# and CELERY_BROKER_URL when you are ready to run a real worker.
+# ==============================
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'memory://')
+CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'cache+memory://')
+CELERY_TASK_ALWAYS_EAGER = os.environ.get('CELERY_TASK_ALWAYS_EAGER', 'true').lower() == 'true'
+CELERY_TASK_EAGER_PROPAGATES = True
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE
 
 

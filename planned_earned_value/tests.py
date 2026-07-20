@@ -205,6 +205,15 @@ class PlannedVsActualAPITest(APITestCase):
         self.assertEqual(ok.status_code, status.HTTP_200_OK)
         self.assertEqual(ok.data["data"]["contractor"]["id"], self.c1.id)
 
+    def test_contractor_by_type_returns_null_when_missing(self):
+        response = self.client.get(
+            f"{self.URL}project/Thane%20Project/type/CONTRACTOR/"
+            f"?contractor_id={self.c1.id}&month=7&year=2026"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["success"])
+        self.assertIsNone(response.data["data"])
+
     def test_dashboard(self):
         self.client.post(self.URL, self._scl(), format="json")
         response = self.client.get(f"{self.URL}dashboard/?month=7&year=2026")

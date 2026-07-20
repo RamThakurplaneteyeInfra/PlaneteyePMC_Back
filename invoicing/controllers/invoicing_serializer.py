@@ -40,13 +40,13 @@ class InvoicingInformationSerializer(serializers.ModelSerializer):
     contractor = serializers.SerializerMethodField()
     contractor_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
 
-    # Legacy read aliases
-    projectName = serializers.SerializerMethodField()
-    invoiceType = serializers.SerializerMethodField()
-    grossBilled = serializers.SerializerMethodField()
-    grossCertifiedBilled = serializers.SerializerMethodField()
-    netBilledWithoutVAT = serializers.SerializerMethodField()
-    netCollected = serializers.SerializerMethodField()
+    # Legacy read aliases (source= avoids per-field Python method dispatch)
+    projectName = serializers.ReadOnlyField(source="project_name")
+    invoiceType = serializers.ReadOnlyField(source="invoice_type")
+    grossBilled = serializers.ReadOnlyField(source="gross_billed")
+    grossCertifiedBilled = serializers.ReadOnlyField(source="gross_certified_billed")
+    netBilledWithoutVAT = serializers.ReadOnlyField(source="gross_billed")
+    netCollected = serializers.ReadOnlyField(source="gross_certified_billed")
     netDue = serializers.SerializerMethodField()
 
     class Meta:
@@ -91,29 +91,18 @@ class InvoicingInformationSerializer(serializers.ModelSerializer):
     def get_contractor(self, obj):
         return contractor_payload(obj.contractor)
 
-    def get_projectName(self, obj) -> str:
-        return obj.project_name
-
-    def get_invoiceType(self, obj) -> str:
-        return obj.invoice_type
-
-    def get_grossBilled(self, obj):
-        return obj.gross_billed
-
-    def get_grossCertifiedBilled(self, obj):
-        return obj.gross_certified_billed
+    def _metrics(self, obj) -> dict:
+        cached = getattr(obj, "_invoicing_metrics_cache", None)
+        if cached is None:
+            cached = metrics_from_record(obj)
+            setattr(obj, "_invoicing_metrics_cache", cached)
+        return cached
 
     def get_difference(self, obj) -> Decimal:
-        return metrics_from_record(obj)["difference"]
+        return self._metrics(obj)["difference"]
 
     def get_certification_efficiency(self, obj) -> Decimal:
-        return metrics_from_record(obj)["certification_efficiency"]
-
-    def get_netBilledWithoutVAT(self, obj):
-        return obj.gross_billed
-
-    def get_netCollected(self, obj):
-        return obj.gross_certified_billed
+        return self._metrics(obj)["certification_efficiency"]
 
     def get_netDue(self, obj) -> Decimal:
         return self.get_difference(obj)
