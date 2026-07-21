@@ -85,6 +85,7 @@ INSTALLED_APPS = [
     'bottlenecks',
     'meeting_documents',
     'testing_documents',
+    'feedback_management',
 ]
 
 MIDDLEWARE = [
@@ -467,6 +468,8 @@ AWS_S3_CUSTOM_DOMAIN = os.environ.get('AWS_S3_CUSTOM_DOMAIN', '')
 # Primary: s3 | cloudinary (falls back to the other unless SITE_IMAGE_S3_ONLY=True)
 SITE_IMAGE_STORAGE_PRIMARY = os.environ.get('SITE_IMAGE_STORAGE_PRIMARY', 's3')
 MEETING_DOCUMENTS_S3_PREFIX = os.environ.get('MEETING_DOCUMENTS_S3_PREFIX', 'pmc')
+# Project Feedback attachments — configurable S3 folder (bucket URL configured later).
+FEEDBACK_ATTACHMENTS_S3_PREFIX = os.environ.get('FEEDBACK_ATTACHMENTS_S3_PREFIX', 'feedback')
 
 # ==============================
 # CELERY (optional background jobs — eager by default, no broker required)

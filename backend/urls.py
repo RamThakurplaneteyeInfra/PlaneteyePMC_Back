@@ -156,6 +156,9 @@ urlpatterns = [
 
     # Testing Documents (PDF / image / video) stored in private S3 under testing/
     path('api/', include('testing_documents.urls')),
+
+    # Project Feedback Management (issue workflow with optional S3 image attachment)
+    path('api/', include('feedback_management.urls')),
 ]
 
 if settings.DEBUG:
