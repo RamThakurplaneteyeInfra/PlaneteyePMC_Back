@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import logging
 import mimetypes
+import os
+import tempfile
 import uuid
 from pathlib import Path
 from urllib.parse import quote
@@ -147,6 +149,28 @@ def build_s3_key(*, project_id: int, year: int, month: int, filename: str) -> st
     return f"{TESTING_DOCUMENTS_ROOT}/{int(project_id)}/{int(year)}/{int(month):02d}/{unique}{ext}"
 
 
+def _copy_to_spooled_file(source) -> tempfile.SpooledTemporaryFile:
+    """Buffer the upload into a fresh, seekable file for boto3.
+
+    Passing Django's request-bound UploadedFile directly to boto3's transfer
+    manager can raise "I/O operation on closed file" once the request stream is
+    consumed. Copying into an independent spooled temp file avoids that.
+    """
+    from core.uploads import copy_file_obj_chunked
+
+    target = tempfile.SpooledTemporaryFile(max_size=25 * 1024 * 1024, mode="w+b")
+    copy_file_obj_chunked(source, target)
+    return target
+
+
+def _file_size(file_obj) -> int:
+    pos = file_obj.tell()
+    file_obj.seek(0, os.SEEK_END)
+    size = file_obj.tell()
+    file_obj.seek(pos)
+    return size
+
+
 def upload_testing_document(
     *,
     uploaded_file,
@@ -159,7 +183,6 @@ def upload_testing_document(
         raise ValidationError(err or "S3 is not ready.")
 
     filename, content_type, doc_type = validate_upload_file(uploaded_file)
-    size = int(getattr(uploaded_file, "size", 0) or 0)
     s3_key = build_s3_key(
         project_id=project_id,
         year=year,
@@ -167,22 +190,30 @@ def upload_testing_document(
         filename=filename,
     )
 
+    buffered = _copy_to_spooled_file(uploaded_file)
+    size = _file_size(buffered)
+    if size <= 0:
+        buffered.close()
+        raise ValidationError("Uploaded file is empty or unreadable.")
+
     client = get_s3_client()
     bucket = settings.AWS_STORAGE_BUCKET_NAME
-    uploaded_file.seek(0)
-    client.upload_fileobj(
-        uploaded_file,
-        bucket,
-        s3_key,
-        ExtraArgs={
-            "ContentType": content_type,
-            "Metadata": {
-                "original-filename": filename[:200],
-                "document-type": doc_type,
+    try:
+        buffered.seek(0)
+        client.upload_fileobj(
+            buffered,
+            bucket,
+            s3_key,
+            ExtraArgs={
+                "ContentType": content_type,
+                "Metadata": {
+                    "original-filename": filename[:200],
+                    "document-type": doc_type,
+                },
             },
-        },
-    )
-    uploaded_file.seek(0)
+        )
+    finally:
+        buffered.close()
 
     return {
         "s3_key": s3_key,
