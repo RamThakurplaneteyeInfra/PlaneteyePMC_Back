@@ -539,7 +539,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def approve_team_lead(self, request, pk=None):
         """
-        Team Lead approves DPR and sends to Coordinator.
+        Team Lead approves DPR and sends to PMC Manager.
         
         **Endpoint:** POST /api/dpr/{id}/approve_team_lead/
         """
@@ -553,13 +553,13 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         
         # Update DPR status
         dpr.status = DailyProgressReport.Status.PENDING_COORDINATOR
-        dpr.current_approver_role = 'Coordinator'
+        dpr.current_approver_role = 'PMC Manager'
         dpr.save()
 
         # Send approval notification to submitter (Site Engineer)
         notify_dpr_approved_by_role(dpr, 'Team Leader')
 
-        # Send submission notification to next approver (Coordinator)
+        # Send submission notification to next approver (PMC Manager)
         notify_dpr_submitted(dpr)
 
         # Cache invalidation
@@ -571,11 +571,11 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     @swagger_auto_schema(
-        operation_description="Coordinator approves DPR",
+        operation_description="PMC Manager approves DPR",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
             properties={
-                'role': openapi.Schema(type=openapi.TYPE_STRING, description='Role of the approver (Coordinator)')
+                'role': openapi.Schema(type=openapi.TYPE_STRING, description='Role of the approver (PMC Manager)')
             }
         ),
         responses={200: DailyProgressReportSerializer}
@@ -583,15 +583,16 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def approve_coordinator(self, request, pk=None):
         """
-        Coordinator approves DPR and sends to PMC Head.
+        PMC Manager approves DPR and sends to PMC Head.
         
         **Endpoint:** POST /api/dpr/{id}/approve_coordinator/
+        (URL kept for frontend compatibility)
         """
         dpr = self.get_object()
         
         if dpr.status != DailyProgressReport.Status.PENDING_COORDINATOR:
             return Response(
-                {'error': 'DPR is not pending Coordinator approval'},
+                {'error': 'DPR is not pending PMC Manager approval'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -601,7 +602,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         dpr.save()
 
         # Send approval notification to Team Lead and Site Engineer
-        notify_dpr_approved_by_role(dpr, 'Coordinator')
+        notify_dpr_approved_by_role(dpr, 'PMC Manager')
 
         # Send submission notification to next approver (PMC Head)
         notify_dpr_submitted(dpr)
@@ -696,12 +697,12 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
             dpr.current_approver_role = ''
             rejected_by_role = 'Team Leader'
         elif dpr.status == DailyProgressReport.Status.PENDING_COORDINATOR:
-            # Coordinator rejects -> send back to Team Lead and Site Engineer
+            # PMC Manager rejects -> send back to Team Lead and Site Engineer
             dpr.status = DailyProgressReport.Status.REJECTED
             dpr.current_approver_role = ''
-            rejected_by_role = 'Coordinator'
+            rejected_by_role = 'PMC Manager'
         elif dpr.status == DailyProgressReport.Status.PENDING_PMC_HEAD:
-            # PMC Head rejects -> send back to Coordinator, Team Lead, and Site Engineer
+            # PMC Head rejects -> send back to PMC Manager, Team Lead, and Site Engineer
             dpr.status = DailyProgressReport.Status.REJECTED
             dpr.current_approver_role = ''
             rejected_by_role = 'PMC Head'
@@ -734,7 +735,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
             openapi.Parameter(
                 'role',
                 openapi.IN_QUERY,
-                description="Role to filter by (Team Leader, Coordinator, PMC Head)",
+                description="Role to filter by (Team Leader, PMC Manager, PMC Head)",
                 type=openapi.TYPE_STRING,
                 required=True
             ),
@@ -768,9 +769,10 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         if data is not None:
             return Response(data)
 
-        # Map role to status
+        # Map role to status (Coordinator kept as legacy alias of PMC Manager)
         role_status_map = {
             'Team Leader': DailyProgressReport.Status.PENDING_TEAM_LEAD,
+            'PMC Manager': DailyProgressReport.Status.PENDING_COORDINATOR,
             'Coordinator': DailyProgressReport.Status.PENDING_COORDINATOR,
             'PMC Head': DailyProgressReport.Status.PENDING_PMC_HEAD,
         }
@@ -801,7 +803,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
             openapi.Parameter(
                 'role',
                 openapi.IN_QUERY,
-                description="Role to filter by (Team Leader, Coordinator, PMC Head)",
+                description="Role to filter by (Team Leader, PMC Manager, PMC Head)",
                 type=openapi.TYPE_STRING,
                 required=True
             ),

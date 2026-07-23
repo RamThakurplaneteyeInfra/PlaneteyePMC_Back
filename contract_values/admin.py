@@ -15,6 +15,7 @@ class ContractValueAdmin(admin.ModelAdmin):
         "original_contract_value",
         "excess_value",
         "saving",
+        "cos",
         "created_at",
         "updated_at",
     ]
@@ -32,6 +33,7 @@ class ContractValueAdmin(admin.ModelAdmin):
                     "original_contract_value",
                     "excess_value",
                     "saving",
+                    "cos",
                 ),
             },
         ),

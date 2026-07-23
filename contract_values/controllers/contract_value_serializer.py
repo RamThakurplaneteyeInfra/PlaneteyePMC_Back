@@ -1,7 +1,8 @@
 """
 Contract Value Serializer.
 
-Writable: project_name, contract_type, contractor_id, original_contract_value, excess_value, saving
+Writable: project_name, contract_type, contractor_id, original_contract_value,
+          excess_value, saving, cos
 Computed (read-only): revised_value, increase_percentage
 Legacy aliases supported for backward compatibility.
 """
@@ -15,7 +16,6 @@ from contractors.resolvers import (
     resolve_contractor_for_write,
     resolve_project_for_module,
 )
-from projects.models import Project
 
 from ..models.contract_value import ContractValue
 from .contract_value_metrics import metrics_from_record
@@ -42,6 +42,7 @@ class ContractValueSerializer(serializers.ModelSerializer):
     contractType = serializers.ReadOnlyField(source="contract_type")
     originalContractValue = serializers.ReadOnlyField(source="original_contract_value")
     excessValue = serializers.ReadOnlyField(source="excess_value")
+    Cos = serializers.ReadOnlyField(source="cos")
     revisedContractValue = serializers.SerializerMethodField()
     approvedVOPercentage = serializers.SerializerMethodField()
 
@@ -61,6 +62,8 @@ class ContractValueSerializer(serializers.ModelSerializer):
             "excess_value",
             "excessValue",
             "saving",
+            "cos",
+            "Cos",
             "revised_value",
             "increase_percentage",
             "revisedContractValue",
@@ -75,6 +78,7 @@ class ContractValueSerializer(serializers.ModelSerializer):
             "contractor",
             "originalContractValue",
             "excessValue",
+            "Cos",
             "revised_value",
             "increase_percentage",
             "revisedContractValue",
@@ -126,6 +130,10 @@ class ContractValueSerializer(serializers.ModelSerializer):
             data["excess_value"] = data["approvedVO"]
         if "potentialPendingVO" in data and "saving" not in data:
             data["saving"] = data["potentialPendingVO"]
+        if "Cos" in data and "cos" not in data:
+            data["cos"] = data["Cos"]
+        if "COS" in data and "cos" not in data:
+            data["cos"] = data["COS"]
 
         if "contract_type" in data:
             data["contract_type"] = _normalize_contract_type(str(data["contract_type"]))
@@ -199,3 +207,6 @@ class ContractValueSerializer(serializers.ModelSerializer):
 
     def validate_saving(self, value):
         return self._validate_non_negative(value, "saving")
+
+    def validate_cos(self, value):
+        return self._validate_non_negative(value, "cos")

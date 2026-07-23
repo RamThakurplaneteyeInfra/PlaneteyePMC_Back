@@ -14,7 +14,7 @@ class DailyProgressReport(models.Model):
     class Status(models.TextChoices):
         DRAFT = 'draft', 'Draft'
         PENDING_TEAM_LEAD = 'pending_team_lead', 'Pending Team Lead Approval'
-        PENDING_COORDINATOR = 'pending_coordinator', 'Pending Coordinator Approval'
+        PENDING_COORDINATOR = 'pending_coordinator', 'Pending PMC Manager Approval'
         PENDING_PMC_HEAD = 'pending_pmc_head', 'Pending PMC Head Approval'
         APPROVED = 'approved', 'Approved'
         REJECTED = 'rejected', 'Rejected'

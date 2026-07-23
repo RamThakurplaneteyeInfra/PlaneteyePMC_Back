@@ -25,7 +25,8 @@ class Command(BaseCommand):
 
     DEMO_USERS = [
         {"username": "pmc_head", "group": "PMC Head", "site_engineer_type": None},
-        {"username": "pmc_coordinator", "group": "Coordinator", "site_engineer_type": None},
+        {"username": "pmc_ho", "group": "Head Office", "site_engineer_type": None},
+        {"username": "pmc_manager", "group": "PMC Manager", "site_engineer_type": None},
         {"username": "pmc_tl", "group": "Team Leader", "site_engineer_type": None},
         {
             "username": "pmc_bse",

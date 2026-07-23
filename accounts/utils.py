@@ -11,49 +11,70 @@ def get_user_role(user):
     """
     if not user or not user.is_authenticated:
         return None
-    
+
     groups = user.groups.all()
     if not groups.exists():
         return None
-    
-    # Priority order: CEO > PMC Head > Team Leader > Coordinator > Site Engineers
+
+    # Priority: CEO > Head Office > PMC Head > Team Leader > PMC Manager > Site Engineers
     role_priority = [
-        'CEO',
-        'PMC Head',
-        'Team Leader',
-        'Coordinator',
-        'Billing Site Engineer',
-        'QAQC Site Engineer',
-        'HSE Site Engineer',
-        'Site Engineer',
+        "CEO",
+        "Head Office",
+        "HO",  # short-name alias → normalized below
+        "PMC Head",
+        "Team Leader",
+        "PMC Manager",
+        "Coordinator",  # legacy alias
+        "Billing Site Engineer",
+        "QAQC Site Engineer",
+        "HSE Site Engineer",
+        "Site Engineer",
     ]
-    
+
     for role in role_priority:
         if groups.filter(name=role).exists():
+            if role in ("HO",):
+                return "Head Office"
+            if role == "Coordinator":
+                return "PMC Manager"
             return role
-    
+
     # Return first group if no priority match
     return groups.first().name
 
 
 def is_pmc_head(user):
     """Check if user is PMC Head"""
-    return user.groups.filter(name='PMC Head').exists() if user else False
+    return user.groups.filter(name="PMC Head").exists() if user else False
 
 
 def is_ceo(user):
     """Check if user is CEO"""
-    return user.groups.filter(name='CEO').exists() if user else False
+    return user.groups.filter(name="CEO").exists() if user else False
+
+
+def is_head_office(user):
+    """Check if user is Head Office (HO)."""
+    if not user:
+        return False
+    return user.groups.filter(name__in=["Head Office", "HO"]).exists()
 
 
 def is_team_leader(user):
     """Check if user is Team Leader"""
-    return user.groups.filter(name='Team Leader').exists() if user else False
+    return user.groups.filter(name="Team Leader").exists() if user else False
+
+
+def is_pmc_manager(user):
+    """Check if user is PMC Manager (includes legacy Coordinator group)."""
+    if not user:
+        return False
+    return user.groups.filter(name__in=["PMC Manager", "Coordinator"]).exists()
 
 
 def is_coordinator(user):
-    """Check if user is Coordinator"""
-    return user.groups.filter(name='Coordinator').exists() if user else False
+    """Legacy alias for is_pmc_manager."""
+    return is_pmc_manager(user)
 
 
 def is_site_engineer(user):
@@ -62,27 +83,27 @@ def is_site_engineer(user):
         return False
     return user.groups.filter(
         name__in=[
-            'Site Engineer',
-            'Billing Site Engineer',
-            'QAQC Site Engineer',
-            'HSE Site Engineer',
+            "Site Engineer",
+            "Billing Site Engineer",
+            "QAQC Site Engineer",
+            "HSE Site Engineer",
         ]
     ).exists()
 
 
 def is_billing_site_engineer(user):
     """Check if user is Billing Site Engineer"""
-    return user.groups.filter(name='Billing Site Engineer').exists() if user else False
+    return user.groups.filter(name="Billing Site Engineer").exists() if user else False
 
 
 def is_qaqc_site_engineer(user):
     """Check if user is QAQC Site Engineer"""
-    return user.groups.filter(name='QAQC Site Engineer').exists() if user else False
+    return user.groups.filter(name="QAQC Site Engineer").exists() if user else False
 
 
 def is_hse_site_engineer(user):
     """Check if user is HSE Site Engineer"""
-    return user.groups.filter(name='HSE Site Engineer').exists() if user else False
+    return user.groups.filter(name="HSE Site Engineer").exists() if user else False
 
 
 def get_site_engineer_type(user):
@@ -93,18 +114,18 @@ def get_site_engineer_type(user):
     """
     if not user:
         return None
-    
+
     try:
         profile = user.profile
         return profile.site_engineer_type
     except Exception:
         # Fallback to group-based detection
-        if user.groups.filter(name='Billing Site Engineer').exists():
-            return 'billing_site_engineer'
-        elif user.groups.filter(name='QAQC Site Engineer').exists():
-            return 'qaqc_site_engineer'
-        elif user.groups.filter(name='HSE Site Engineer').exists():
-            return 'hse_site_engineer'
-        elif user.groups.filter(name='Site Engineer').exists():
-            return 'site_engineer'
+        if user.groups.filter(name="Billing Site Engineer").exists():
+            return "billing_site_engineer"
+        elif user.groups.filter(name="QAQC Site Engineer").exists():
+            return "qaqc_site_engineer"
+        elif user.groups.filter(name="HSE Site Engineer").exists():
+            return "hse_site_engineer"
+        elif user.groups.filter(name="Site Engineer").exists():
+            return "site_engineer"
         return None

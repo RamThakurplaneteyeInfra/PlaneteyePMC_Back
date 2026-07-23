@@ -20,7 +20,7 @@ from accounts.rbac import is_admin_user
 
 
 class IsStaffOrAdminRole(BasePermission):
-    """Staff/superuser or PMC admin roles (CEO / PMC Head / Coordinator)."""
+    """Staff/superuser or PMC admin roles (CEO / PMC Head / PMC Manager)."""
 
     def has_permission(self, request, view):
         user = request.user
@@ -515,8 +515,8 @@ def chrome_notification_endpoint(request):
     }
 
     Notification Logic:
-    - project_created: PMC Head creates project → Notify PMC Coordinators
-    - project_assigned: PMC Coordinator assigns to Team Leader → Notify that Team Leader only
+    - project_created: PMC Head creates project → Notify PMC Managers
+    - project_assigned: PMC Manager assigns to Team Leader → Notify that Team Leader only
     - site_engineer_assigned: Team Leader assigns to Site Engineers → Notify specific site engineer types
     - dpr_submitted: Site Engineer submits DPR → Notify current approver role
     - dpr_approved: DPR approved → Notify relevant users based on approver role

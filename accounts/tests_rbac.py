@@ -12,6 +12,7 @@ from accounts.models import UserProfile
 from accounts.rbac import (
     RBACDomain,
     get_user_assigned_project_ids,
+    is_admin_user,
     user_can_write_domain,
     user_has_project_access,
 )
@@ -119,6 +120,32 @@ class FinancialRBACAPITest(TestCase):
     def test_enforce_blocks_se_from_financial_write(self):
         with self.assertRaises(PermissionDenied):
             enforce_project_write(self.se, self.project, RBACDomain.FINANCIAL)
+
+
+class HeadOfficeRBACAPITest(TestCase):
+    def setUp(self):
+        self.project = Project.objects.create(name="HO Project", status="active")
+        self.other = Project.objects.create(name="HO Other Project", status="inactive")
+        self.ho_group, _ = Group.objects.get_or_create(name="Head Office")
+        self.ho = User.objects.create_user("ho_user", password="x")
+        self.ho.groups.add(self.ho_group)
+
+    def test_head_office_is_admin_user(self):
+        self.assertTrue(is_admin_user(self.ho))
+
+    def test_head_office_has_all_project_access(self):
+        self.assertTrue(user_has_project_access(self.ho, self.project))
+        self.assertTrue(user_has_project_access(self.ho, self.other))
+        ids = get_user_assigned_project_ids(self.ho)
+        self.assertIn(self.project.id, ids)
+        self.assertIn(self.other.id, ids)
+
+    def test_head_office_can_write_all_domains(self):
+        self.assertTrue(user_can_write_domain(self.ho, self.project, RBACDomain.GENERAL))
+        self.assertTrue(user_can_write_domain(self.ho, self.project, RBACDomain.ENGINEERING))
+        self.assertTrue(user_can_write_domain(self.ho, self.project, RBACDomain.BILLING))
+        self.assertTrue(user_can_write_domain(self.ho, self.project, RBACDomain.FINANCIAL))
+        self.assertTrue(user_can_write_domain(self.ho, self.project, RBACDomain.QAQC))
 
 
 class SetupProjectEngineeringTeamTest(TestCase):

@@ -2,6 +2,7 @@ from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
+from accounts.rbac import is_admin_user
 from .models import Task, DailyProgressReport
 from .serializers import TaskSerializer, DailyProgressReportSerializer
 
@@ -16,7 +17,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         
         # Role-based filtering for tasks
         user = self.request.user
-        if user.groups.filter(name__in=['PMC Head', 'CEO']).exists() or user.is_superuser:
+        if is_admin_user(user):
             return Task.objects.all()
         elif user.groups.filter(name='Team Leader').exists():
             # Team lead sees tasks from their assigned projects
@@ -44,7 +45,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         user = self.request.user
         
         # Check user groups
-        is_admin = user.groups.filter(name__in=['PMC Head', 'CEO']).exists() or user.is_superuser
+        is_admin = is_admin_user(user)
         is_team_lead = user.groups.filter(name='Team Leader').exists()
         is_site_engineer = user.groups.filter(name__in=['Site Engineer', 'Billing Site Engineer', 'QAQC Site Engineer']).exists()
         
@@ -102,12 +103,12 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         
         # Check if user has permission to approve
         user = request.user
-        is_admin = user.groups.filter(name__in=['PMC Head', 'CEO']).exists() or user.is_superuser
+        is_admin = is_admin_user(user)
         is_team_lead = user.groups.filter(name='Team Leader').exists()
         
         if not (is_admin or is_team_lead):
             return Response(
-                {'error': 'Only Team Leader or PMC Head can approve DPRs'},
+                {'error': 'Only Team Leader or admin roles can approve DPRs'},
                 status=status.HTTP_403_FORBIDDEN
             )
         
@@ -141,12 +142,12 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         
         # Check if user has permission to reject
         user = request.user
-        is_admin = user.groups.filter(name__in=['PMC Head', 'CEO']).exists() or user.is_superuser
+        is_admin = is_admin_user(user)
         is_team_lead = user.groups.filter(name='Team Leader').exists()
         
         if not (is_admin or is_team_lead):
             return Response(
-                {'error': 'Only Team Leader or PMC Head can reject DPRs'},
+                {'error': 'Only Team Leader or admin roles can reject DPRs'},
                 status=status.HTTP_403_FORBIDDEN
             )
         

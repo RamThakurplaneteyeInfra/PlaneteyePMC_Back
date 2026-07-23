@@ -22,8 +22,15 @@ class Command(BaseCommand):
                 'description': 'CEO - Executive level access to all projects and reports'
             },
             {
-                'name': 'Coordinator',
-                'description': 'Coordinator - Manages project coordination and communication'
+                'name': 'Head Office',
+                'description': (
+                    'Head Office (HO) - Organization-wide monitoring, review, '
+                    'and supervision of all PMC projects'
+                ),
+            },
+            {
+                'name': 'PMC Manager',
+                'description': 'PMC Manager - Manages project coordination and communication (formerly Coordinator)'
             },
             {
                 'name': 'Team Leader',

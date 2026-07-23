@@ -52,12 +52,15 @@ class UserProfile(models.Model):
         if not groups.exists():
             return None
         
-        # Priority order: CEO > PMC Head > Team Leader > Coordinator > Site Engineers
+        # Priority order: CEO > Head Office > PMC Head > Team Leader > PMC Manager > Site Engineers
         role_priority = [
             'CEO',
+            'Head Office',
+            'HO',
             'PMC Head',
             'Team Leader',
-            'Coordinator',
+            'PMC Manager',
+            'Coordinator',  # legacy alias
             'Billing Site Engineer',
             'QAQC Site Engineer',
             'HSE Site Engineer',
@@ -66,6 +69,10 @@ class UserProfile(models.Model):
         
         for role in role_priority:
             if groups.filter(name=role).exists():
+                if role in ('HO',):
+                    return 'Head Office'
+                if role == 'Coordinator':
+                    return 'PMC Manager'
                 return role
         
         # Return first group if no priority match

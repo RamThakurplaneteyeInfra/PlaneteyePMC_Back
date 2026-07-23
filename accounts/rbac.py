@@ -20,7 +20,10 @@ from projects.models import Project
 
 ROLE_CEO = "CEO"
 ROLE_PMC_HEAD = "PMC Head"
-ROLE_COORDINATOR = "Coordinator"
+ROLE_HEAD_OFFICE = "Head Office"
+ROLE_HO_ALIAS = "HO"  # short name — treated as Head Office
+ROLE_PMC_MANAGER = "PMC Manager"
+ROLE_COORDINATOR = "Coordinator"  # legacy alias — treated as PMC Manager
 ROLE_TEAM_LEADER = "Team Leader"
 ROLE_TEAM_LEAD_ALIAS = "Team Lead"
 ROLE_SITE_ENGINEER = "Site Engineer"
@@ -28,7 +31,15 @@ ROLE_BILLING_SITE_ENGINEER = "Billing Site Engineer"
 ROLE_QAQC_SITE_ENGINEER = "QAQC Site Engineer"
 ROLE_HSE_SITE_ENGINEER = "HSE Site Engineer"
 
-ADMIN_ROLES = {ROLE_CEO, ROLE_PMC_HEAD, ROLE_COORDINATOR}
+# Organization-wide roles: all projects, all domain writes via WRITE_ROLES_BY_DOMAIN.
+ADMIN_ROLES = {
+    ROLE_CEO,
+    ROLE_PMC_HEAD,
+    ROLE_HEAD_OFFICE,
+    ROLE_HO_ALIAS,
+    ROLE_PMC_MANAGER,
+    ROLE_COORDINATOR,
+}
 
 SITE_ENGINEER_ROLES = {
     ROLE_SITE_ENGINEER,
@@ -91,10 +102,20 @@ def _user_role_names(user) -> set[str]:
     roles = set(user.groups.values_list("name", flat=True))
     if ROLE_TEAM_LEAD_ALIAS in roles:
         roles.add(ROLE_TEAM_LEADER)
+    # Normalize short / legacy aliases into canonical admin role names.
+    if ROLE_HO_ALIAS in roles:
+        roles.add(ROLE_HEAD_OFFICE)
+    if ROLE_HEAD_OFFICE in roles:
+        roles.add(ROLE_HO_ALIAS)
+    if ROLE_COORDINATOR in roles:
+        roles.add(ROLE_PMC_MANAGER)
     try:
         profile = user.profile
         if profile.designation in (ROLE_TEAM_LEADER, ROLE_TEAM_LEAD_ALIAS, "PMC Team Leader"):
             roles.add(ROLE_TEAM_LEADER)
+        if profile.designation in (ROLE_HEAD_OFFICE, ROLE_HO_ALIAS, "Head Office (HO)"):
+            roles.add(ROLE_HEAD_OFFICE)
+            roles.add(ROLE_HO_ALIAS)
     except Exception:
         pass
     return roles

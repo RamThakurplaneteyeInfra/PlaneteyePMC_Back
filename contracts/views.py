@@ -23,8 +23,11 @@ ROLE_NORMALIZATION_MAP = {
     "billing site engineer": "Billing Site Engineer",
     "team leader": "Team Leader",
     "pmc head": "PMC Head",
+    "head office": "Head Office",
+    "ho": "Head Office",
     "ceo": "CEO",
-    "coordinator": "Coordinator",
+    "pmc manager": "PMC Manager",
+    "coordinator": "PMC Manager",  # legacy alias
 }
 
 
@@ -213,9 +216,9 @@ class ContractViewSet(viewsets.ModelViewSet):
                     qs = qs.filter(created_at__date=d)
 
             # Default list endpoint returns approved only for regular users
-            # PMC Head and CEO can see all contracts
+            # Admin roles can see all contracts
             role = self._get_role_from_cache()
-            if role not in ["PMC Head", "CEO"]:
+            if role not in ["PMC Head", "CEO", "Head Office", "HO", "PMC Manager", "Coordinator"]:
                 qs = qs.filter(status=Contract.Status.APPROVED)
 
             qs = self._apply_project_rbac_filter(qs)
@@ -376,7 +379,7 @@ class ContractViewSet(viewsets.ModelViewSet):
         return result
 
     @swagger_auto_schema(
-        operation_description="Admin view: List ALL contracts (approved, pending, rejected). PMC Head, Coordinator, Billing Site Engineer access.",
+        operation_description="Admin view: List ALL contracts (approved, pending, rejected). PMC Head, PMC Manager, Billing Site Engineer access.",
         manual_parameters=[
             openapi.Parameter(
                 'role',
@@ -395,7 +398,7 @@ class ContractViewSet(viewsets.ModelViewSet):
         Permission: PMC Head, Coordinator, Billing Site Engineer.
         """
         role = self._get_role_from_cache()
-        allowed_roles = ["Billing Site Engineer", "Team Leader", "PMC Head", "CEO", "Coordinator"]
+        allowed_roles = ["Billing Site Engineer", "Team Leader", "PMC Head", "CEO", "PMC Manager", "Coordinator"]
         if role not in allowed_roles:
             return Response(
                 {"detail": f"Access denied. Allowed roles: {', '.join(allowed_roles)}."},

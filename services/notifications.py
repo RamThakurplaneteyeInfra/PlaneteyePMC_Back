@@ -192,7 +192,7 @@ def _get_project_approvers(project, approver_role):
         approvers.append(project.team_lead)
     elif approver_role == 'PMC Head' and project.pmc_head:
         approvers.append(project.pmc_head)
-    elif approver_role == 'Coordinator':
+    elif approver_role in ('PMC Manager', 'Coordinator'):
         approvers.extend(list(project.coordinators.all()))
 
     # Filter to only those with email, log warning if role user has no email
@@ -346,7 +346,7 @@ def notify_dpr_approved_by_role(dpr, approved_by_role):
 
     Args:
         dpr (DailyProgressReport): The DPR instance
-        approved_by_role (str): The role that approved ('Team Leader', 'Coordinator', 'PMC Head')
+        approved_by_role (str): The role that approved ('Team Leader', 'PMC Manager', 'PMC Head')
     """
     # Find the project
     project = Project.objects.filter(name=dpr.project_name).first()
@@ -361,18 +361,18 @@ def notify_dpr_approved_by_role(dpr, approved_by_role):
         if dpr.submitted_by and dpr.submitted_by.email:
             recipients.append(dpr.submitted_by)
 
-    elif approved_by_role == 'Coordinator':
-        # Coordinator approved → Send to Team Lead and Site Engineer
+    elif approved_by_role in ('PMC Manager', 'Coordinator'):
+        # PMC Manager approved → Send to Team Lead and Site Engineer
         team_leads = _get_project_approvers(project, 'Team Leader')
         recipients.extend(team_leads)
         if dpr.submitted_by and dpr.submitted_by.email:
             recipients.append(dpr.submitted_by)
 
     elif approved_by_role == 'PMC Head':
-        # PMC Head approved → Send to Coordinator, Team Lead, and Site Engineer
-        coordinators = _get_project_approvers(project, 'Coordinator')
+        # PMC Head approved → Send to PMC Manager, Team Lead, and Site Engineer
+        managers = _get_project_approvers(project, 'PMC Manager')
         team_leads = _get_project_approvers(project, 'Team Leader')
-        recipients.extend(coordinators)
+        recipients.extend(managers)
         recipients.extend(team_leads)
         if dpr.submitted_by and dpr.submitted_by.email:
             recipients.append(dpr.submitted_by)
@@ -434,7 +434,7 @@ def notify_dpr_rejected_by_role(dpr, rejected_by_role):
 
     Args:
         dpr (DailyProgressReport): The DPR instance
-        rejected_by_role (str): The role that rejected ('Team Leader', 'Coordinator', 'PMC Head')
+        rejected_by_role (str): The role that rejected ('Team Leader', 'PMC Manager', 'PMC Head')
     """
     # Find the project
     project = Project.objects.filter(name=dpr.project_name).first()
@@ -449,18 +449,18 @@ def notify_dpr_rejected_by_role(dpr, rejected_by_role):
         if dpr.submitted_by and dpr.submitted_by.email:
             recipients.append(dpr.submitted_by)
 
-    elif rejected_by_role == 'Coordinator':
-        # Coordinator rejected → Send to Team Lead and Site Engineer
+    elif rejected_by_role in ('PMC Manager', 'Coordinator'):
+        # PMC Manager rejected → Send to Team Lead and Site Engineer
         team_leads = _get_project_approvers(project, 'Team Leader')
         recipients.extend(team_leads)
         if dpr.submitted_by and dpr.submitted_by.email:
             recipients.append(dpr.submitted_by)
 
     elif rejected_by_role == 'PMC Head':
-        # PMC Head rejected → Send to Coordinator, Team Lead, and Site Engineer
-        coordinators = _get_project_approvers(project, 'Coordinator')
+        # PMC Head rejected → Send to PMC Manager, Team Lead, and Site Engineer
+        managers = _get_project_approvers(project, 'PMC Manager')
         team_leads = _get_project_approvers(project, 'Team Leader')
-        recipients.extend(coordinators)
+        recipients.extend(managers)
         recipients.extend(team_leads)
         if dpr.submitted_by and dpr.submitted_by.email:
             recipients.append(dpr.submitted_by)

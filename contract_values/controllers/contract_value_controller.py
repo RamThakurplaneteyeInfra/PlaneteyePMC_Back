@@ -83,6 +83,8 @@ _FIELD_ALIASES = {
     "excessValue": "excess_value",
     "approvedVO": "excess_value",
     "potentialPendingVO": "saving",
+    "Cos": "cos",
+    "COS": "cos",
 }
 
 
@@ -228,6 +230,11 @@ _CV_POST_SCHEMA = openapi.Schema(
             description="Saving amount (>= 0)",
             example=250000.00,
         ),
+        "cos": openapi.Schema(
+            type=openapi.TYPE_NUMBER,
+            description="COS (Change of Scope) amount (>= 0). Manually editable.",
+            example=100000.00,
+        ),
     },
 )
 
@@ -257,6 +264,11 @@ _CV_RESPONSE_SCHEMA = openapi.Schema(
                 ),
                 "saving": openapi.Schema(
                     type=openapi.TYPE_NUMBER, example=250000.00
+                ),
+                "cos": openapi.Schema(
+                    type=openapi.TYPE_NUMBER,
+                    description="COS (Change of Scope) — editable",
+                    example=100000.00,
                 ),
                 "revised_value": openapi.Schema(
                     type=openapi.TYPE_NUMBER,
@@ -307,6 +319,7 @@ def _build_queryset(
         "original_contract_value",
         "excess_value",
         "saving",
+        "cos",
         "created_at",
         "updated_at",
     )

@@ -111,7 +111,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         """Set creator and auto-assign pmc_head if applicable."""
         user = self.request.user
         save_kwargs = {'created_by': user}
-        if user.groups.filter(name__in=['PMC Head', 'CEO']).exists() or user.is_superuser:
+        if is_admin_user(user):
             save_kwargs['pmc_head'] = user
         serializer.save(**save_kwargs)
 
@@ -347,7 +347,8 @@ class ProjectViewSet(viewsets.ModelViewSet):
         user = request.user
 
         # Check permissions
-        if not (user.groups.filter(name__in=['Team Leader', 'Team Lead', 'PMC Head', 'CEO']).exists() or
+        if not (user.groups.filter(name__in=['Team Leader', 'Team Lead']).exists() or
+                is_admin_user(user) or
                 user.is_superuser or
                 project.team_lead == user or
                 project.pmc_head == user):
@@ -444,7 +445,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         user = request.user
 
         # Check if user can assign team members
-        if not self._check_assignment_permission(user, project, ['Coordinator', 'PMC Head', 'CEO'], ['coordinators', 'pmc_head']):
+        if not self._check_assignment_permission(user, project, ['PMC Manager', 'Coordinator', 'PMC Head', 'CEO'], ['coordinators', 'pmc_head']):
             return Response({'error': 'You do not have permission to assign a team lead'}, status=403)
 
         user_id = request.data.get('user_id')
@@ -478,7 +479,8 @@ class ProjectViewSet(viewsets.ModelViewSet):
         user = request.user
         
         # Check if user is a Team Lead for this project or PMC Head
-        if not (user.groups.filter(name__in=['Team Leader', 'PMC Head', 'CEO']).exists() or 
+        if not (user.groups.filter(name__in=['Team Leader']).exists() or 
+                is_admin_user(user) or
                 user.is_superuser or
                 project.team_lead == user or
                 project.pmc_head == user):
@@ -530,7 +532,8 @@ class ProjectViewSet(viewsets.ModelViewSet):
         user = request.user
         
         # Check if user is a Team Lead for this project or PMC Head
-        if not (user.groups.filter(name__in=['Team Leader', 'PMC Head', 'CEO']).exists() or 
+        if not (user.groups.filter(name__in=['Team Leader']).exists() or 
+                is_admin_user(user) or
                 user.is_superuser or
                 project.team_lead == user or
                 project.pmc_head == user):
@@ -573,7 +576,8 @@ class ProjectViewSet(viewsets.ModelViewSet):
         user = request.user
         
         # Check if user is a Team Lead for this project or PMC Head
-        if not (user.groups.filter(name__in=['Team Leader', 'PMC Head', 'CEO']).exists() or 
+        if not (user.groups.filter(name__in=['Team Leader']).exists() or 
+                is_admin_user(user) or
                 user.is_superuser or
                 project.team_lead == user or
                 project.pmc_head == user):
@@ -615,7 +619,8 @@ class ProjectViewSet(viewsets.ModelViewSet):
         project = self.get_object()
         user = request.user
 
-        if not (user.groups.filter(name__in=['Team Leader', 'PMC Head', 'CEO']).exists() or
+        if not (user.groups.filter(name__in=['Team Leader']).exists() or
+                is_admin_user(user) or
                 user.is_superuser or
                 project.team_lead == user or
                 project.pmc_head == user):
@@ -648,16 +653,18 @@ class ProjectViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='assign-coordinator')
     def assign_coordinator(self, request, pk=None):
         """
-        Assign a Coordinator to the project.
+        Assign a PMC Manager to the project.
         API: POST /api/projects-data/projects/{id}/assign-coordinator/
         Body: { "user_id": <user_id> }
+
+        URL path kept as assign-coordinator for frontend compatibility.
         """
         project = self.get_object()
         user = request.user
         
         # Check if user is PMC Head or CEO
-        if not (user.groups.filter(name__in=['PMC Head', 'CEO']).exists() or user.is_superuser or project.pmc_head == user):
-            return Response({'error': 'You do not have permission to assign a coordinator'}, status=403)
+        if not (is_admin_user(user) or user.is_superuser or project.pmc_head == user):
+            return Response({'error': 'You do not have permission to assign a PMC Manager'}, status=403)
         
         user_id = request.data.get('user_id')
         if not user_id:
@@ -665,9 +672,9 @@ class ProjectViewSet(viewsets.ModelViewSet):
         
         try:
             coordinator = User.objects.get(id=user_id)
-            # Verify user has Coordinator group
-            if not coordinator.groups.filter(name='Coordinator').exists():
-                return Response({'error': 'Selected user must have Coordinator role'}, status=400)
+            # Verify user has PMC Manager (or legacy Coordinator) group
+            if not coordinator.groups.filter(name__in=['PMC Manager', 'Coordinator']).exists():
+                return Response({'error': 'Selected user must have PMC Manager role'}, status=400)
             
             project.coordinators.add(coordinator)
             project.save()
@@ -675,7 +682,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
             serializer = ProjectSerializer(project, context={'request': request})
             return Response({
                 'success': True,
-                'message': f'Coordinator {coordinator.username} assigned successfully',
+                'message': f'PMC Manager {coordinator.username} assigned successfully',
                 'project': serializer.data
             })
         except User.DoesNotExist:
@@ -690,9 +697,17 @@ class ProjectViewSet(viewsets.ModelViewSet):
         """
         role = request.query_params.get('role')
         group_name = role if role else 'Team Leader'
-        
+        # Legacy alias: Coordinator → PMC Manager
+        if group_name == 'Coordinator':
+            group_name = 'PMC Manager'
+
         # Get all users with the specified role
         users = User.objects.filter(groups__name=group_name).distinct()
+        if group_name == 'PMC Manager':
+            # Include any users still on the legacy Coordinator group during migration
+            users = User.objects.filter(
+                groups__name__in=['PMC Manager', 'Coordinator']
+            ).distinct()
         
         # Get IDs of users who are already assigned to active projects
         # An active project is any project NOT in 'completed' or 'cancelled' status
@@ -796,7 +811,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
             # Set created_by and pmc_head if user is authenticated
             if user:
                 project.created_by = user
-                if user.groups.filter(name__in=['PMC Head', 'CEO']).exists() or user.is_superuser:
+                if is_admin_user(user):
                     project.pmc_head = user
                 project.save()
             

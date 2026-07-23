@@ -16,7 +16,8 @@ ALLOWED_PROGRESS_ROLES = {
     "Billing Site Engineer",
     "PMC Head",
     "Team Leader",
-    "Coordinator",
+    "PMC Manager",
+    "Coordinator",  # legacy alias
     "CEO",
 }
 

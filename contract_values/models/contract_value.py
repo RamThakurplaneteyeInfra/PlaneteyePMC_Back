@@ -71,6 +71,12 @@ class ContractValue(models.Model):
         default=Decimal("0.00"),
         help_text="Saving amount (>= 0)",
     )
+    cos = models.DecimalField(
+        max_digits=20,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        help_text="COS (Change of Scope) amount (>= 0). Manually editable; not used in revised_value formula.",
+    )
 
     created_at = models.DateTimeField(
         default=timezone.now,
@@ -85,6 +91,7 @@ class ContractValue(models.Model):
             "original_contract_value",
             "excess_value",
             "saving",
+            "cos",
         ):
             value = getattr(self, field)
             if value is not None and value < 0:
