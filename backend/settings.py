@@ -99,6 +99,8 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     # Custom CSRF exemption for API
     'backend.middleware.CSRFMiddleware',
+    # Normalize /api/ error JSON into the standard friendly envelope
+    'core.middleware_errors.FriendlyAPIErrorMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware', 
 ]
 

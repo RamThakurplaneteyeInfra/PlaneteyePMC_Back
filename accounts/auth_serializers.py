@@ -75,8 +75,16 @@ class CustomTokenObtainPairSerializer(serializers.Serializer):
             raise AuthenticationFailed("Invalid username/password.", code="authorization")
 
         user = resolve_user_for_login(identifier)
-        if user is None or not user.is_active or not user.check_password(password):
-            raise AuthenticationFailed("Invalid username/password.", code="authorization")
+        if user is None or not user.check_password(password):
+            raise AuthenticationFailed(
+                "Incorrect username or password.",
+                code="authorization",
+            )
+        if not user.is_active:
+            raise AuthenticationFailed(
+                "Your account has been disabled. Please contact the administrator.",
+                code="authorization",
+            )
 
         refresh = RefreshToken.for_user(user)
         return {

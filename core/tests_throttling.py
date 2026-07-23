@@ -165,7 +165,9 @@ class LoginIntegrationTest(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
         self.assertFalse(response.data["success"])
         self.assertIn("Rate limit exceeded", response.data["message"])
-        self.assertEqual(response.data["errors"]["detail"], "Request was throttled.")
+        self.assertIsInstance(response.data["errors"], list)
+        self.assertTrue(response.data["errors"])
+        self.assertIn("message", response.data["errors"][0])
         self.assertIn("Retry-After", response)
 
 
