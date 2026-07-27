@@ -65,11 +65,12 @@ class ContractPerformance(models.Model):
         default=Decimal("0.00"),
         help_text="Actual receipt / collection value (>= 0)",
     )
+    # DB column retained for schema compatibility; COS belongs on ContractValue, not this API.
     cosExtraItem = models.DecimalField(
         max_digits=20,
         decimal_places=2,
         default=Decimal("0.00"),
-        help_text="COS / Extra Item value (>= 0). Manually editable; not used in KPI auto-calcs.",
+        help_text="Legacy unused column; COS is on ContractValue.cos",
     )
 
     # -------------------------------------------------------------------------

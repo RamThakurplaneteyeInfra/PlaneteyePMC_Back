@@ -221,6 +221,7 @@ class ContractorSummaryContractValuesAPITest(APITestCase):
         self.assertEqual(Decimal(summary["revised_value"]), Decimal("0"))
         self.assertEqual(Decimal(summary["excess_value"]), Decimal("0"))
         self.assertEqual(Decimal(summary["saving"]), Decimal("0"))
+        self.assertEqual(Decimal(summary["cos"]), Decimal("0"))
         self.assertEqual(Decimal(summary["increase_percentage"]), Decimal("0"))
 
     def test_single_contractor_summary_matches_record(self):
@@ -254,6 +255,7 @@ class ContractorSummaryContractValuesAPITest(APITestCase):
         self.assertEqual(Decimal(summary["original_contract_value"]), Decimal("15000000.00"))
         self.assertEqual(Decimal(summary["excess_value"]), Decimal("600000.00"))
         self.assertEqual(Decimal(summary["saving"]), Decimal("150000.00"))
+        self.assertEqual(Decimal(summary.get("cos", 0)), Decimal("0"))
         self.assertEqual(Decimal(summary["revised_value"]), Decimal("15450000.00"))
         self.assertEqual(Decimal(summary["increase_percentage"]), Decimal("3.00"))
 
@@ -286,3 +288,87 @@ class ContractorSummaryContractValuesAPITest(APITestCase):
         self.assertEqual(Decimal(summary["original_contract_value"]), Decimal("200.00"))
         self.assertEqual(Decimal(summary["revised_value"]), Decimal("240.00"))
         self.assertEqual(Decimal(summary["increase_percentage"]), Decimal("20.00"))
+
+
+class ContractValueCosAPITest(APITestCase):
+    """COS (Change of Scope) belongs on contract values, not contract performance."""
+
+    CREATE_URL = "/api/contract-values/"
+    BY_PROJECT_URL = "/api/contract-values/project/Thane%20Project/"
+
+    def setUp(self):
+        self.project = Project.objects.create(name="Thane Project", status="active")
+        tl_group, _ = Group.objects.get_or_create(name="Team Leader")
+        self.user = User.objects.create_user("cv_cos_user", password="testpass123")
+        self.user.groups.add(tl_group)
+        self.project.team_lead = self.user
+        self.project.save()
+
+        authenticate_client(self.client, username="cv_cos_user", password="testpass123")
+        ContractValue.objects.filter(project_name__iexact="Thane Project").delete()
+
+    def test_create_scl_with_cos(self):
+        response = self.client.post(
+            self.CREATE_URL,
+            {
+                "project_name": "Thane Project",
+                "contract_type": "SCL",
+                "original_contract_value": "10000000.00",
+                "excess_value": "500000.00",
+                "saving": "250000.00",
+                "cos": "75000.00",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Decimal(response.data["data"]["cos"]), Decimal("75000.00"))
+        self.assertEqual(Decimal(response.data["data"]["Cos"]), Decimal("75000.00"))
+        # COS does not change revised_value formula
+        self.assertEqual(Decimal(response.data["data"]["revised_value"]), Decimal("10250000.00"))
+
+    def test_create_accepts_Cos_and_COS_aliases(self):
+        r1 = self.client.post(
+            self.CREATE_URL,
+            {
+                "project_name": "Thane Project",
+                "contract_type": "SCL",
+                "original_contract_value": "100.00",
+                "Cos": "12.50",
+            },
+            format="json",
+        )
+        self.assertEqual(r1.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Decimal(r1.data["data"]["cos"]), Decimal("12.50"))
+
+        record_id = r1.data["data"]["id"]
+        r2 = self.client.patch(
+            f"{self.CREATE_URL}{record_id}/",
+            {"COS": "99.00"},
+            format="json",
+        )
+        self.assertEqual(r2.status_code, status.HTTP_200_OK)
+        self.assertEqual(Decimal(r2.data["data"]["cos"]), Decimal("99.00"))
+
+    def test_project_summary_includes_cos(self):
+        contractor, _ = Contractor.objects.get_or_create(
+            project=self.project,
+            contractor_name="ABC Infra",
+            defaults={"status": Contractor.Status.ACTIVE},
+        )
+        self.client.post(
+            self.CREATE_URL,
+            {
+                "project_name": "Thane Project",
+                "contract_type": "CONTRACTOR",
+                "contractor_id": contractor.id,
+                "original_contract_value": "1000.00",
+                "excess_value": "0.00",
+                "saving": "0.00",
+                "cos": "40.00",
+            },
+            format="json",
+        )
+        response = self.client.get(self.BY_PROJECT_URL)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        summary = response.data["data"]["contractor_summary"]
+        self.assertEqual(Decimal(summary["cos"]), Decimal("40.00"))
