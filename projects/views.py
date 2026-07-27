@@ -34,6 +34,10 @@ class ProjectViewSet(viewsets.ModelViewSet):
     serializer_class = ProjectSerializer
     permission_classes = [IsAuthenticatedProjectRBAC]
     rbac_domain = RBACDomain.GENERAL
+    search_fields = ["name", "client_name", "location", "description"]
+    ordering_fields = ["name", "created_at", "status", "commencement_date"]
+    ordering = ["-created_at"]
+
     def get_queryset(self):
         """
         Get filtered queryset based on user role and permissions.
@@ -61,25 +65,40 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
         user = self.request.user
         if not user.is_authenticated:
-            return base_queryset.order_by('-created_at')
+            qs = base_queryset
+        elif is_admin_user(user):
+            qs = base_queryset
+        else:
+            qs = get_user_assigned_projects_qs(user).select_related(
+                'dashboard_data',
+                'pmc_head',
+                'team_lead',
+                'site_engineer',
+                'billing_site_engineer',
+                'qaqc_site_engineer',
+                'hse_site_engineer',
+                'created_by',
+            ).prefetch_related(
+                'sites',
+                'coordinators',
+                'site_engineers',
+            )
 
-        if is_admin_user(user):
-            return base_queryset.order_by('-created_at')
+        # Hide merged duplicates from normal lists/dropdowns unless explicitly requested.
+        include_merged = str(
+            self.request.query_params.get("include_merged", "")
+        ).lower() in {"1", "true", "yes"}
+        if not include_merged:
+            qs = qs.exclude(status="merged")
 
-        return get_user_assigned_projects_qs(user).select_related(
-            'dashboard_data',
-            'pmc_head',
-            'team_lead',
-            'site_engineer',
-            'billing_site_engineer',
-            'qaqc_site_engineer',
-            'hse_site_engineer',
-            'created_by',
-        ).prefetch_related(
-            'sites',
-            'coordinators',
-            'site_engineers',
-        ).order_by('-created_at')
+        # Optional status filter (comma-separated). Used by frontend dropdowns.
+        status_param = (self.request.query_params.get("status") or "").strip()
+        if status_param:
+            statuses = [s.strip() for s in status_param.split(",") if s.strip()]
+            if statuses:
+                qs = qs.filter(status__in=statuses)
+
+        return qs.order_by("-created_at", "name")
 
     def _has_group_permission(self, user, group_names: List[str]) -> bool:
         """Check if user has any of the specified groups or is superuser."""
@@ -108,12 +127,75 @@ class ProjectViewSet(viewsets.ModelViewSet):
         return False
 
     def perform_create(self, serializer):
-        """Set creator and auto-assign pmc_head if applicable."""
+        """Set creator, default status to active, auto-assign pmc_head if applicable."""
         user = self.request.user
-        save_kwargs = {'created_by': user}
+        save_kwargs = {"created_by": user}
+        # New projects must show in active dropdowns unless caller sets another status.
+        if not serializer.validated_data.get("status"):
+            save_kwargs["status"] = "active"
         if is_admin_user(user):
-            save_kwargs['pmc_head'] = user
+            save_kwargs["pmc_head"] = user
         serializer.save(**save_kwargs)
+
+    @action(detail=False, methods=["get"], url_path="dropdown")
+    def dropdown(self, request):
+        """
+        Lightweight project list for UI dropdowns (no pagination).
+
+        GET /api/projects/dropdown/
+        GET /api/projects-data/projects/dropdown/?status=active
+
+        Returns every project the caller can access (RBAC), excluding merged
+        unless include_merged=true. Avoids PAGE_SIZE=20 truncation that hides
+        newly added projects when the client only loads the first page.
+        """
+        # Rebuild a lean queryset (avoid select_related/only conflicts from get_queryset).
+        user = request.user
+        if is_admin_user(user):
+            qs = Project.objects.all()
+        else:
+            qs = get_user_assigned_projects_qs(user)
+
+        include_merged = str(request.query_params.get("include_merged", "")).lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        if not include_merged:
+            qs = qs.exclude(status="merged")
+
+        status_param = (request.query_params.get("status") or "").strip()
+        if status_param:
+            statuses = [s.strip() for s in status_param.split(",") if s.strip()]
+            if statuses:
+                qs = qs.filter(status__in=statuses)
+
+        search = (request.query_params.get("search") or "").strip()
+        if search:
+            qs = qs.filter(
+                Q(name__icontains=search)
+                | Q(client_name__icontains=search)
+                | Q(location__icontains=search)
+            )
+
+        rows = list(qs.order_by("name").values("id", "name", "status", "client_name"))
+        data = [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "status": row["status"],
+                "client_name": row["client_name"] or "",
+            }
+            for row in rows
+        ]
+        return Response(
+            {
+                "success": True,
+                "message": "Projects retrieved successfully.",
+                "count": len(data),
+                "data": data,
+            }
+        )
 
     @action(detail=False, methods=['get'])
     def documents(self, request):
