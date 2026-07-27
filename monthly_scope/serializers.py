@@ -57,10 +57,18 @@ class MonthlyScopeWorkSerializer(serializers.ModelSerializer):
         }
 
     def get_category_name(self, obj):
-        return obj.get_category_display_name()
+        try:
+            return obj.get_category_display_name()
+        except Exception:
+            # category may be null for legacy rows
+            return ""
 
     def get_subcategory_name(self, obj):
-        return obj.get_subcategory_display_name()
+        try:
+            return obj.get_subcategory_display_name()
+        except Exception:
+            # subcategory may be null for legacy rows
+            return ""
 
     def validate(self, data):
         """

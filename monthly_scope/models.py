@@ -201,16 +201,23 @@ class MonthlyScopeWork(models.Model):
 
     def __str__(self):
         month_str = self.month.strftime("%b-%Y") if self.month else "No Month"
-        return f"{self.project.name} - {month_str} - {self.category.name} - {self.subcategory.name}"
+        project_name = self.project.name if self.project_id else "No Project"
+        category_name = self.category.name if self.category_id else "No Category"
+        subcategory_name = self.subcategory.name if self.subcategory_id else "No Subcategory"
+        return f"{project_name} - {month_str} - {category_name} - {subcategory_name}"
 
     def get_category_display_name(self):
         """Get display name for category (custom if Other)"""
+        if not self.category_id:
+            return ""
         if self.category.name == "Other":
             return self.custom_category_name or "Other"
         return self.category.name
 
     def get_subcategory_display_name(self):
         """Get display name for subcategory (custom if Other)"""
+        if not self.subcategory_id:
+            return ""
         if self.subcategory.name == "Other":
             return self.custom_subcategory_name or "Other"
         return self.subcategory.name
