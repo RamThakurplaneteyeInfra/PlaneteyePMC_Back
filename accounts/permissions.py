@@ -140,3 +140,20 @@ class IsTeamLeaderOrAdmin(BasePermission):
         return user_has_project_access(request.user, project) and self.has_permission(
             request, view
         )
+
+
+class CanManageUsers(BasePermission):
+    """
+    Head Office and organizational Admins (CEO, PMC Head, superuser)
+    may manage Team Leaders and Engineers via /api/users/.
+    """
+
+    message = "Only Head Office or Admin may manage users."
+
+    def has_permission(self, request, view):
+        from .rbac import can_manage_users
+
+        return can_manage_users(getattr(request, "user", None))
+
+    def has_object_permission(self, request, view, obj):
+        return self.has_permission(request, view)

@@ -71,6 +71,8 @@ urlpatterns = [
     path('api/auth/', include('accounts.auth_urls')),
     # User profile (legacy path — JWT required)
     path('api/accounts/', include('accounts.urls')),
+    # HO / Admin User Management (Team Leaders & Engineers)
+    path('api/', include('accounts.user_management_urls')),
     # In-app alerts
     path('api/alerts/', include('accounts.alerts_urls')),
     # Projects and Sites API

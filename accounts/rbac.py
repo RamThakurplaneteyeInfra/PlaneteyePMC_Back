@@ -48,6 +48,24 @@ SITE_ENGINEER_ROLES = {
     ROLE_HSE_SITE_ENGINEER,
 }
 
+# Roles that HO/Admin may create and manage via User Management APIs.
+MANAGEABLE_PROJECT_ROLES = {
+    ROLE_TEAM_LEADER,
+    ROLE_SITE_ENGINEER,
+    ROLE_BILLING_SITE_ENGINEER,
+    ROLE_QAQC_SITE_ENGINEER,
+    ROLE_HSE_SITE_ENGINEER,
+}
+
+# Who may access User Management (HO + organizational Admin).
+# PMC Manager / Coordinator remain data admins but not user administrators.
+USER_MANAGEMENT_ROLES = {
+    ROLE_CEO,
+    ROLE_PMC_HEAD,
+    ROLE_HEAD_OFFICE,
+    ROLE_HO_ALIAS,
+}
+
 ALL_PROJECT_ROLES = ADMIN_ROLES | SITE_ENGINEER_ROLES | {ROLE_TEAM_LEADER, ROLE_TEAM_LEAD_ALIAS}
 
 
@@ -165,6 +183,28 @@ def is_admin_user(user) -> bool:
     if user.is_superuser:
         return True
     return bool(_user_role_names(user) & ADMIN_ROLES)
+
+
+def can_manage_users(user) -> bool:
+    """
+    True when the user may use User Management APIs
+    (create TL/engineers, assign projects, reset passwords, etc.).
+    """
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    return bool(_user_role_names(user) & USER_MANAGEMENT_ROLES)
+
+
+def is_manageable_project_role(role_name: str | None) -> bool:
+    """True for Team Leader / Site Engineer family roles HO may create."""
+    if not role_name:
+        return False
+    name = str(role_name).strip()
+    if name == ROLE_TEAM_LEAD_ALIAS:
+        name = ROLE_TEAM_LEADER
+    return name in MANAGEABLE_PROJECT_ROLES
 
 
 def get_user_assigned_projects_qs(user) -> QuerySet:

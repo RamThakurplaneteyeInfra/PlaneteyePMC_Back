@@ -445,7 +445,12 @@ class ProjectViewSet(viewsets.ModelViewSet):
         user = request.user
 
         # Check if user can assign team members
-        if not self._check_assignment_permission(user, project, ['PMC Manager', 'Coordinator', 'PMC Head', 'CEO'], ['coordinators', 'pmc_head']):
+        if not self._check_assignment_permission(
+            user,
+            project,
+            ['PMC Manager', 'Coordinator', 'PMC Head', 'CEO', 'Head Office', 'HO'],
+            ['coordinators', 'pmc_head'],
+        ) and not is_admin_user(user):
             return Response({'error': 'You do not have permission to assign a team lead'}, status=403)
 
         user_id = request.data.get('user_id')

@@ -184,3 +184,86 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"{self.notification_type} - {self.user.username} - {self.created_at}"
+
+
+class UserManagementAuditLog(models.Model):
+    """
+    Audit trail for HO / Admin user-management actions
+    (create, edit, password change/reset, project assign, activate/deactivate).
+    """
+
+    ACTION_CREATED = "created"
+    ACTION_UPDATED = "updated"
+    ACTION_PASSWORD_CHANGED = "password_changed"
+    ACTION_PASSWORD_RESET = "password_reset"
+    ACTION_PROJECTS_ASSIGNED = "projects_assigned"
+    ACTION_STATUS_CHANGED = "status_changed"
+    ACTION_DELETED = "deleted"
+
+    ACTION_CHOICES = [
+        (ACTION_CREATED, "Created"),
+        (ACTION_UPDATED, "Updated"),
+        (ACTION_PASSWORD_CHANGED, "Password Changed"),
+        (ACTION_PASSWORD_RESET, "Password Reset"),
+        (ACTION_PROJECTS_ASSIGNED, "Projects Assigned"),
+        (ACTION_STATUS_CHANGED, "Status Changed"),
+        (ACTION_DELETED, "Deleted"),
+    ]
+
+    performed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="user_management_actions",
+        help_text="HO/Admin who performed the action",
+    )
+    target_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="user_management_events",
+        help_text="User that was managed",
+    )
+    target_username = models.CharField(
+        max_length=150,
+        blank=True,
+        default="",
+        help_text="Snapshot of target username (survives deletion)",
+    )
+    target_role = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+        help_text="Role of the target user at action time",
+    )
+    project = models.ForeignKey(
+        "projects.Project",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="user_management_audit_logs",
+        help_text="Primary project related to the action (if any)",
+    )
+    project_names = models.TextField(
+        blank=True,
+        default="",
+        help_text="Comma-separated project names involved in the action",
+    )
+    action = models.CharField(max_length=40, choices=ACTION_CHOICES, db_index=True)
+    detail = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "User Management Audit Log"
+        verbose_name_plural = "User Management Audit Logs"
+        indexes = [
+            models.Index(fields=["action", "created_at"]),
+            models.Index(fields=["target_username"]),
+        ]
+
+    def __str__(self) -> str:
+        actor = getattr(self.performed_by, "username", "system")
+        return f"{actor} {self.action} {self.target_username} @ {self.created_at}"
