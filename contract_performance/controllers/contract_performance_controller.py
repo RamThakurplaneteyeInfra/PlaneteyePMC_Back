@@ -181,6 +181,7 @@ def _build_queryset(project_name: str = None, search: str = None):
         "projectName",
         "billedValue",
         "actualReceiptValue",
+        "cosExtraItem",
         "variance",
         "variancePercentage",
         "performancePercentage",

@@ -81,7 +81,12 @@ def enforce_project_write_by_name(
 def enforce_instance_write(user, instance, domain: str = RBACDomain.GENERAL) -> None:
     project = resolve_project_for_instance(instance, user=user)
     if project is None:
-        project_name = getattr(instance, "project_name", None)
+        project_name = None
+        for attr in ("project_name", "projectName"):
+            value = getattr(instance, attr, None)
+            if value:
+                project_name = str(value).strip()
+                break
         if project_name:
             enforce_project_write_by_name(user, project_name, domain)
             return

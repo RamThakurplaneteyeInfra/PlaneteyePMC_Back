@@ -54,6 +54,7 @@ class ContractPerformanceSerializer(serializers.ModelSerializer):
       - projectName        (required, unique per project)
       - billedValue        (>= 0)
       - actualReceiptValue (>= 0)
+      - cosExtraItem       (>= 0, optional)
     """
 
     # Expose Python @property fields as read-only serializer fields
@@ -67,6 +68,7 @@ class ContractPerformanceSerializer(serializers.ModelSerializer):
             "projectName",
             "billedValue",
             "actualReceiptValue",
+            "cosExtraItem",
             # Auto-calculated stored fields
             "variance",
             "variancePercentage",
@@ -112,6 +114,9 @@ class ContractPerformanceSerializer(serializers.ModelSerializer):
             "project_name": "projectName",
             "billed_value": "billedValue",
             "actual_receipt_value": "actualReceiptValue",
+            "cos_extra_item": "cosExtraItem",
+            "Cos": "cosExtraItem",
+            "COS": "cosExtraItem",
         }
 
         for snake, camel in _aliases.items():
@@ -149,6 +154,9 @@ class ContractPerformanceSerializer(serializers.ModelSerializer):
 
     def validate_actualReceiptValue(self, value: Decimal) -> Decimal:
         return self._validate_non_negative_decimal(value, "actualReceiptValue")
+
+    def validate_cosExtraItem(self, value: Decimal) -> Decimal:
+        return self._validate_non_negative_decimal(value, "cosExtraItem")
 
     # -------------------------------------------------------------------------
     # Cross-field validation

@@ -351,11 +351,22 @@ def filter_queryset_by_project_access(
     )
 
 
+def _instance_project_name(obj) -> str | None:
+    """Support both camelCase projectName and snake_case project_name fields."""
+    if obj is None:
+        return None
+    for attr in ("project_name", "projectName"):
+        value = getattr(obj, attr, None)
+        if value:
+            return str(value).strip()
+    return None
+
+
 def resolve_project_for_instance(obj, user=None) -> Project | None:
     """
     Resolve the project linked to a model instance.
 
-  When *user* is provided, prefer the project_name match the user can access
+    When *user* is provided, prefer the project_name match the user can access
     (handles legacy rows whose FK points at a duplicate Project row).
     """
     if obj is None:
@@ -363,9 +374,8 @@ def resolve_project_for_instance(obj, user=None) -> Project | None:
     if isinstance(obj, Project):
         return obj
 
-    name_project = None
-    if getattr(obj, "project_name", None):
-        name_project = resolve_project(obj.project_name)
+    raw_name = _instance_project_name(obj)
+    name_project = resolve_project(raw_name) if raw_name else None
 
     fk_project = None
     if getattr(obj, "project_id", None):
@@ -376,7 +386,6 @@ def resolve_project_for_instance(obj, user=None) -> Project | None:
             return name_project
         if fk_project and user_has_project_access(user, fk_project):
             return fk_project
-        raw_name = getattr(obj, "project_name", None)
         if raw_name:
             assigned = (
                 get_user_assigned_projects_qs(user)
@@ -385,6 +394,9 @@ def resolve_project_for_instance(obj, user=None) -> Project | None:
             )
             if assigned is not None:
                 return assigned
+        # Admins may still resolve via name/FK even when not "assigned"
+        if is_admin_user(user):
+            return name_project or fk_project
         return None
 
     return name_project or fk_project
@@ -392,8 +404,9 @@ def resolve_project_for_instance(obj, user=None) -> Project | None:
 
 def project_from_instance(obj) -> Project | None:
     """Resolve Project from a model instance."""
-    if hasattr(obj, "projectName"):
-        resolved = resolve_project(getattr(obj, "projectName", None))
+    raw_name = _instance_project_name(obj)
+    if raw_name:
+        resolved = resolve_project(raw_name)
         if resolved:
             return resolved
     return resolve_project_for_instance(obj)
