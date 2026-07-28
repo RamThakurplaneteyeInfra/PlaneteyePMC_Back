@@ -24,5 +24,6 @@ TL_PROJECT_MAPPINGS: list[tuple[str, str]] = [
     ("pmc_tl21", "Uppal Hyderabad"),
     ("pmc_tl22", "Avissa G+40, Mahim"),
     ("pmc_tl23", "Shivalik Building Santacruz"),
+    ("pmc_tl26", "K2 Building – Kalbadevi (MMRCL)"),
     ("pmc_tl27", "B3482 RGSL: Rajeev Gandhi Sea Link"),
 ]

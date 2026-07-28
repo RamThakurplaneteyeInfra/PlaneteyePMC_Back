@@ -5,7 +5,8 @@ Writable fields (sent by frontend):
   - project_name   : resolved to Project FK in validate()
   - date_type      : "SCL" or "CONTRACTOR"
   - contractor_name: required for CONTRACTOR, empty for SCL
-  - project_start, contract_finish, forecast_finish, eot_date
+  - project_start, contract_finish, forecast_finish
+  - eot_date (optional)
 
 Read-only calculated fields are computed at serialization time.
 """
@@ -97,6 +98,9 @@ class ProjectDatesSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        extra_kwargs = {
+            "eot_date": {"required": False, "allow_null": True},
+        }
         validators = []
 
     def to_internal_value(self, data):

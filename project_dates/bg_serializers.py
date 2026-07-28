@@ -35,8 +35,8 @@ class BGStatusCreateSerializer(serializers.Serializer):
     """Create a new BG entry for a project schedule row."""
 
     bg_type = serializers.ChoiceField(choices=BGStatus.BG_TYPE_CHOICES)
-    bg_name = serializers.CharField(max_length=255)
-    due_date = serializers.DateField()
+    bg_name = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
+    due_date = serializers.DateField(required=False, allow_null=True)
     updated_date = serializers.DateField(required=False, allow_null=True)
     remarks = serializers.CharField(required=False, allow_blank=True, default="")
     contractor_name = serializers.CharField(
@@ -120,9 +120,9 @@ class BGStatusCreateSerializer(serializers.Serializer):
 class BGStatusUpdateSerializer(serializers.ModelSerializer):
     """Partial update for a single BG entry."""
 
-    due_date = serializers.DateField(required=False)
+    due_date = serializers.DateField(required=False, allow_null=True)
     updated_date = serializers.DateField(required=False, allow_null=True)
-    bg_name = serializers.CharField(max_length=255, required=False)
+    bg_name = serializers.CharField(max_length=255, required=False, allow_blank=True)
     remarks = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:

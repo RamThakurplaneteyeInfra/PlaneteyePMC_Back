@@ -16,7 +16,7 @@ Calculated fields (not stored — computed in the serializer):
 
 Business rules enforced in clean():
   - project_start   <= contract_finish
-  - contract_finish <= eot_date
+  - contract_finish <= eot_date (when eot_date is set)
   - contractor_name required when date_type = CONTRACTOR
   - contractor_name must be null/blank when date_type = SCL
 """
@@ -77,7 +77,11 @@ class ProjectDates(models.Model):
     project_start = models.DateField(help_text="Project start date")
     contract_finish = models.DateField(help_text="Contractual finish date")
     forecast_finish = models.DateField(help_text="Forecasted finish date")
-    eot_date = models.DateField(help_text="Extension of Time (EOT) date")
+    eot_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Extension of Time (EOT) date (optional)",
+    )
 
     created_at = models.DateTimeField(
         auto_now_add=True,
@@ -208,9 +212,15 @@ class BGStatus(models.Model):
     )
     bg_name = models.CharField(
         max_length=255,
-        help_text="Display name for this bank guarantee",
+        blank=True,
+        default="",
+        help_text="Display name for this bank guarantee (optional)",
     )
-    due_date = models.DateField(help_text="Bank guarantee due date")
+    due_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Bank guarantee due date (optional)",
+    )
     updated_date = models.DateField(
         null=True,
         blank=True,

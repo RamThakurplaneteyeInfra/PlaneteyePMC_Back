@@ -47,7 +47,7 @@ class ProjectDatesAdmin(admin.ModelAdmin):
                 "fields": ("project_start", "contract_finish", "forecast_finish", "eot_date"),
                 "description": (
                     "Business rules: project_start <= contract_finish; "
-                    "contract_finish <= eot_date."
+                    "contract_finish <= eot_date when eot_date is set."
                 ),
             },
         ),

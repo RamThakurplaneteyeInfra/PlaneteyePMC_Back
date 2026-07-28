@@ -85,7 +85,12 @@ _BG_ENTRY_SCHEMA = openapi.Schema(
         "id": openapi.Schema(type=openapi.TYPE_INTEGER, example=1),
         "bg_type": openapi.Schema(type=openapi.TYPE_STRING, enum=["CONTRACTOR", "SCL"]),
         "bg_name": openapi.Schema(type=openapi.TYPE_STRING, example="Performance BG"),
-        "due_date": openapi.Schema(type=openapi.TYPE_STRING, format="date", example="2026-06-15"),
+        "due_date": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            format="date",
+            nullable=True,
+            example="2026-06-15",
+        ),
         "updated_date": openapi.Schema(
             type=openapi.TYPE_STRING,
             format="date",
@@ -125,7 +130,7 @@ _BG_STATUS_SCHEMA = openapi.Schema(
 
 _BG_STATUS_CREATE_SCHEMA = openapi.Schema(
     type=openapi.TYPE_OBJECT,
-    required=["bg_type", "bg_name", "due_date"],
+    required=["bg_type"],
     properties={
         "bg_type": openapi.Schema(
             type=openapi.TYPE_STRING,
@@ -142,8 +147,18 @@ _BG_STATUS_CREATE_SCHEMA = openapi.Schema(
             description="Deprecated — use contractor_id.",
             example="ABC Infra",
         ),
-        "bg_name": openapi.Schema(type=openapi.TYPE_STRING, example="Performance BG"),
-        "due_date": openapi.Schema(type=openapi.TYPE_STRING, format="date", example="2026-06-15"),
+        "bg_name": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            example="Performance BG",
+            description="Optional display name",
+        ),
+        "due_date": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            format="date",
+            nullable=True,
+            example="2026-06-15",
+            description="Optional bank guarantee due date",
+        ),
         "updated_date": openapi.Schema(
             type=openapi.TYPE_STRING,
             format="date",
@@ -172,7 +187,7 @@ _BG_STATUS_UPDATE_SCHEMA = openapi.Schema(
 
 _PD_POST_SCHEMA = openapi.Schema(
     type=openapi.TYPE_OBJECT,
-    required=["project_name", "date_type", "project_start", "contract_finish", "forecast_finish", "eot_date"],
+    required=["project_name", "date_type", "project_start", "contract_finish", "forecast_finish"],
     properties={
         "project_name": openapi.Schema(type=openapi.TYPE_STRING, example="Thane Project"),
         "date_type": openapi.Schema(type=openapi.TYPE_STRING, enum=["SCL", "CONTRACTOR"], example="CONTRACTOR"),
@@ -189,7 +204,13 @@ _PD_POST_SCHEMA = openapi.Schema(
         "project_start": openapi.Schema(type=openapi.TYPE_STRING, format="date", example="2024-06-01"),
         "contract_finish": openapi.Schema(type=openapi.TYPE_STRING, format="date", example="2026-06-01"),
         "forecast_finish": openapi.Schema(type=openapi.TYPE_STRING, format="date", example="2026-09-01"),
-        "eot_date": openapi.Schema(type=openapi.TYPE_STRING, format="date", example="2026-12-01"),
+        "eot_date": openapi.Schema(
+            type=openapi.TYPE_STRING,
+            format="date",
+            nullable=True,
+            example="2026-12-01",
+            description="Optional Extension of Time (EOT) date",
+        ),
     },
 )
 
@@ -208,7 +229,7 @@ _PD_RESPONSE_SCHEMA = openapi.Schema(
                 "project_start": openapi.Schema(type=openapi.TYPE_STRING, example="2024-06-01"),
                 "contract_finish": openapi.Schema(type=openapi.TYPE_STRING, example="2026-06-01"),
                 "forecast_finish": openapi.Schema(type=openapi.TYPE_STRING, example="2026-09-01"),
-                "eot_date": openapi.Schema(type=openapi.TYPE_STRING, example="2026-12-01"),
+                "eot_date": openapi.Schema(type=openapi.TYPE_STRING, example="2026-12-01", nullable=True),
                 "elapsed_duration": openapi.Schema(type=openapi.TYPE_INTEGER, description="Days from project_start to today", example=727),
                 "remaining_duration": openapi.Schema(type=openapi.TYPE_INTEGER, description="Days from today to contract_finish", example=365),
                 "forecast_finish_duration": openapi.Schema(type=openapi.TYPE_INTEGER, description="Days between forecast_finish and contract_finish", example=92),
@@ -282,7 +303,9 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
             "schedule identified by `contractor_name` (must be unique within the project).\n\n"
             "**Business rules:**\n"
             "- `project_start` ≤ `contract_finish`\n"
-            "- `contract_finish` ≤ `eot_date`\n"
+            "- `contract_finish` ≤ `eot_date` (when `eot_date` is provided)\n"
+            "- `eot_date` is optional\n"
+            "- BG Status is managed separately and is not required here\n"
             "- `contractor_name` required when `date_type=CONTRACTOR`\n\n"
             "**Calculated fields (auto-computed, not stored):**\n"
             "- `elapsed_duration`, `remaining_duration`, `forecast_finish_duration`, "
