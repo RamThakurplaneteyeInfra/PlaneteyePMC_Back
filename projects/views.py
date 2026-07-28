@@ -865,23 +865,23 @@ class ProjectViewSet(viewsets.ModelViewSet):
     def init_project(self, request):
         """
         Initialize a new project with PMC Head input.
-        
-        API: POST /api/projects-data/projects/init/
-        
+
+        API: POST /api/projects/init/
+
         Input fields:
-        - name (required, unique)
-        - location (required)
-        - project_start (required)
-        - contract_finish (required)
+        - name (required)
+        - location (optional)
+        - project_start (optional)
+        - contract_finish (optional)
         - forecast_finish (optional)
-        - original_contract_value (required, >= 0)
-        - approved_vo (required, >= 0)
-        - pending_vo (required, >= 0)
-        - bac (required, > 0)
-        - working_hours_per_day (required, > 0)
-        - working_days_per_month (required, > 0)
+        - original_contract_value (optional, >= 0)
+        - approved_vo (optional, >= 0)
+        - pending_vo (optional, >= 0)
+        - bac (optional, >= 0)
+        - working_hours_per_day (optional, >= 0)
+        - working_days_per_month (optional, >= 1)
         - assigned_users (optional, list of user IDs)
-        
+
         Auto-calculated fields (returned in response):
         - revised_contract_value = original_contract_value + approved_vo
         - delay_days = (forecast_finish - contract_finish).days

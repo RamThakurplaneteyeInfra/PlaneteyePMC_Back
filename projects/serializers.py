@@ -231,80 +231,58 @@ class ProjectDashboardDataSerializer(serializers.ModelSerializer):
 class ProjectInitSerializer(serializers.ModelSerializer):
     """
     Serializer for Project Initialization API.
-    
-    PMC Head uses this to initialize a project with:
-    - Basic Info (name, location)
-    - Project Dates (start, contract finish, forecast finish)
-    - Contract Values (original, approved VO, pending VO)
-    - Budget (BAC)
-    - Work Configuration (hours/day, days/month)
-    - Team Assignment
-    
+
+    Only ``name`` is required. All other init fields are optional and use
+    model defaults when omitted.
+
     Auto-calculated fields (NOT accepted in input):
     - revised_contract_value = original_contract_value + approved_vo
     - delay_days = (forecast_finish - contract_finish).days
     """
-    
-    # Read-only fields that are auto-calculated
+
     revised_contract_value = serializers.DecimalField(
         max_digits=15, decimal_places=2,
         read_only=True
     )
     delay_days = serializers.IntegerField(read_only=True)
-    
+
     class Meta:
         model = Project
-        # Fields that CAN be accepted in input
         fields = [
-            # Basic Info
             'name',
             'location',
-            
-            # Project Dates
             'project_start',
             'contract_finish',
             'forecast_finish',
-            
-            # Contract Values
             'original_contract_value',
             'approved_vo',
             'pending_vo',
-            
-            # Budget
             'bac',
-            
-            # Work Configuration
             'working_hours_per_day',
             'working_days_per_month',
-            
-            # Team Assignment
             'assigned_users',
-            
-            # Auto-calculated (read-only in response)
             'revised_contract_value',
             'delay_days',
             'created_at',
         ]
         extra_kwargs = {
-            # All fields are required for initialization
             'name': {'required': True},
-            'location': {'required': True},
-            'project_start': {'required': True},
-            'contract_finish': {'required': True},
+            'location': {'required': False, 'allow_blank': True},
+            'project_start': {'required': False, 'allow_null': True},
+            'contract_finish': {'required': False, 'allow_null': True},
             'forecast_finish': {'required': False, 'allow_null': True},
-            'original_contract_value': {'required': True, 'min_value': 0},
-            'approved_vo': {'required': True, 'min_value': 0},
-            'pending_vo': {'required': True, 'min_value': 0},
-            'bac': {'required': True, 'min_value': 0},
-            'working_hours_per_day': {'required': True, 'min_value': 0},
-            'working_days_per_month': {'required': True, 'min_value': 1},
+            'original_contract_value': {'required': False, 'allow_null': True},
+            'approved_vo': {'required': False, 'allow_null': True},
+            'pending_vo': {'required': False, 'allow_null': True},
+            'bac': {'required': False, 'allow_null': True},
+            'working_hours_per_day': {'required': False, 'allow_null': True},
+            'working_days_per_month': {'required': False, 'allow_null': True},
             'assigned_users': {'required': False, 'many': True},
         }
-    
+
     def _validate_positive_decimal(self, value, field_name, allow_zero=True):
-        """
-        Helper method to validate positive decimal values.
-        """
+        if value is None:
+            return value
         if value < 0 or (not allow_zero and value == 0):
             operator = '>=' if allow_zero else '>'
             raise serializers.ValidationError(f"{field_name} must be {operator} 0")
@@ -316,40 +294,47 @@ class ProjectInitSerializer(serializers.ModelSerializer):
     def validate_approved_vo(self, value):
         return self._validate_positive_decimal(value, "Approved VO")
 
+    def validate_pending_vo(self, value):
+        return self._validate_positive_decimal(value, "Pending VO")
+
     def validate_bac(self, value):
-        return self._validate_positive_decimal(value, "Budget at Completion (BAC)", allow_zero=False)
+        return self._validate_positive_decimal(value, "Budget at Completion (BAC)")
 
     def validate_working_hours_per_day(self, value):
-        return self._validate_positive_decimal(value, "Working hours per day", allow_zero=False)
+        return self._validate_positive_decimal(value, "Working hours per day")
 
     def validate_working_days_per_month(self, value):
-        return self._validate_positive_decimal(value, "Working days per month", allow_zero=False)
-    
+        if value is None:
+            return value
+        if value < 1:
+            raise serializers.ValidationError("Working days per month must be >= 1")
+        return value
+
     def create(self, validated_data):
         """
         Create a new project with auto-calculated fields.
-        
-        The save() method in the model handles:
-        - revised_contract_value = original_contract_value + approved_vo
-        - delay_days = (forecast_finish - contract_finish).days
+
+        Null optional values are dropped so model defaults apply.
         """
-        # Remove assigned_users from validated_data as it's handled differently
         assigned_users = validated_data.pop('assigned_users', [])
-        
-        # Create the project
+
+        # Drop nulls for non-nullable model fields so defaults kick in
+        for key in list(validated_data.keys()):
+            if validated_data[key] is None and key not in (
+                'project_start', 'contract_finish', 'forecast_finish',
+            ):
+                validated_data.pop(key)
+
         project = Project(**validated_data)
-        # This will trigger the save() method which calculates revised_contract_value and delay_days
         project.save()
-        
-        # Assign users if provided
+
         if assigned_users:
             project.assigned_users.set(assigned_users)
-        
+
         return project
-    
+
     def to_representation(self, instance):
         """Return the project with auto-calculated fields."""
-        # Trigger recalculation in case instance was modified
         instance.save()
         return super().to_representation(instance)
 
