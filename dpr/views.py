@@ -222,27 +222,25 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                     "executed_quantity": 5.00,
                     "next_day_planned_work": "Continue foundation work",
                     "remarks": "Foundation work completed successfully"
-                },
-                {
-                    "scope": 5,
-                    "executed_quantity": 3.00,
-                    "next_day_planned_work": "Start pier work",
-                    "remarks": "Pier preparation done"
                 }
             ]
         }
         ```
         """
+        from rest_framework.exceptions import APIException, ValidationError as DRFValidationError
+
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {
+                    "success": False,
+                    "message": "Validation failed",
+                    "errors": serializer.errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         try:
-            serializer = self.get_serializer(data=request.data)
-            if not serializer.is_valid():
-                return Response(
-                    {
-                        'error': 'Validation failed',
-                        'details': serializer.errors
-                    },
-                    status=status.HTTP_400_BAD_REQUEST
-                )
             project_name = (
                 serializer.validated_data.get("project_name")
                 or request.data.get("project_name")
@@ -251,46 +249,60 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                 request.user, project_name, RBACDomain.ENGINEERING
             )
             instance = serializer.save()
-            headers = self.get_success_headers(serializer.data)
-
-            # Trigger notification if DPR was created directly in a pending state
-            # (some frontends may bypass the separate /submit/ endpoint)
-            pending_statuses = [
-                DailyProgressReport.Status.PENDING_TEAM_LEAD,
-                DailyProgressReport.Status.PENDING_COORDINATOR,
-                DailyProgressReport.Status.PENDING_PMC_HEAD,
-            ]
-
-            if instance.status in pending_statuses:
-                logger.info(f"DPR created directly in pending state ({instance.status}). Triggering notification.")
-                try:
-                    notify_dpr_submitted(instance)
-                except Exception as notify_err:
-                    logger.error(f"Failed to send notification after direct DPR create: {notify_err}")
-
-            # Check if this was appending to existing DPR
-            activities_added = getattr(instance, '_activities_added', None)
-            if activities_added is not None:
-                # This was an append operation
-                response_data = {
-                    'message': 'Activities added to existing DPR',
-                    'dpr_id': instance.id,
-                    'activities_added': activities_added,
-                    'dpr': serializer.data
-                }
-                return Response(response_data, status=status.HTTP_200_OK, headers=headers)
-            else:
-                # This was a new DPR creation
-                return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+        except (APIException, DRFValidationError):
+            # Let DRF / FriendlyAPIErrorMiddleware format these correctly
+            raise
         except Exception as e:
+            logger.exception("DPR create failed for project=%s", project_name)
             return Response(
                 {
-                    'error': 'An error occurred while creating the DPR',
-                    'message': str(e),
-                    'details': getattr(e, 'detail', None) or str(e)
+                    "success": False,
+                    "message": "An error occurred while creating the DPR",
+                    "errors": [
+                        {
+                            "field": "non_field_errors",
+                            "message": str(e) or "Unexpected error while saving the DPR.",
+                        }
+                    ],
                 },
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_400_BAD_REQUEST,
             )
+
+        headers = self.get_success_headers(serializer.data)
+
+        # Trigger notification if DPR was created directly in a pending state
+        # (some frontends may bypass the separate /submit/ endpoint)
+        pending_statuses = [
+            DailyProgressReport.Status.PENDING_TEAM_LEAD,
+            DailyProgressReport.Status.PENDING_COORDINATOR,
+            DailyProgressReport.Status.PENDING_PMC_HEAD,
+        ]
+
+        if instance.status in pending_statuses:
+            logger.info(
+                "DPR created directly in pending state (%s). Triggering notification.",
+                instance.status,
+            )
+            try:
+                notify_dpr_submitted(instance)
+            except Exception as notify_err:
+                logger.error(
+                    "Failed to send notification after direct DPR create: %s",
+                    notify_err,
+                )
+
+        activities_added = getattr(instance, "_activities_added", None)
+        if activities_added is not None:
+            response_data = {
+                "success": True,
+                "message": "Activities added to existing DPR",
+                "dpr_id": instance.id,
+                "activities_added": activities_added,
+                "dpr": serializer.data,
+            }
+            return Response(response_data, status=status.HTTP_200_OK, headers=headers)
+
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     @swagger_auto_schema(
         operation_description="Update a Daily Progress Report (full update). Use PATCH for partial update.",
@@ -451,54 +463,55 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
 
         try:
             with transaction.atomic():
-                # Handle activities if provided
+                # Handle activities if provided (scope-based model)
                 if activities_data:
-                    # Validate activities data structure
                     if not isinstance(activities_data, list):
                         return Response(
                             {'error': 'activities must be a list'},
                             status=status.HTTP_400_BAD_REQUEST
                         )
 
-                    # Process each activity
-                    activities_to_create = []
-                    validation_errors = []
-
-                    for idx, act_data in enumerate(activities_data):
-                        try:
-                            # Validate required fields
-                            if not act_data.get('date'):
-                                validation_errors.append(f'activities[{idx}]: date is required')
-                                continue
-                            if not act_data.get('activity'):
-                                validation_errors.append(f'activities[{idx}]: activity description is required')
-                                continue
-
-                            # Create activity object (will be bulk created)
-                            activity = DPRActivity(
-                                dpr=dpr,
-                                date=act_data['date'],
-                                activity=act_data['activity'],
-                                deliverables=act_data.get('deliverables', ''),
-                                target_achieved=act_data.get('target_achieved', 0.00),
-                                next_day_plan=act_data.get('next_day_plan', ''),
-                                remarks=act_data.get('remarks', '')
-                            )
-                            activities_to_create.append(activity)
-
-                        except Exception as e:
-                            validation_errors.append(f'activities[{idx}]: {str(e)}')
-
-                    # Return validation errors if any
-                    if validation_errors:
+                    activity_serializer = DPRActivitySerializer(
+                        data=activities_data, many=True
+                    )
+                    if not activity_serializer.is_valid():
                         return Response(
-                            {'error': 'Validation failed', 'details': validation_errors},
-                            status=status.HTTP_400_BAD_REQUEST
+                            {
+                                "success": False,
+                                "message": "Validation failed",
+                                "errors": activity_serializer.errors,
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
                         )
 
-                    # Bulk create activities
-                    if activities_to_create:
-                        DPRActivity.objects.bulk_create(activities_to_create)
+                    for activity_data in activity_serializer.validated_data:
+                        scope = activity_data.get("scope")
+                        if not scope:
+                            continue
+                        existing_activity = DPRActivity.objects.filter(
+                            dpr=dpr, scope=scope
+                        ).first()
+                        if existing_activity:
+                            existing_activity.executed_quantity = activity_data.get(
+                                "executed_quantity", existing_activity.executed_quantity
+                            )
+                            existing_activity.next_day_planned_work = activity_data.get(
+                                "next_day_planned_work",
+                                existing_activity.next_day_planned_work,
+                            )
+                            existing_activity.remarks = activity_data.get(
+                                "remarks", existing_activity.remarks
+                            )
+                            existing_activity.save()
+                            activity_id = existing_activity.id
+                        else:
+                            activity = DPRActivity(dpr=dpr, **activity_data)
+                            activity.save()
+                            activity_id = activity.id
+                        ScopeProgressService = __import__(
+                            "monthly_scope.services", fromlist=["ScopeProgressService"]
+                        ).ScopeProgressService
+                        ScopeProgressService.update_dpr_activity_progress(activity_id)
 
                 # Update DPR status and submitter
                 dpr.status = DailyProgressReport.Status.PENDING_TEAM_LEAD
@@ -521,9 +534,19 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                 return Response(serializer.data, status=status.HTTP_200_OK)
 
         except Exception as e:
+            logger.exception("DPR submit failed for dpr_id=%s", dpr.id)
             return Response(
-                {'error': f'Submission failed: {str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {
+                    "success": False,
+                    "message": "Submission failed",
+                    "errors": [
+                        {
+                            "field": "non_field_errors",
+                            "message": str(e) or "Unexpected error while submitting the DPR.",
+                        }
+                    ],
+                },
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
     @swagger_auto_schema(

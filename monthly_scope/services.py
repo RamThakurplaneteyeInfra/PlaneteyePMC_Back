@@ -169,8 +169,8 @@ class ScopeProgressService:
         daily_progress = DPRActivity.objects.filter(
             scope=scope,
             dpr__status__in=['approved', 'pending_pmc_head', 'pending_coordinator', 'pending_team_lead']
-        ).select_related('dpr').order_by('date').values(
-            'date', 'executed_quantity', 'cumulative_quantity',
+        ).select_related('dpr').order_by('dpr__report_date').values(
+            'executed_quantity', 'cumulative_quantity',
             'progress_percentage', 'dpr__report_date'
         )
 

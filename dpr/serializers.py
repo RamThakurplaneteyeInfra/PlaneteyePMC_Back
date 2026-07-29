@@ -156,6 +156,8 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
     rejected_by_username = serializers.CharField(source='rejected_by.username', read_only=True, default=None)
     approved_by_username = serializers.CharField(source='approved_by.username', read_only=True, default=None)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
+    # Accept plain text or structured quality payload from the form
+    quality_status = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:
         model = DailyProgressReport
@@ -190,6 +192,20 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
             'approved_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'created_by', 'status', 'submitted_by', 'current_approver_role', 'rejection_reason', 'rejected_by', 'approved_by', 'approved_at']
+
+    def to_internal_value(self, data):
+        if hasattr(data, "copy"):
+            data = data.copy()
+        else:
+            data = dict(data)
+
+        # Frontend may send quality_status as an object (metrics card) — store as text
+        quality = data.get("quality_status")
+        if isinstance(quality, (dict, list)):
+            import json
+            data["quality_status"] = json.dumps(quality)
+
+        return super().to_internal_value(data)
 
     def _extract_activities_data(self, validated_data):
         """
@@ -278,10 +294,22 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
 
                     return dpr
 
-        except Exception as e:
-            # Re-raise as ValidationError for better API response
+        except IntegrityError:
             from rest_framework.exceptions import ValidationError
-            raise ValidationError({'non_field_errors': [str(e)]})
+            raise ValidationError({
+                'non_field_errors': [
+                    'A duplicate activity for the same scope already exists on this DPR.'
+                ]
+            })
+        except serializers.ValidationError:
+            raise
+        except Exception as e:
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({
+                'non_field_errors': [
+                    str(e) or 'Unexpected error while saving the DPR.'
+                ]
+            })
 
     def update(self, instance, validated_data):
         """

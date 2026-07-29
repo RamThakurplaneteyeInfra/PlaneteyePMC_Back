@@ -49,9 +49,21 @@ def _extract_message_and_errors(payload: dict) -> tuple[str, object]:
     if "detail" in payload and len(payload) == 1:
         return "Request failed", payload["detail"]
 
-    # {"error": "..."} legacy
+    # {"error": "..."} legacy — prefer details/message when present
     if "error" in payload and "success" not in payload:
-        return str(payload.get("error") or "Request failed"), payload.get("error")
+        message = str(
+            payload.get("message")
+            or payload.get("error")
+            or "Request failed"
+        )
+        errors = (
+            payload.get("errors")
+            if payload.get("errors") is not None
+            else payload.get("details")
+            if payload.get("details") is not None
+            else payload.get("error")
+        )
+        return message, errors
 
     # Looks like serializer errors at top level
     if any(isinstance(v, (list, dict, str)) for v in payload.values()):
