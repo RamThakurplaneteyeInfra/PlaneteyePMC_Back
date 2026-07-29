@@ -31,17 +31,78 @@ class FrequencyChartEntryAdmin(admin.ModelAdmin):
         "sr_no",
         "item_description",
         "type_of_test",
-        "total_qty_display",
+        "required_tests",
+        "conducted_tests",
+        "passed_tests",
+        "failed_tests_display",
+        "shortfall_display",
+        "status_display",
         "remarks",
         "is_archived",
     ]
     list_filter = ["year", "month", "is_archived", "type_of_test"]
     search_fields = ["projectName", "item_description", "type_of_test", "contractor_name"]
     autocomplete_fields = ["frequency_master"]
+    readonly_fields = ["failed_tests_display", "shortfall_display", "status_display"]
 
-    @admin.display(description="Total Qty")
-    def total_qty_display(self, obj):
-        return float(obj.qty_previous_bill or 0) + float(obj.qty_this_bill or 0)
+    fieldsets = (
+        (
+            "Project & Period",
+            {"fields": ("projectName", "month", "year", "sr_no")},
+        ),
+        (
+            "Item",
+            {
+                "fields": (
+                    "item_description",
+                    "type_of_test",
+                    "unit",
+                    "activity_name",
+                    "contractor_name",
+                    "frequency_master",
+                ),
+            },
+        ),
+        (
+            "Bill Quantities & Lab Counts",
+            {
+                "fields": (
+                    "qty_previous_bill",
+                    "qty_this_bill",
+                    "field_lab_previous_bill",
+                    "field_lab_this_bill",
+                    "third_party_previous_bill",
+                    "third_party_this_bill",
+                ),
+            },
+        ),
+        (
+            "Manual Testing Metrics",
+            {
+                "fields": (
+                    "required_tests",
+                    "conducted_tests",
+                    "passed_tests",
+                    "failed_tests_display",
+                    "shortfall_display",
+                    "status_display",
+                ),
+            },
+        ),
+        ("Other", {"fields": ("remarks", "is_archived")}),
+    )
+
+    @admin.display(description="Failed")
+    def failed_tests_display(self, obj):
+        return obj.failed_tests
+
+    @admin.display(description="Shortfall")
+    def shortfall_display(self, obj):
+        return obj.shortfall
+
+    @admin.display(description="Status")
+    def status_display(self, obj):
+        return obj.status
 
 
 @admin.register(ProjectQualityStatus)

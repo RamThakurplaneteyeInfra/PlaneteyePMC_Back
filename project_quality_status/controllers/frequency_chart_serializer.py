@@ -35,6 +35,11 @@ class FrequencyChartEntrySerializer(serializers.ModelSerializer):
         allow_null=True,
     )
 
+    # Computed — never stored
+    failed_tests = serializers.SerializerMethodField()
+    shortfall = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField()
+
     class Meta:
         model = FrequencyChartEntry
         fields = [
@@ -59,19 +64,49 @@ class FrequencyChartEntrySerializer(serializers.ModelSerializer):
             "field_lab_this_bill",
             "third_party_previous_bill",
             "third_party_this_bill",
+            "required_tests",
+            "conducted_tests",
+            "passed_tests",
+            "failed_tests",
+            "shortfall",
+            "status",
             "remarks",
             "is_archived",
             "client_row",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "project_name", "sr_no", "client_row", "created_at", "updated_at"]
+        read_only_fields = [
+            "id",
+            "project_name",
+            "sr_no",
+            "failed_tests",
+            "shortfall",
+            "status",
+            "client_row",
+            "created_at",
+            "updated_at",
+        ]
+        extra_kwargs = {
+            "required_tests": {"required": False, "min_value": 0},
+            "conducted_tests": {"required": False, "min_value": 0},
+            "passed_tests": {"required": False, "min_value": 0},
+        }
 
     def get_project_name(self, obj) -> str:
         return obj.projectName
 
     def get_client_row(self, obj) -> dict:
         return build_client_row(obj)
+
+    def get_failed_tests(self, obj) -> int:
+        return obj.failed_tests
+
+    def get_shortfall(self, obj) -> int:
+        return obj.shortfall
+
+    def get_status(self, obj) -> str:
+        return obj.status
 
     def to_internal_value(self, data):
         if hasattr(data, "copy"):
@@ -88,6 +123,21 @@ class FrequencyChartEntrySerializer(serializers.ModelSerializer):
 
         return super().to_internal_value(data)
 
+    def validate_required_tests(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError("Required Tests cannot be negative.")
+        return value
+
+    def validate_conducted_tests(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError("Conducted Tests cannot be negative.")
+        return value
+
+    def validate_passed_tests(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError("Passed Tests cannot be negative.")
+        return value
+
     def validate(self, attrs):
         project_name = (
             attrs.get("projectName")
@@ -96,6 +146,36 @@ class FrequencyChartEntrySerializer(serializers.ModelSerializer):
         if not project_name:
             raise serializers.ValidationError({"projectName": "project_name is required."})
         attrs["projectName"] = project_name
+
+        instance = self.instance
+        required = attrs.get(
+            "required_tests",
+            getattr(instance, "required_tests", 0) if instance else 0,
+        )
+        conducted = attrs.get(
+            "conducted_tests",
+            getattr(instance, "conducted_tests", 0) if instance else 0,
+        )
+        passed = attrs.get(
+            "passed_tests",
+            getattr(instance, "passed_tests", 0) if instance else 0,
+        )
+        required = int(required or 0)
+        conducted = int(conducted or 0)
+        passed = int(passed or 0)
+
+        errors = {}
+        if passed > conducted:
+            errors["passed_tests"] = (
+                "Passed Tests cannot be greater than Conducted Tests."
+            )
+        if conducted > required:
+            errors["conducted_tests"] = (
+                "Conducted Tests cannot exceed Required Tests."
+            )
+        if errors:
+            raise serializers.ValidationError(errors)
+
         return attrs
 
     def _apply_master_defaults(self, validated_data):
@@ -118,6 +198,9 @@ class FrequencyChartEntrySerializer(serializers.ModelSerializer):
                 validated_data["frequency_display"] = master.frequency_display
             if not validated_data.get("unit"):
                 validated_data["unit"] = master.unit
+
+        # Future hook: auto-fill required_tests from Frequency Master when enabled.
+        # Today required_tests remains manual user input only.
 
         return validated_data
 

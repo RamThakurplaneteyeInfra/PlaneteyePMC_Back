@@ -2,12 +2,42 @@
 Frequency chart / material testing register — per-item bill-period rows.
 
 ProjectQualityStatus remains the monthly project-level KPI aggregate.
+
+Manual testing metrics (required/conducted/passed) are stored on each row.
+failed_tests and shortfall are always computed — never stored.
 """
 
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Max
 from django.utils import timezone
+
+STATUS_COMPLETED = "Completed"
+STATUS_COMPLETED_WITH_FAILURES = "Completed With Failures"
+STATUS_SHORTFALL = "Shortfall"
+
+
+def compute_failed_tests(conducted_tests: int, passed_tests: int) -> int:
+    return max(int(conducted_tests or 0) - int(passed_tests or 0), 0)
+
+
+def compute_shortfall(required_tests: int, conducted_tests: int) -> int:
+    return max(int(required_tests or 0) - int(conducted_tests or 0), 0)
+
+
+def compute_testing_status(
+    required_tests: int,
+    conducted_tests: int,
+    passed_tests: int,
+) -> str:
+    """Derive row status from shortfall and failed counts."""
+    shortfall = compute_shortfall(required_tests, conducted_tests)
+    failed = compute_failed_tests(conducted_tests, passed_tests)
+    if shortfall > 0:
+        return STATUS_SHORTFALL
+    if failed > 0:
+        return STATUS_COMPLETED_WITH_FAILURES
+    return STATUS_COMPLETED
 
 
 class TestFrequencyMaster(models.Model):
@@ -17,6 +47,9 @@ class TestFrequencyMaster(models.Model):
     frequency_display is the human label; frequency_value / frequency_quantity
     drive required-test calculations:
         required = ceil(qty * frequency_value / frequency_quantity)
+
+    Future: chart rows may auto-fill ``required_tests`` from this master.
+    Today required_tests is entered manually on FrequencyChartEntry.
     """
 
     projectName = models.CharField(
@@ -106,6 +139,23 @@ class FrequencyChartEntry(models.Model):
     third_party_previous_bill = models.PositiveIntegerField(default=0)
     third_party_this_bill = models.PositiveIntegerField(default=0)
 
+    # Manual testing progress (failed/shortfall are computed, never stored)
+    required_tests = models.PositiveIntegerField(
+        default=0,
+        help_text=(
+            "Manually entered required tests. "
+            "Future: may be auto-filled from Frequency Master."
+        ),
+    )
+    conducted_tests = models.PositiveIntegerField(
+        default=0,
+        help_text="Manually entered conducted tests",
+    )
+    passed_tests = models.PositiveIntegerField(
+        default=0,
+        help_text="Manually entered passed tests",
+    )
+
     remarks = models.CharField(max_length=255, blank=True, default="")
     is_archived = models.BooleanField(default=False, db_index=True)
 
@@ -133,6 +183,33 @@ class FrequencyChartEntry(models.Model):
             ),
         ]
 
+    @property
+    def failed_tests(self) -> int:
+        return compute_failed_tests(self.conducted_tests, self.passed_tests)
+
+    @property
+    def shortfall(self) -> int:
+        return compute_shortfall(self.required_tests, self.conducted_tests)
+
+    @property
+    def status(self) -> str:
+        return compute_testing_status(
+            self.required_tests,
+            self.conducted_tests,
+            self.passed_tests,
+        )
+
+    def testing_metrics(self) -> dict:
+        """Centralized metrics dict for serializers and reports."""
+        return {
+            "required_tests": int(self.required_tests or 0),
+            "conducted_tests": int(self.conducted_tests or 0),
+            "passed_tests": int(self.passed_tests or 0),
+            "failed_tests": self.failed_tests,
+            "shortfall": self.shortfall,
+            "status": self.status,
+        }
+
     @classmethod
     def next_sr_no(cls, project_name: str, month: int, year: int) -> int:
         current = cls.objects.filter(
@@ -156,6 +233,26 @@ class FrequencyChartEntry(models.Model):
         ):
             if getattr(self, field) < 0:
                 errors[field] = f"{field} must be >= 0."
+
+        required = int(self.required_tests or 0)
+        conducted = int(self.conducted_tests or 0)
+        passed = int(self.passed_tests or 0)
+
+        if required < 0:
+            errors["required_tests"] = "Required Tests cannot be negative."
+        if conducted < 0:
+            errors["conducted_tests"] = "Conducted Tests cannot be negative."
+        if passed < 0:
+            errors["passed_tests"] = "Passed Tests cannot be negative."
+        if passed > conducted:
+            errors["passed_tests"] = (
+                "Passed Tests cannot be greater than Conducted Tests."
+            )
+        if conducted > required:
+            errors["conducted_tests"] = (
+                "Conducted Tests cannot exceed Required Tests."
+            )
+
         if errors:
             raise ValidationError(errors)
 

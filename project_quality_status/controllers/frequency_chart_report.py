@@ -7,12 +7,16 @@ from __future__ import annotations
 import calendar
 import math
 from datetime import date
-from decimal import Decimal
 
 from django.db.models import Q, QuerySet, Sum, Value
 from django.db.models.functions import Coalesce
 
-from ..models.frequency_chart import FrequencyChartEntry, TestFrequencyMaster
+from ..models.frequency_chart import (
+    FrequencyChartEntry,
+    TestFrequencyMaster,
+    compute_failed_tests,
+    compute_shortfall,
+)
 from ..models.project_quality_status import ProjectQualityStatus
 from .quality_metrics import metrics_from_counts
 
@@ -39,6 +43,12 @@ CLIENT_COLUMNS = [
     "third_party_previous_bill",
     "third_party_this_bill",
     "total_tests_conducted",
+    "required_tests",
+    "conducted_tests",
+    "passed_tests",
+    "failed_tests",
+    "shortfall",
+    "status",
     "remarks",
 ]
 
@@ -139,6 +149,8 @@ def build_client_row(entry: FrequencyChartEntry) -> dict:
         else:
             remarks = "-"
 
+    metrics = entry.testing_metrics()
+
     return {
         "sr_no": entry.sr_no,
         "item_description": entry.item_description,
@@ -156,6 +168,7 @@ def build_client_row(entry: FrequencyChartEntry) -> dict:
         "third_party_previous_bill": third_prev,
         "third_party_this_bill": third_this,
         "total_tests_conducted": total_conducted,
+        **metrics,
         "remarks": remarks,
         "id": entry.id,
         "month": entry.month,
@@ -173,12 +186,52 @@ def build_client_report(queryset: QuerySet) -> list[dict]:
     return [build_client_row(entry) for entry in qs]
 
 
+def aggregate_testing_metrics(queryset: QuerySet) -> dict:
+    """
+    Aggregate manual testing metrics across chart rows.
+
+    Returns card-friendly keys plus legacy aliases for backward compatibility.
+    Failed and shortfall are computed from aggregates — never stored.
+    """
+    agg = queryset.aggregate(
+        required=Coalesce(Sum("required_tests"), Value(0)),
+        conducted=Coalesce(Sum("conducted_tests"), Value(0)),
+        passed=Coalesce(Sum("passed_tests"), Value(0)),
+    )
+    required = int(agg["required"] or 0)
+    conducted = int(agg["conducted"] or 0)
+    passed = int(agg["passed"] or 0)
+    failed = compute_failed_tests(conducted, passed)
+    shortfall = compute_shortfall(required, conducted)
+
+    legacy = metrics_from_counts(
+        required,
+        conducted,
+        passed,
+        failed,
+        include_rates=True,
+    )
+    return {
+        "required": required,
+        "conducted": conducted,
+        "passed": passed,
+        "failed": failed,
+        "shortfall": shortfall,
+        **legacy,
+    }
+
+
 def kpi_summary_for_period(
     project_name: str,
     month: int,
     year: int,
     view: str,
 ) -> dict:
+    """
+    Legacy ProjectQualityStatus summary (kept for callers that need it).
+
+    Frequency-chart dashboards prefer ``aggregate_testing_metrics`` on chart rows.
+    """
     view = normalize_view(view)
     qs = ProjectQualityStatus.objects.filter(
         projectName__iexact=project_name.strip(),
@@ -195,13 +248,21 @@ def kpi_summary_for_period(
         tests_passed=Coalesce(Sum("tests_passed"), Value(0)),
         tests_failed=Coalesce(Sum("tests_failed"), Value(0)),
     )
-    return metrics_from_counts(
+    metrics = metrics_from_counts(
         agg["tests_required"],
         agg["tests_conducted"],
         agg["tests_passed"],
         agg["tests_failed"],
         include_rates=True,
     )
+    return {
+        "required": metrics["tests_required"],
+        "conducted": metrics["tests_conducted"],
+        "passed": metrics["tests_passed"],
+        "failed": metrics["tests_failed"],
+        "shortfall": metrics["shortfall"],
+        **metrics,
+    }
 
 
 def build_client_report_payload(
@@ -223,10 +284,10 @@ def build_client_report_payload(
         "month": month,
         "year": year,
         "rows": rows,
+        "summary": aggregate_testing_metrics(queryset),
     }
     if project_name:
         payload["project_name"] = project_name.strip()
-        payload["summary"] = kpi_summary_for_period(project_name, month, year, view)
     return payload
 
 
