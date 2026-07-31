@@ -81,7 +81,11 @@ class BottleneckAPITest(APITestCase):
             first_name="Site",
             last_name="Engineer",
         )
-        self.project = Project.objects.create(name="Bottleneck API Project")
+        self.project = Project.objects.create(
+            name="Bottleneck API Project",
+            status="active",
+            team_lead=self.user,
+        )
 
     def _payload(self, **overrides):
         data = {

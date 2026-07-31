@@ -148,54 +148,115 @@ class ProjectViewSet(viewsets.ModelViewSet):
         Returns every project the caller can access (RBAC), excluding merged
         unless include_merged=true. Avoids PAGE_SIZE=20 truncation that hides
         newly added projects when the client only loads the first page.
+        Cached (RBAC-scoped) for CACHE_TTL_DROPDOWN.
         """
-        # Rebuild a lean queryset (avoid select_related/only conflicts from get_queryset).
+        from core.cache_keys import build_rbac_list_cache_key
+        from core.cache_ops import TTL_DROPDOWN
+        from core.cache_swr import get_or_rebuild
+
+        cache_key = build_rbac_list_cache_key("projects_dropdown", request)
+
+        def _build_dropdown():
+            user = request.user
+            if is_admin_user(user):
+                qs = Project.objects.all()
+            else:
+                qs = get_user_assigned_projects_qs(user)
+
+            include_merged = str(
+                request.query_params.get("include_merged", "")
+            ).lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            if not include_merged:
+                qs = qs.exclude(status="merged")
+
+            status_param = (request.query_params.get("status") or "").strip()
+            if status_param:
+                statuses = [s.strip() for s in status_param.split(",") if s.strip()]
+                if statuses:
+                    qs = qs.filter(status__in=statuses)
+
+            search = (request.query_params.get("search") or "").strip()
+            if search:
+                qs = qs.filter(
+                    Q(name__icontains=search)
+                    | Q(client_name__icontains=search)
+                    | Q(location__icontains=search)
+                )
+
+            rows = list(
+                qs.order_by("name").values("id", "name", "status", "client_name")
+            )
+            data = [
+                {
+                    "id": row["id"],
+                    "name": row["name"],
+                    "status": row["status"],
+                    "client_name": row["client_name"] or "",
+                }
+                for row in rows
+            ]
+            return {
+                "success": True,
+                "message": "Projects retrieved successfully.",
+                "count": len(data),
+                "data": data,
+            }
+
+        payload = get_or_rebuild(
+            cache_key,
+            _build_dropdown,
+            soft_ttl=TTL_DROPDOWN,
+            hard_ttl=TTL_DROPDOWN * 2,
+            prefix="projects_dropdown",
+        )
+        return Response(payload)
+
+    @action(detail=False, methods=["get"], url_path="overview")
+    def overview(self, request):
+        """
+        Lightweight PMC dashboard project cards.
+
+        GET /api/projects/overview/
+            → all accessible *active* projects (excludes merged/completed/on_hold/planning)
+
+        GET /api/projects/overview/?status=active,planning
+            → explicit status filter (merged still excluded unless requested)
+
+        GET /api/projects/overview/?paginate=true&page=1&page_size=20
+            → optional paginated response
+        """
+        from projects.serializers_overview import ProjectOverviewSerializer
+        from projects.services.project_overview import ProjectOverviewService
+
         user = request.user
         if is_admin_user(user):
             qs = Project.objects.all()
         else:
             qs = get_user_assigned_projects_qs(user)
 
-        include_merged = str(request.query_params.get("include_merged", "")).lower() in {
-            "1",
-            "true",
-            "yes",
-        }
-        if not include_merged:
-            qs = qs.exclude(status="merged")
-
-        status_param = (request.query_params.get("status") or "").strip()
-        if status_param:
-            statuses = [s.strip() for s in status_param.split(",") if s.strip()]
-            if statuses:
-                qs = qs.filter(status__in=statuses)
-
-        search = (request.query_params.get("search") or "").strip()
-        if search:
-            qs = qs.filter(
-                Q(name__icontains=search)
-                | Q(client_name__icontains=search)
-                | Q(location__icontains=search)
-            )
-
-        rows = list(qs.order_by("name").values("id", "name", "status", "client_name"))
-        data = [
-            {
-                "id": row["id"],
-                "name": row["name"],
-                "status": row["status"],
-                "client_name": row["client_name"] or "",
-            }
-            for row in rows
-        ]
-        return Response(
-            {
-                "success": True,
-                "message": "Projects retrieved successfully.",
-                "count": len(data),
-                "data": data,
-            }
+        service = ProjectOverviewService(qs, request=request)
+        payload = service.get_paginated_overview(
+            paginate=request.query_params.get("paginate", False),
+            page=request.query_params.get("page", 1),
+            page_size=request.query_params.get("page_size", 20),
+            search=request.query_params.get("search", ""),
+            client=request.query_params.get("client", "")
+            or request.query_params.get("client_name", ""),
+            status=request.query_params.get("status", ""),
+            project_type=request.query_params.get("project_type", ""),
+            project_name=request.query_params.get("project_name", "")
+            or request.query_params.get("name", ""),
+            ordering=request.query_params.get("ordering", "")
+            or request.query_params.get("sort", ""),
+            use_cache=True,
         )
+        serializer = ProjectOverviewSerializer(payload["data"], many=True)
+        payload["data"] = serializer.data
+        return Response(payload)
 
     @action(detail=False, methods=['get'])
     def documents(self, request):
@@ -938,12 +999,20 @@ class ProjectViewSet(viewsets.ModelViewSet):
 class SiteViewSet(viewsets.ModelViewSet):
     queryset = Site.objects.all()
     serializer_class = SiteSerializer
+
     def get_queryset(self):
-        # Filter sites based on the project ID if provided in the URL
-        project_id = self.request.query_params.get('project_id')
+        # Never expose sites for merged / completed / on-hold projects.
+        qs = Site.objects.select_related("project").exclude(
+            project__status__in=["merged", "completed", "on_hold"]
+        )
+        project_id = self.request.query_params.get("project_id")
         if project_id:
-            return Site.objects.filter(project_id=project_id)
-        return Site.objects.all()
+            qs = qs.filter(project_id=project_id)
+        # Optional site status filter; default keeps active + not_started for live projects.
+        site_status = (self.request.query_params.get("status") or "").strip()
+        if site_status:
+            qs = qs.filter(status=site_status)
+        return qs
 
 
 class ProjectLogViewSet(viewsets.ModelViewSet):

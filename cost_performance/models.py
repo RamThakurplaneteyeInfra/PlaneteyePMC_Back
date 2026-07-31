@@ -85,9 +85,8 @@ class ProjectCostPerformance(models.Model):
                 name="costperf_unique_project_month_year",
             ),
         ]
-        indexes = [
-            models.Index(fields=["project", "month_year"], name="costperf_project_month_idx"),
-        ]
+        # UniqueConstraint already indexes (project, month_year).
+        indexes = []
 
     def __str__(self) -> str:
         return f"{self.project_name} — {self.month_year}"

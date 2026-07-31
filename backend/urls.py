@@ -111,6 +111,7 @@ urlpatterns = [
     path('api/', include('health_safety.hse_urls')),
     # Health Check
     path('api/health/', health_check, name='health-check'),
+    path('api/system/', include('core.urls')),
     # Monthly Scope API
     path('api/monthly-scope/', include('monthly_scope.urls')),
     # Notifications API

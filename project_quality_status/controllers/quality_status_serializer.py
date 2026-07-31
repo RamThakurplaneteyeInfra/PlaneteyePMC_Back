@@ -18,6 +18,7 @@ from .quality_metrics import (
     compute_quality_performance,
     compute_shortfall,
     metrics_from_record,
+    quality_status_from_performance,
 )
 
 
@@ -108,14 +109,7 @@ class ProjectQualityStatusSerializer(serializers.ModelSerializer):
         return self.get_quality_performance(obj)
 
     def get_qualityStatus(self, obj) -> str:
-        pct = self.get_quality_performance(obj)
-        if pct >= 95:
-            return "excellent"
-        if pct >= 80:
-            return "good"
-        if pct >= 60:
-            return "average"
-        return "poor"
+        return quality_status_from_performance(self.get_quality_performance(obj))
 
     def to_internal_value(self, data):
         if hasattr(data, "copy"):

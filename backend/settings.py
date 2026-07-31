@@ -86,6 +86,7 @@ INSTALLED_APPS = [
     'meeting_documents',
     'testing_documents',
     'feedback_management',
+    'core.apps.CoreConfig',
 ]
 
 MIDDLEWARE = [
@@ -378,10 +379,12 @@ SWAGGER_SETTINGS = {
 
 # Caching Configuration — used by DRF throttling and API caches.
 # Prefer Redis when REDIS_URL is reachable; fall back to LocMem (dev/tests).
+# Runtime Redis errors are ignored so endpoints keep serving from the DB.
 def _build_cache_settings():
     locmem = {
         "default": {
             "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "pmc-locmem",
         }
     }
     if "test" in sys.argv:
@@ -396,7 +399,11 @@ def _build_cache_settings():
     try:
         import redis
 
-        client = redis.from_url(redis_url, socket_connect_timeout=1)
+        client = redis.from_url(
+            redis_url,
+            socket_connect_timeout=float(os.environ.get("REDIS_CONNECT_TIMEOUT", "2")),
+            socket_timeout=float(os.environ.get("REDIS_SOCKET_TIMEOUT", "2")),
+        )
         client.ping()
     except Exception:
         return locmem
@@ -405,8 +412,22 @@ def _build_cache_settings():
         "default": {
             "BACKEND": "django_redis.cache.RedisCache",
             "LOCATION": redis_url,
+            "KEY_PREFIX": os.environ.get("REDIS_KEY_PREFIX", "pmc"),
+            "TIMEOUT": int(os.environ.get("CACHE_TTL_DEFAULT", "300")),
             "OPTIONS": {
                 "CLIENT_CLASS": "django_redis.client.DefaultClient",
+                "IGNORE_EXCEPTIONS": True,  # graceful fallback on Redis errors
+                "SOCKET_CONNECT_TIMEOUT": float(
+                    os.environ.get("REDIS_CONNECT_TIMEOUT", "2")
+                ),
+                "SOCKET_TIMEOUT": float(os.environ.get("REDIS_SOCKET_TIMEOUT", "2")),
+                "CONNECTION_POOL_KWARGS": {
+                    "max_connections": int(
+                        os.environ.get("REDIS_MAX_CONNECTIONS", "50")
+                    ),
+                    "retry_on_timeout": True,
+                },
+                "COMPRESSOR": "django_redis.compressors.zlib.ZlibCompressor",
             },
         }
     }
@@ -414,9 +435,20 @@ def _build_cache_settings():
 
 CACHES = _build_cache_settings()
 
+# Named TTLs (seconds) consumed by core.cache_ops
+CACHE_TTL_DEFAULT = int(os.environ.get("CACHE_TTL_DEFAULT", "300"))
+CACHE_TTL_OVERVIEW = int(os.environ.get("CACHE_TTL_OVERVIEW", "300"))  # 5 min
+CACHE_TTL_DASHBOARD = int(os.environ.get("CACHE_TTL_DASHBOARD", "300"))
+CACHE_TTL_DROPDOWN = int(os.environ.get("CACHE_TTL_DROPDOWN", "1800"))  # 30 min
+CACHE_TTL_REPORT = int(os.environ.get("CACHE_TTL_REPORT", "900"))  # 15 min
+CACHE_TTL_REFERENCE = int(os.environ.get("CACHE_TTL_REFERENCE", "3600"))  # 1 hour
+CACHE_SLOW_REBUILD_MS = float(os.environ.get("CACHE_SLOW_REBUILD_MS", "500"))
+# Optional: rebuild hot caches a few seconds after process start
+CACHE_PREWARM_ON_STARTUP = os.environ.get("CACHE_PREWARM_ON_STARTUP", "false").lower() == "true"
+
 # Cache settings for API endpoints
 CACHE_MIDDLEWARE_ALIAS = 'default'
-CACHE_MIDDLEWARE_SECONDS = 300  # 5 minutes default
+CACHE_MIDDLEWARE_SECONDS = CACHE_TTL_DEFAULT
 
 
 

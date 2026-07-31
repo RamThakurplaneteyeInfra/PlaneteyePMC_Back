@@ -261,9 +261,5 @@ class ContractPerformance(models.Model):
         ordering = ["projectName"]
         verbose_name = "Contract Performance"
         verbose_name_plural = "Contract Performance Records"
-        indexes = [
-            models.Index(
-                fields=["projectName"],
-                name="cp_project_name_idx",
-            ),
-        ]
+        # unique=True on projectName already creates a btree index.
+        indexes = []

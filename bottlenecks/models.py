@@ -99,6 +99,8 @@ class Bottleneck(models.Model):
             models.Index(fields=["project", "status"]),
             models.Index(fields=["project", "priority"]),
             models.Index(fields=["project", "target_date"]),
+            # Default list: filter(project_id=…).order_by("-created_at")
+            models.Index(fields=["project", "-created_at"], name="bn_proj_created_idx"),
         ]
         constraints = [
             models.UniqueConstraint(

@@ -65,9 +65,8 @@ class CashFlow(models.Model):
                 name="cashflow_unique_project_month_year",
             ),
         ]
-        indexes = [
-            models.Index(fields=["project_name", "month_year"], name="cashflow_project_month_idx"),
-        ]
+        # UniqueConstraint already provides a btree on (project_name, month_year).
+        indexes = []
 
     def __str__(self) -> str:
         return f"{self.project_name} — {self.month_year}"

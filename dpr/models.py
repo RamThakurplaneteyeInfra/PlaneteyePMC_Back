@@ -97,6 +97,8 @@ class DailyProgressReport(models.Model):
             models.Index(fields=['project_name', '-report_date']),
             models.Index(fields=['-report_date']),
             models.Index(fields=['status', 'current_approver_role']),
+            # Pending-approval inbox: filter(status=…).order_by("-report_date")
+            models.Index(fields=['status', '-report_date'], name='dpr_status_report_date_idx'),
         ]
         constraints = []
 

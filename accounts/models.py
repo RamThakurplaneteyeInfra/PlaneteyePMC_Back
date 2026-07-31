@@ -181,6 +181,10 @@ class Notification(models.Model):
         ordering = ["-created_at"]
         verbose_name = "Notification"
         verbose_name_plural = "Notifications"
+        indexes = [
+            # Hot path: GET /api/alerts/ → filter(user=…).order_by("-created_at")
+            models.Index(fields=["user", "-created_at"], name="notif_user_created_idx"),
+        ]
 
     def __str__(self):
         return f"{self.notification_type} - {self.user.username} - {self.created_at}"

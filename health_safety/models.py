@@ -257,9 +257,8 @@ class HSERecord(models.Model):
         ordering = ["projectName"]
         verbose_name = "HSE Record"
         verbose_name_plural = "HSE Records"
-        indexes = [
-            models.Index(fields=["projectName"], name="hse_record_project_name_idx"),
-        ]
+        # unique=True on projectName already creates a btree index.
+        indexes = []
 
 
 # =============================================================================

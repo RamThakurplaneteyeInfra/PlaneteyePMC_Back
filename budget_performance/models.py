@@ -76,6 +76,10 @@ class BudgetCostPerformance(models.Model):
         ordering = ["-created_at"]
         verbose_name = "Budget Cost Performance"
         verbose_name_plural = "Budget Cost Performance Records"
+        indexes = [
+            models.Index(fields=["project", "-created_at"], name="bcp_project_created_idx"),
+            models.Index(fields=["project_name", "-created_at"], name="bcp_project_name_created_idx"),
+        ]
 
     def __str__(self) -> str:
         return f"{self.project_name} @ {self.created_at:%Y-%m-%d %H:%M}"

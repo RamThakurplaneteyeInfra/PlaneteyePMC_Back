@@ -217,19 +217,12 @@ class ConstructionProgress(models.Model):
         ordering = ["projectName", "progressMonth"]
         verbose_name = "Monthly Construction Progress"
         verbose_name_plural = "Monthly Construction Progress Records"
-        # One record per project per month
+        # One record per project per month — unique btree covers (projectName, progressMonth)
         unique_together = [("projectName", "progressMonth")]
         indexes = [
-            models.Index(
-                fields=["projectName"],
-                name="conprog_project_name_idx",
-            ),
+            # Month-only scans / cross-project month dashboards
             models.Index(
                 fields=["progressMonth"],
                 name="conprog_month_idx",
-            ),
-            models.Index(
-                fields=["projectName", "progressMonth"],
-                name="conprog_project_month_idx",
             ),
         ]

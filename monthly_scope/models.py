@@ -258,6 +258,10 @@ class ScopeAssignment(models.Model):
         verbose_name = "Scope Assignment"
         verbose_name_plural = "Scope Assignments"
         unique_together = [['scope', 'site_engineer']]
+        indexes = [
+            # Reverse lookup: filter(assignments__site_engineer=user)
+            models.Index(fields=["site_engineer", "scope"], name="scope_asgn_se_scope_idx"),
+        ]
 
     def __str__(self):
         return f"{self.scope} -> {self.site_engineer.get_full_name() or self.site_engineer.username}"

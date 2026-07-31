@@ -202,6 +202,10 @@ class Project(models.Model):
         indexes = [
             models.Index(fields=["name", "status"], name="project_name_status_idx"),
             models.Index(fields=["status", "created_at"], name="project_status_created_idx"),
+            # Overview / lists: filter(status=…).order_by("-updated_at")
+            models.Index(fields=["status", "-updated_at"], name="project_status_updated_idx"),
+            # Client filter on overview/dropdown (client_name__icontains still prefers trgm at huge scale)
+            models.Index(fields=["client_name"], name="project_client_name_idx"),
         ]
 
     def __str__(self):
@@ -341,6 +345,12 @@ class ProjectLogEntry(models.Model):
         ordering = ['entry_type', 'row_order']
         verbose_name = "Project Log Entry"
         verbose_name_plural = "Project Log Entries"
+        indexes = [
+            models.Index(
+                fields=["project_log", "entry_type", "row_order"],
+                name="plog_entry_type_order_idx",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.get_entry_type_display()} - {self.left_text[:50]}"

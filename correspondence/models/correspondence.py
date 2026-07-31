@@ -317,12 +317,21 @@ class CorrespondenceDocument(models.Model):
             )
         ]
         indexes = [
-            models.Index(fields=["project_name"], name="corr_doc_project_idx"),
             models.Index(
                 fields=["project_name", "year", "month", "correspondence_type"],
                 name="corr_doc_proj_period_type_idx",
             ),
             models.Index(fields=["year", "month"], name="corr_doc_year_month_idx"),
+            # Metrics: project + inbound/outbound + period
+            models.Index(
+                fields=["project_name", "flow_direction", "year", "month"],
+                name="corr_proj_flow_period_idx",
+            ),
+            # List/metrics: project + delivery status + category
+            models.Index(
+                fields=["project_name", "delivered_status", "correspondence_category"],
+                name="corr_proj_status_cat_idx",
+            ),
         ]
 
 

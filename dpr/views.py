@@ -23,7 +23,7 @@ from accounts.rbac_checks import (
     enforce_project_write_by_name,
     site_engineer_cannot_delete_approved_dpr,
 )
-from core.cache_keys import build_rbac_list_cache_key, invalidate_list_cache
+from core.cache_keys import build_rbac_list_cache_key
 
 import logging
 logger = logging.getLogger(__name__)
@@ -32,10 +32,16 @@ logger = logging.getLogger(__name__)
 def safe_cache_delete_pattern(pattern):
     """
     Safely invalidate DPR list caches across LocMem and Redis backends.
+
+    Prefers tag/version bump (and batch coalescing when inside
+    ``batch_cache_invalidation``) over delete_pattern.
     """
     prefix = pattern.rstrip("*").rstrip(":")
     if prefix in {"dpr_list", "dpr_pending_approval", "dpr_rejected"}:
-        invalidate_list_cache(prefix)
+        from core.cache_tags import invalidate_tags
+
+        # reports tag covers DPR prefixes; also bump exact prefix for safety.
+        invalidate_tags("reports", prefix)
         return
     try:
         if isinstance(cache, LocMemCache):

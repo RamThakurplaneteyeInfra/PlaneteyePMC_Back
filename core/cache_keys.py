@@ -129,6 +129,7 @@ def invalidate_list_cache(prefix: str, *legacy_keys: str) -> None:
     """
     try:
         bump_list_cache_version(prefix)
+        logger.info("cache_invalidate prefix=%s", prefix)
     except Exception as exc:
         logger.warning("Failed to bump cache version for %s: %s", prefix, exc)
 

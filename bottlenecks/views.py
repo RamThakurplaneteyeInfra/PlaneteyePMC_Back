@@ -9,10 +9,19 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from accounts.rbac_checks import enforce_project_access
+from core.cache_keys import build_rbac_list_cache_key
+from core.cache_ops import TTL_DASHBOARD
+from core.cache_swr import get_or_rebuild
+from core.cache_tags import invalidate_tags
+from projects.models import Project
+
 from .filters import BottleneckFilter
 from .metrics import compute_summary
 from .models import Bottleneck
 from .serializers import BottleneckSerializer
+
+_CACHE_SUMMARY = "bottlenecks_summary"
 
 
 class BottleneckViewSet(viewsets.ModelViewSet):
@@ -39,14 +48,23 @@ class BottleneckViewSet(viewsets.ModelViewSet):
             .order_by("-created_at")
         )
 
+    def _invalidate_caches(self):
+        invalidate_tags("bottlenecks", "overview")
+
     def perform_create(self, serializer):
         serializer.save(
             created_by=self.request.user,
             updated_by=self.request.user,
         )
+        self._invalidate_caches()
 
     def perform_update(self, serializer):
         serializer.save(updated_by=self.request.user)
+        self._invalidate_caches()
+
+    def perform_destroy(self, instance):
+        super().perform_destroy(instance)
+        self._invalidate_caches()
 
     @swagger_auto_schema(
         operation_summary="Bottleneck dashboard summary",
@@ -77,5 +95,30 @@ class BottleneckViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        qs = self.get_queryset().filter(project_id=project_id)
-        return Response(compute_summary(qs))
+        project = Project.objects.filter(pk=project_id).first()
+        if project is None:
+            return Response(
+                {"detail": "Project not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        enforce_project_access(request.user, project)
+
+        cache_key = build_rbac_list_cache_key(
+            _CACHE_SUMMARY,
+            request,
+            extra_parts=[f"project:{project_id}"],
+            use_query_string=False,
+        )
+
+        def _build():
+            qs = self.get_queryset().filter(project_id=project_id)
+            return compute_summary(qs)
+
+        payload = get_or_rebuild(
+            cache_key,
+            _build,
+            soft_ttl=TTL_DASHBOARD,
+            hard_ttl=TTL_DASHBOARD * 2,
+            prefix=_CACHE_SUMMARY,
+        )
+        return Response(payload)

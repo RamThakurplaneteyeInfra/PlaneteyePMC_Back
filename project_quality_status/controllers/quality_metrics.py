@@ -28,6 +28,24 @@ def compute_fail_rate(tests_failed: int, tests_conducted: int) -> float:
     return round((int(tests_failed or 0) / conducted) * 100, 2)
 
 
+def quality_status_from_performance(pct: float) -> str:
+    """
+    Dashboard quality badge bands (shared by serializers + overview).
+      >= 95 → excellent
+      >= 80 → good
+      >= 60 → average
+      < 60  → poor
+    """
+    value = float(pct or 0)
+    if value >= 95:
+        return "excellent"
+    if value >= 80:
+        return "good"
+    if value >= 60:
+        return "average"
+    return "poor"
+
+
 def metrics_from_counts(
     tests_required: int,
     tests_conducted: int,
