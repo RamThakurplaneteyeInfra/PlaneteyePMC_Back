@@ -1,6 +1,6 @@
 """Raise PermissionDenied when RBAC rules block an action."""
 
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import APIException, PermissionDenied
 
 from .rbac import (
     RBACDomain,
@@ -16,6 +16,23 @@ from .rbac import (
     filter_queryset_by_project_access,
 )
 from .utils import get_user_role
+
+
+class ProjectReadOnlyError(APIException):
+    """Completed projects reject operational writes with HTTP 400."""
+
+    status_code = 400
+    default_detail = (
+        "This project is marked as completed and is read-only. "
+        "Operational records cannot be created, updated, or deleted."
+    )
+    default_code = "project_read_only"
+
+
+def assert_project_writable(project) -> None:
+    """Raise ProjectReadOnlyError when ``project.status == completed``."""
+    if project is not None and getattr(project, "status", None) == "completed":
+        raise ProjectReadOnlyError()
 
 
 def apply_project_rbac_to_queryset(queryset, request, project_name_field="project_name"):
@@ -51,6 +68,7 @@ def enforce_project_write(
     message: str | None = None,
 ) -> None:
     enforce_project_access(user, project)
+    assert_project_writable(project)
     if not user_can_write_domain(user, project, domain):
         raise PermissionDenied(
             message

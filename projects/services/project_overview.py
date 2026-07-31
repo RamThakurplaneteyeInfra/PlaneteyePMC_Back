@@ -241,7 +241,7 @@ class ProjectOverviewService:
         project_name: str,
     ) -> QuerySet[Project]:
         qs = (
-            self.base_queryset.select_related("team_lead")
+            self.base_queryset.select_related("team_lead", "completed_by")
             .only(
                 "id",
                 "name",
@@ -256,11 +256,18 @@ class ProjectOverviewService:
                 "end_date",
                 "forecast_finish",
                 "delay_days",
+                "completed_at",
+                "completion_notes",
                 "team_lead_id",
                 "team_lead__id",
                 "team_lead__username",
                 "team_lead__first_name",
                 "team_lead__last_name",
+                "completed_by_id",
+                "completed_by__id",
+                "completed_by__username",
+                "completed_by__first_name",
+                "completed_by__last_name",
             )
         )
 
@@ -285,9 +292,9 @@ class ProjectOverviewService:
                 if "merged" not in statuses:
                     qs = qs.exclude(status="merged")
         else:
-            # Dashboard cards: only live/active projects by default
-            # (hides planning / completed / on_hold / merged).
-            qs = qs.filter(status="active")
+            # Dashboard cards: live active + completed (historical) by default.
+            # planning / on_hold / merged stay hidden unless explicitly filtered.
+            qs = qs.filter(status__in=["active", "completed"])
 
         project_name = (project_name or "").strip()
         if project_name:
@@ -327,6 +334,7 @@ class ProjectOverviewService:
                 safety["percentage"],
             )
             team_lead = project.team_lead
+            completed_by = project.completed_by
             cards.append(
                 {
                     "project_id": project.id,
@@ -335,6 +343,11 @@ class ProjectOverviewService:
                     "client": project.client_name or "",
                     "project_type": "",
                     "project_icon": "",
+                    "status": project.status,
+                    "completed_at": project.completed_at.isoformat()
+                    if project.completed_at
+                    else None,
+                    "completed_by": self._team_leader_payload(completed_by),
                     "health_score": health_score,
                     "progress": progress,
                     "time": time_kpi,

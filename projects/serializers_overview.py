@@ -14,6 +14,12 @@ class OverviewTeamLeaderSerializer(serializers.Serializer):
     full_name = serializers.CharField(allow_blank=True)
 
 
+class OverviewCompletedBySerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    username = serializers.CharField()
+    full_name = serializers.CharField(allow_blank=True)
+
+
 class ProjectOverviewSerializer(serializers.Serializer):
     """Card payload only — no nested dashboard charts or financial blobs."""
 
@@ -23,6 +29,9 @@ class ProjectOverviewSerializer(serializers.Serializer):
     client = serializers.CharField(allow_blank=True)
     project_type = serializers.CharField(allow_blank=True)
     project_icon = serializers.CharField(allow_blank=True)
+    status = serializers.CharField()
+    completed_at = serializers.CharField(allow_null=True, required=False)
+    completed_by = OverviewCompletedBySerializer(allow_null=True, required=False)
     health_score = serializers.IntegerField()
     progress = OverviewKpiSerializer()
     time = OverviewKpiSerializer()

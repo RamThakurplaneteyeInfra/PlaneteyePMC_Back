@@ -38,6 +38,18 @@ class ProjectViewSet(viewsets.ModelViewSet):
     ordering_fields = ["name", "created_at", "status", "commencement_date"]
     ordering = ["-created_at"]
 
+    def update(self, request, *args, **kwargs):
+        from accounts.rbac_checks import assert_project_writable
+
+        assert_project_writable(self.get_object())
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        from accounts.rbac_checks import assert_project_writable
+
+        assert_project_writable(self.get_object())
+        return super().destroy(request, *args, **kwargs)
+
     def get_queryset(self):
         """
         Get filtered queryset based on user role and permissions.
@@ -538,6 +550,54 @@ class ProjectViewSet(viewsets.ModelViewSet):
             
         serializer = ProjectDashboardDataSerializer(dashboard_data)
         return Response(serializer.data)
+
+    @action(detail=True, methods=["post"], url_path="complete")
+    def complete_project(self, request, pk=None):
+        """
+        Mark a project as completed (HO / CEO / PMC Head / superuser).
+
+        POST /api/projects/{id}/complete/
+        Body: { "completion_notes": "Optional remarks" }
+        """
+        from accounts.rbac import can_manage_users
+        from projects.services.project_completion import (
+            ProjectCompletionBlocked,
+            complete_project,
+        )
+
+        if not can_manage_users(request.user):
+            return Response(
+                {
+                    "success": False,
+                    "message": (
+                        "Only Admin, Head Office, CEO, or PMC Head may mark "
+                        "a project as completed."
+                    ),
+                },
+                status=403,
+            )
+
+        project = self.get_object()
+        notes = ""
+        if isinstance(request.data, dict):
+            notes = request.data.get("completion_notes") or ""
+
+        try:
+            result = complete_project(
+                project=project,
+                actor=request.user,
+                completion_notes=notes,
+            )
+            return Response(result, status=200)
+        except ProjectCompletionBlocked as exc:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Project cannot be marked as completed.",
+                    "errors": exc.errors,
+                },
+                status=400,
+            )
 
     @action(detail=True, methods=['patch', 'put'], url_path='update-dashboard-data')
     def update_dashboard_data(self, request, pk=None):
@@ -1046,6 +1106,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         """
         Get list of projects with initialization fields only.
         
+        API: GET /api/projects/init-list/
         API: GET /api/projects-data/projects/init-list/
         
         Returns only the project initialization fields:
@@ -1060,6 +1121,86 @@ class ProjectViewSet(viewsets.ModelViewSet):
         serializer = ProjectInitSerializer(queryset, many=True)
         return Response(serializer.data)
 
+    @action(
+        detail=False,
+        methods=["delete"],
+        url_path=r"init-list/(?P<site_id>[^/.]+)",
+        url_name="init-list-delete-site",
+    )
+    def delete_init_site(self, request, site_id=None):
+        """
+        Safely delete a Site by id (Init List delete action).
+
+        DELETE /api/projects/init-list/{site_id}/
+        DELETE /api/projects-data/projects/init-list/{site_id}/
+
+        Allowed: Admin (superuser), Head Office, CEO, PMC Head.
+        Blocked when reverse FK dependencies exist (tasks / ops DPRs).
+        """
+        from accounts.permissions import CanDeleteSites
+        from accounts.rbac import can_manage_users
+        from projects.services.site_deletion import (
+            SiteDeleteBlocked,
+            delete_site_safe,
+        )
+
+        # Explicit RBAC (ProjectViewSet default allows write when project unresolved).
+        if not can_manage_users(request.user):
+            return Response(
+                {
+                    "success": False,
+                    "message": CanDeleteSites.message,
+                },
+                status=403,
+            )
+
+        try:
+            site_pk = int(site_id)
+        except (TypeError, ValueError):
+            return Response(
+                {"success": False, "message": "Site not found."},
+                status=404,
+            )
+
+        site = (
+            Site.objects.select_related("project")
+            .filter(pk=site_pk)
+            .only("id", "name", "project_id", "project__name")
+            .first()
+        )
+        if site is None:
+            return Response(
+                {"success": False, "message": "Site not found."},
+                status=404,
+            )
+
+        try:
+            result = delete_site_safe(
+                site=site, actor=request.user, request=request
+            )
+            return Response(result, status=200)
+        except SiteDeleteBlocked as exc:
+            return Response(
+                {
+                    "success": False,
+                    "message": (
+                        "This site cannot be deleted because it is referenced "
+                        "by existing records."
+                    ),
+                    "errors": [
+                        {
+                            "field": "non_field_errors",
+                            "message": (
+                                "This site cannot be deleted because it is "
+                                "referenced by existing records."
+                            ),
+                        }
+                    ],
+                    "dependencies": exc.dependencies,
+                },
+                status=400,
+            )
+
 
 class SiteViewSet(viewsets.ModelViewSet):
     queryset = Site.objects.all()
@@ -1067,17 +1208,42 @@ class SiteViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         # Never expose sites for merged / completed / on-hold projects.
+        # Completed projects still keep sites historically — allow list when
+        # project_id is explicit; default hide sites of completed/on_hold/merged
+        # was prior behaviour for live dropdowns.
         qs = Site.objects.select_related("project").exclude(
-            project__status__in=["merged", "completed", "on_hold"]
+            project__status__in=["merged", "on_hold"]
         )
+        # Keep completed project sites visible for historical views.
         project_id = self.request.query_params.get("project_id")
         if project_id:
             qs = qs.filter(project_id=project_id)
+        else:
+            qs = qs.exclude(project__status="completed")
         # Optional site status filter; default keeps active + not_started for live projects.
         site_status = (self.request.query_params.get("status") or "").strip()
         if site_status:
             qs = qs.filter(status=site_status)
         return qs
+
+    def perform_create(self, serializer):
+        from accounts.rbac_checks import assert_project_writable
+
+        project = serializer.validated_data.get("project")
+        assert_project_writable(project)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        from accounts.rbac_checks import assert_project_writable
+
+        assert_project_writable(serializer.instance.project)
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        from accounts.rbac_checks import assert_project_writable
+
+        assert_project_writable(instance.project)
+        instance.delete()
 
 
 class ProjectLogViewSet(viewsets.ModelViewSet):

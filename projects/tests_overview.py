@@ -169,6 +169,9 @@ class ProjectOverviewAPITest(APITestCase):
             "client",
             "project_type",
             "project_icon",
+            "status",
+            "completed_at",
+            "completed_by",
             "health_score",
             "progress",
             "time",
@@ -183,6 +186,9 @@ class ProjectOverviewAPITest(APITestCase):
             "compare_enabled",
         }
         self.assertEqual(set(card.keys()), expected_keys)
+        self.assertEqual(card["status"], "active")
+        self.assertIsNone(card["completed_at"])
+        self.assertIsNone(card["completed_by"])
         self.assertEqual(card["project_code"], "B3482")
         self.assertEqual(card["client"], "GSIDC")
         self.assertEqual(card["progress"]["percentage"], 49)
@@ -274,19 +280,21 @@ class ProjectOverviewAPITest(APITestCase):
         clients = {c["client"] for c in response.data["data"]}
         self.assertEqual(clients, {"MMRCL"})
 
-    def test_default_excludes_planning_merged_completed(self):
+    def test_default_excludes_planning_merged_includes_completed(self):
         completed = Project.objects.create(
-            name="Overview Completed Hidden", status="completed", client_name="X"
+            name="Overview Completed Visible", status="completed", client_name="X"
         )
         response = self.client.get(self.URL)
         ids = {c["project_id"] for c in response.data["data"]}
         self.assertNotIn(self.p3.id, ids)
         self.assertNotIn(self.merged.id, ids)
-        self.assertNotIn(completed.id, ids)
+        self.assertIn(completed.id, ids)
         for card in response.data["data"]:
-            self.assertEqual(
-                Project.objects.get(id=card["project_id"]).status, "active"
+            self.assertIn(
+                Project.objects.get(id=card["project_id"]).status,
+                {"active", "completed"},
             )
+            self.assertIn("status", card)
 
     def test_explicit_planning_status_still_works(self):
         response = self.client.get(self.URL, {"status": "planning"})

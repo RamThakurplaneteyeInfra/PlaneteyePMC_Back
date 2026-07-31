@@ -16,6 +16,9 @@ from core.api_errors import build_error_payload, flatten_errors, summarize_error
 
 logger = logging.getLogger(__name__)
 
+# Extra keys kept on error envelopes (domain-specific payloads).
+_PRESERVE_EXTRA_KEYS = frozenset({"dependencies", "data", "code", "details"})
+
 
 def _already_normalized(errors) -> bool:
     return (
@@ -118,6 +121,9 @@ class FriendlyAPIErrorMiddleware(MiddlewareMixin):
         ):
             # Still run messages through friendly mapper via rebuild for consistency
             normalized = build_error_payload(payload["message"], payload.get("errors"))
+            for key in _PRESERVE_EXTRA_KEYS:
+                if key in payload and key not in normalized:
+                    normalized[key] = payload[key]
             return self._write(response, normalized, status_code)
 
         message, errors = _extract_message_and_errors(payload)
@@ -139,6 +145,10 @@ class FriendlyAPIErrorMiddleware(MiddlewareMixin):
             }:
                 top = summarize_errors(flattened, str(message))
             normalized = build_error_payload(top, flattened)
+
+        for key in _PRESERVE_EXTRA_KEYS:
+            if key in payload and key not in normalized:
+                normalized[key] = payload[key]
 
         return self._write(response, normalized, status_code)
 

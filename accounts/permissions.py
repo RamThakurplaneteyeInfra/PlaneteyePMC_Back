@@ -72,6 +72,13 @@ class IsAuthenticatedProjectRBAC(BasePermission):
         project = self._resolve_project_from_view(request, view)
         if project is None:
             return True
+        if getattr(project, "status", None) == "completed":
+            # Skip lock for the dedicated complete action (idempotent already-completed handled in service).
+            action = getattr(view, "action", None)
+            if action != "complete_project":
+                from accounts.rbac_checks import ProjectReadOnlyError
+
+                raise ProjectReadOnlyError()
         return user_can_write_domain(request.user, project, self._get_domain(view))
 
     def has_object_permission(self, request, view, obj):
@@ -84,6 +91,12 @@ class IsAuthenticatedProjectRBAC(BasePermission):
         if request.method in SAFE_METHODS:
             return user_can_read_domain(request.user, project, domain)
 
+        if getattr(project, "status", None) == "completed":
+            action = getattr(view, "action", None)
+            if action != "complete_project":
+                from accounts.rbac_checks import ProjectReadOnlyError
+
+                raise ProjectReadOnlyError()
         return user_can_write_domain(request.user, project, domain)
 
 
@@ -149,6 +162,25 @@ class CanManageUsers(BasePermission):
     """
 
     message = "Only Head Office or Admin may manage users."
+
+    def has_permission(self, request, view):
+        from .rbac import can_manage_users
+
+        return can_manage_users(getattr(request, "user", None))
+
+    def has_object_permission(self, request, view, obj):
+        return self.has_permission(request, view)
+
+
+class CanDeleteSites(BasePermission):
+    """
+    Site deletion (Init List) — Admin / Head Office / CEO / PMC Head only.
+
+    Reuses ``can_manage_users`` (USER_MANAGEMENT_ROLES + superuser).
+    Team Leaders and all Site Engineer roles are denied.
+    """
+
+    message = "Only Admin, Head Office, CEO, or PMC Head may delete sites."
 
     def has_permission(self, request, view):
         from .rbac import can_manage_users

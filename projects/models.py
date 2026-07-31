@@ -67,6 +67,26 @@ class Project(models.Model):
         related_name='merged_duplicates',
         help_text='If status=merged, the surviving project this record was merged into',
     )
+    # Completion metadata (set via POST /api/projects/{id}/complete/)
+    completed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="When the project was marked completed",
+    )
+    completed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="completed_projects",
+        help_text="User who marked the project completed",
+    )
+    completion_notes = models.TextField(
+        blank=True,
+        default="",
+        help_text="Optional remarks captured at completion",
+    )
     start_date = models.DateField(null=True, blank=True) # Keeping for compatibility
     end_date = models.DateField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)

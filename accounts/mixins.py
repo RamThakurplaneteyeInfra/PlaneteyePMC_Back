@@ -10,6 +10,7 @@ from .rbac import (
     resolve_project,
     user_can_write_domain,
 )
+from .rbac_checks import assert_project_writable
 
 
 class ProjectRBACQuerysetMixin:
@@ -49,6 +50,7 @@ class ProjectRBACWriteMixin:
     def perform_create(self, serializer):
         project = self._rbac_project_for_write(serializer)
         domain = getattr(self, "rbac_domain", RBACDomain.GENERAL)
+        assert_project_writable(project)
         if project and not user_can_write_domain(self.request.user, project, domain):
             raise PermissionDenied(
                 "You do not have permission to create this record for the project."
@@ -58,6 +60,7 @@ class ProjectRBACWriteMixin:
     def perform_update(self, serializer):
         project = self._rbac_project_for_write(serializer)
         domain = getattr(self, "rbac_domain", RBACDomain.GENERAL)
+        assert_project_writable(project)
         if project and not user_can_write_domain(self.request.user, project, domain):
             raise PermissionDenied(
                 "You do not have permission to update this record for the project."
@@ -67,6 +70,7 @@ class ProjectRBACWriteMixin:
     def perform_destroy(self, instance):
         project = project_from_instance(instance)
         domain = getattr(self, "rbac_domain", RBACDomain.GENERAL)
+        assert_project_writable(project)
         if project and not user_can_write_domain(self.request.user, project, domain):
             raise PermissionDenied(
                 "You do not have permission to delete this record for the project."
