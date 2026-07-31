@@ -20,8 +20,6 @@ def prewarm_project_caches() -> dict:
     from django.test import RequestFactory
 
     from accounts.rbac import is_admin_user
-    from projects.models import Project
-    from projects.services.project_overview import ProjectOverviewService
     from projects.views import ProjectViewSet
 
     User = get_user_model()
@@ -42,11 +40,11 @@ def prewarm_project_caches() -> dict:
     try:
         request = factory.get("/api/projects/overview/")
         request.user = admin
-        qs = Project.objects.all()
-        ProjectOverviewService(qs, request=request).get_paginated_overview(
-            use_cache=True
-        )
-        warmed["overview"] = 1
+        # Hit the ViewSet path so the cached key matches live API responses.
+        view = ProjectViewSet.as_view({"get": "overview"})
+        response = view(request)
+        if getattr(response, "status_code", 500) < 400:
+            warmed["overview"] = 1
     except Exception as exc:
         warmed["errors"] += 1
         logger.warning("prewarm overview failed: %s", exc)

@@ -144,6 +144,7 @@ class ProjectOverviewService:
                 prefix=CACHE_PREFIX,
             )
 
+        # use_cache=False: caller (e.g. ProjectViewSet.overview) owns the cache layer.
         return self._build_payload(
             paginate=paginate,
             page=page,

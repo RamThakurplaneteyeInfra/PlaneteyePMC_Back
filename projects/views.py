@@ -228,34 +228,99 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
         GET /api/projects/overview/?paginate=true&page=1&page_size=20
             → optional paginated response
+
+        Cached (RBAC-scoped, SWR) under prefix ``project_overview_v2``.
+        Cache hits skip queryset aggregation and serialization.
         """
+        from core.cache_keys import build_rbac_list_cache_key
+        from core.cache_ops import TTL_OVERVIEW
+        from core.cache_swr import get_or_rebuild
         from projects.serializers_overview import ProjectOverviewSerializer
-        from projects.services.project_overview import ProjectOverviewService
-
-        user = request.user
-        if is_admin_user(user):
-            qs = Project.objects.all()
-        else:
-            qs = get_user_assigned_projects_qs(user)
-
-        service = ProjectOverviewService(qs, request=request)
-        payload = service.get_paginated_overview(
-            paginate=request.query_params.get("paginate", False),
-            page=request.query_params.get("page", 1),
-            page_size=request.query_params.get("page_size", 20),
-            search=request.query_params.get("search", ""),
-            client=request.query_params.get("client", "")
-            or request.query_params.get("client_name", ""),
-            status=request.query_params.get("status", ""),
-            project_type=request.query_params.get("project_type", ""),
-            project_name=request.query_params.get("project_name", "")
-            or request.query_params.get("name", ""),
-            ordering=request.query_params.get("ordering", "")
-            or request.query_params.get("sort", ""),
-            use_cache=True,
+        from projects.services.project_overview import (
+            CACHE_PREFIX,
+            ProjectOverviewService,
         )
-        serializer = ProjectOverviewSerializer(payload["data"], many=True)
-        payload["data"] = serializer.data
+
+        paginate = request.query_params.get("paginate", False)
+        page = request.query_params.get("page", 1)
+        page_size = request.query_params.get("page_size", 20)
+        search = request.query_params.get("search", "")
+        client = (
+            request.query_params.get("client", "")
+            or request.query_params.get("client_name", "")
+        )
+        status_filter = request.query_params.get("status", "")
+        project_type = request.query_params.get("project_type", "")
+        project_name = (
+            request.query_params.get("project_name", "")
+            or request.query_params.get("name", "")
+        )
+        ordering = (
+            request.query_params.get("ordering", "")
+            or request.query_params.get("sort", "")
+        )
+
+        # Same key shape as ProjectOverviewService (filters + RBAC scope + version).
+        truthy = str(paginate or "").strip().lower() in {"1", "true", "yes", "on"}
+        try:
+            page_i = max(1, int(page))
+        except (TypeError, ValueError):
+            page_i = 1
+        try:
+            page_size_i = min(100, max(1, int(page_size)))
+        except (TypeError, ValueError):
+            page_size_i = 20
+        default_ordering = ProjectOverviewService.DEFAULT_ORDERING
+        cache_key = build_rbac_list_cache_key(
+            CACHE_PREFIX,
+            request,
+            extra_parts=[
+                f"pg{int(truthy)}",
+                f"p{page_i}" if truthy else "pall",
+                f"ps{page_size_i}" if truthy else "psall",
+                f"s{search}",
+                f"c{client}",
+                f"st{status_filter}",
+                f"pt{project_type}",
+                f"pn{project_name}",
+                f"o{ordering or default_ordering}",
+            ],
+            use_query_string=False,
+        )
+
+        def _build_overview():
+            user = request.user
+            if is_admin_user(user):
+                qs = Project.objects.all()
+            else:
+                qs = get_user_assigned_projects_qs(user)
+
+            # Service-level cache disabled — view caches the final serialized body.
+            service = ProjectOverviewService(qs, request=request)
+            payload = service.get_paginated_overview(
+                paginate=paginate,
+                page=page,
+                page_size=page_size,
+                search=search,
+                client=client,
+                status=status_filter,
+                project_type=project_type,
+                project_name=project_name,
+                ordering=ordering,
+                use_cache=False,
+            )
+            serializer = ProjectOverviewSerializer(payload["data"], many=True)
+            # Plain list for Redis/LocMem pickling (avoid ReturnList quirks).
+            payload["data"] = list(serializer.data)
+            return payload
+
+        payload = get_or_rebuild(
+            cache_key,
+            _build_overview,
+            soft_ttl=TTL_OVERVIEW,
+            hard_ttl=TTL_OVERVIEW * 2,
+            prefix=CACHE_PREFIX,
+        )
         return Response(payload)
 
     @action(detail=False, methods=['get'])
