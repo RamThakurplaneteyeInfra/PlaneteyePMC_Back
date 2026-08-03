@@ -6,7 +6,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from core.test_auth import authenticate_client
-from monthly_scope.models import MonthlyScopeWork
+from monthly_scope.models import MonthlyScopeWork, ScopeCategory, ScopeSubCategory
 from projects.models import Project
 
 
@@ -54,3 +54,54 @@ class MonthlyScopeNullCategoryRegressionTest(TestCase):
         # Ensure serializer returned something
         data = response.json()
         self.assertTrue(data.get("results") or data.get("count"))
+
+
+class MonthlyScopeCreateRequiresCategoryTest(TestCase):
+    def setUp(self):
+        self.team_leader_group, _ = Group.objects.get_or_create(name="Team Leader")
+        self.user = User.objects.create_user(
+            username="ms_tl_create",
+            password="testpass123",
+            is_active=True,
+        )
+        self.user.groups.add(self.team_leader_group)
+        self.project = Project.objects.create(name="MS Create Scope Project", status="active")
+        self.category = ScopeCategory.objects.create(name="Civil", display_order=1)
+        self.subcategory = ScopeSubCategory.objects.create(
+            category=self.category, name="Excavation", display_order=1
+        )
+        self.client = APIClient()
+        authenticate_client(self.client, username=self.user.username, password="testpass123")
+
+    def test_create_without_category_fails(self):
+        response = self.client.post(
+            "/api/monthly-scope/",
+            {
+                "project": self.project.id,
+                "month": "2026-08-01",
+                "description": "Missing category",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        fields = [e["field"] for e in response.data.get("errors", [])]
+        self.assertIn("category", fields)
+        self.assertIn("subcategory", fields)
+
+    def test_create_with_category_and_subcategory_succeeds(self):
+        response = self.client.post(
+            "/api/monthly-scope/",
+            {
+                "project": self.project.id,
+                "month": "2026-08-01",
+                "category": self.category.id,
+                "subcategory": self.subcategory.id,
+                "description": "Valid scope",
+                "unit": "Cum",
+                "planned_quantity": "10.00",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
+        self.assertEqual(response.data["category"], self.category.id)
+        self.assertEqual(response.data["subcategory"], self.subcategory.id)

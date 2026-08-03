@@ -48,8 +48,9 @@ class MonthlyScopeWorkSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             'project': {'required': False},
             'month': {'required': False},
-            'category': {'required': False},
-            'subcategory': {'required': False},
+            # Required on create; model stays nullable for legacy rows
+            'category': {'required': True, 'allow_null': False},
+            'subcategory': {'required': True, 'allow_null': False},
             'unit': {'required': False},
             'planned_quantity': {'required': False},
             'start_date': {'required': False},
@@ -80,27 +81,42 @@ class MonthlyScopeWorkSerializer(serializers.ModelSerializer):
                 'planned_quantity': 'Planned quantity must be greater than 0'
             })
 
-        # Validate category and subcategory relationship if both are provided
-        category = data.get('category')
-        subcategory = data.get('subcategory')
+        category = data.get('category', getattr(self.instance, 'category', None))
+        subcategory = data.get('subcategory', getattr(self.instance, 'subcategory', None))
+
+        # Create (and full update): category + subcategory are mandatory
+        if not self.partial:
+            errors = {}
+            if not category:
+                errors['category'] = 'Category is required.'
+            if not subcategory:
+                errors['subcategory'] = 'Subcategory is required.'
+            if errors:
+                raise serializers.ValidationError(errors)
 
         # Check if subcategory belongs to the selected category
-        if subcategory and category and subcategory.category != category:
+        if subcategory and category and subcategory.category_id != category.id:
             raise serializers.ValidationError({
                 'subcategory': 'Selected subcategory does not belong to the selected category'
             })
 
         # Validate custom names for "Other" options if category/subcategory is "Other"
         if category and category.name == "Other":
-            custom_category_name = data.get('custom_category_name', '').strip()
-            if not custom_category_name:
+            custom_category_name = data.get(
+                'custom_category_name',
+                getattr(self.instance, 'custom_category_name', '') if self.instance else '',
+            )
+            if not str(custom_category_name or '').strip():
                 raise serializers.ValidationError({
                     'custom_category_name': 'Custom category name is required when "Other" is selected'
                 })
 
         if subcategory and subcategory.name == "Other":
-            custom_subcategory_name = data.get('custom_subcategory_name', '').strip()
-            if not custom_subcategory_name:
+            custom_subcategory_name = data.get(
+                'custom_subcategory_name',
+                getattr(self.instance, 'custom_subcategory_name', '') if self.instance else '',
+            )
+            if not str(custom_subcategory_name or '').strip():
                 raise serializers.ValidationError({
                     'custom_subcategory_name': 'Custom subcategory name is required when "Other" is selected'
                 })
