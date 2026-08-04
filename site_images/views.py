@@ -9,18 +9,20 @@ from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.parsers import FormParser, MultiPartParser
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 
 from accounts.permissions import IsAuthenticatedProjectRBAC
 from accounts.rbac import RBACDomain, filter_queryset_by_project_access
 from accounts.rbac_checks import enforce_project_write_by_name
+from core.cache_tags import invalidate_tags
 from .models import SiteProgressImage
 from .serializers import (
     SiteProgressImageSerializer,
     SiteProgressImageUploadSerializer,
+    normalize_title,
 )
 from .services.image_storage import (
     build_upload_folder,
@@ -69,6 +71,54 @@ def _collect_upload_files(request) -> list:
     return collected
 
 
+def _getlist(data, *keys) -> list:
+    """Collect list values from QueryDict / dict-like multipart payloads."""
+    for key in keys:
+        if hasattr(data, "getlist"):
+            values = data.getlist(key)
+            if values:
+                return list(values)
+        elif isinstance(data, dict) and key in data:
+            value = data.get(key)
+            if isinstance(value, (list, tuple)):
+                return list(value)
+            if value is not None:
+                return [value]
+    return []
+
+
+def _collect_titles(request, count: int) -> list[str]:
+    """
+    Resolve per-image titles from multipart form data.
+
+    Priority:
+      1. titles[] / titles  — map by index (missing indexes → "")
+      2. title              — apply the same title to every image
+      3. neither            — empty string for every image
+    """
+    data = request.data
+    titled = _getlist(data, "titles", "titles[]")
+    if titled:
+        result: list[str] = []
+        for i in range(count):
+            raw = titled[i] if i < len(titled) else ""
+            result.append(normalize_title(raw))
+        return result
+
+    single = ""
+    if hasattr(data, "get"):
+        single = data.get("title")
+    normalized = normalize_title(single)
+    if normalized:
+        return [normalized] * count
+    return [""] * count
+
+
+def _invalidate_site_image_cache() -> None:
+    """Bump only site-image list cache version (no unrelated flush)."""
+    invalidate_tags("site_images")
+
+
 def _flatten_errors(errors) -> dict:
     if isinstance(errors, dict):
         flat = {}
@@ -92,14 +142,19 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
     POST   /api/site-images/          — multi-image upload (multipart)
     GET    /api/site-images/          — paginated gallery
     GET    /api/site-images/{id}/
+    PATCH  /api/site-images/{id}/     — update title only
     DELETE /api/site-images/{id}/     — removes storage asset + DB row
     """
 
     queryset = SiteProgressImage.objects.all()
     serializer_class = SiteProgressImageSerializer
     pagination_class = SiteImagePagination
-    parser_classes = [MultiPartParser, FormParser]
-    http_method_names = ["get", "post", "delete", "head", "options"]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+    filter_backends = [SearchFilter, OrderingFilter]
+    search_fields = ["title", "project_name"]
+    ordering_fields = ["title", "created_at", "month", "year"]
+    ordering = ["-created_at"]
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
     permission_classes = [IsAuthenticatedProjectRBAC]
     rbac_domain = RBACDomain.ENGINEERING
 
@@ -123,11 +178,16 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
             except ValueError:
                 pass
 
+        # Explicit title filter (in addition to SearchFilter ?search=)
+        title = self.request.query_params.get("title")
+        if title:
+            qs = qs.filter(title__icontains=title.strip())
+
         user = getattr(self.request, "user", None)
         if user and user.is_authenticated:
             qs = filter_queryset_by_project_access(qs, user, "project_name")
 
-        return qs.order_by("-created_at")
+        return qs
 
     def _success(self, message: str, data, http_status=status.HTTP_200_OK):
         return Response(
@@ -147,6 +207,20 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
             openapi.Parameter("project_name", openapi.IN_FORM, type=openapi.TYPE_STRING, required=True),
             openapi.Parameter("month", openapi.IN_FORM, type=openapi.TYPE_INTEGER, required=True),
             openapi.Parameter("year", openapi.IN_FORM, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter(
+                "title",
+                openapi.IN_FORM,
+                type=openapi.TYPE_STRING,
+                required=False,
+                description="Optional title applied to every uploaded image",
+            ),
+            openapi.Parameter(
+                "titles",
+                openapi.IN_FORM,
+                type=openapi.TYPE_STRING,
+                required=False,
+                description="Optional per-image titles (titles[]), mapped by index",
+            ),
             openapi.Parameter(
                 "images",
                 openapi.IN_FORM,
@@ -200,17 +274,29 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
                 return self._error("Validation failed", errors=errors)
             return self._error("Validation failed", errors={"images": str(exc)})
 
+        try:
+            titles = _collect_titles(request, len(files))
+        except Exception as exc:
+            from rest_framework.exceptions import ValidationError as DRFValidationError
+
+            if isinstance(exc, DRFValidationError):
+                return self._error(
+                    "Validation failed",
+                    errors=_flatten_errors({"title": exc.detail}),
+                )
+            return self._error("Validation failed", errors={"title": str(exc)})
+
         project_name = meta_serializer.validated_data["project_name"]
         month = meta_serializer.validated_data["month"]
         year = meta_serializer.validated_data["year"]
         folder = build_upload_folder(project_name, year, month)
 
         uploaded_assets: list[tuple[str, str]] = []
-        created_records: list[SiteProgressImage] = []
+        pending_records: list[SiteProgressImage] = []
 
         try:
             with transaction.atomic():
-                for uploaded_file in files:
+                for index, uploaded_file in enumerate(files):
                     try:
                         result = upload_image(uploaded_file, folder=folder)
                     except ValueError as exc:
@@ -222,16 +308,22 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
                         SiteProgressImage.STORAGE_S3,
                     )
                     uploaded_assets.append((storage_key, storage_backend))
-                    record = SiteProgressImage.objects.create(
-                        project_name=project_name,
-                        month=month,
-                        year=year,
-                        image_url=result["secure_url"],
-                        cloudinary_public_id=storage_key,
-                        storage_backend=storage_backend,
-                        uploaded_by=request.user if request.user.is_authenticated else None,
+                    pending_records.append(
+                        SiteProgressImage(
+                            project_name=project_name,
+                            month=month,
+                            year=year,
+                            title=titles[index] if index < len(titles) else "",
+                            image_url=result["secure_url"],
+                            cloudinary_public_id=storage_key,
+                            storage_backend=storage_backend,
+                            uploaded_by=(
+                                request.user if request.user.is_authenticated else None
+                            ),
+                        )
                     )
-                    created_records.append(record)
+
+                created_records = SiteProgressImage.objects.bulk_create(pending_records)
         except ValueError as exc:
             for storage_key, storage_backend in uploaded_assets:
                 try:
@@ -281,9 +373,12 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        _invalidate_site_image_cache()
+
         data = [
             {
                 "id": record.id,
+                "title": record.title or "",
                 "image_url": record.image_url,
                 "public_id": record.cloudinary_public_id,
                 "storage_backend": record.storage_backend,
@@ -302,6 +397,24 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
             openapi.Parameter("project_name", openapi.IN_QUERY, type=openapi.TYPE_STRING),
             openapi.Parameter("month", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
             openapi.Parameter("year", openapi.IN_QUERY, type=openapi.TYPE_INTEGER),
+            openapi.Parameter(
+                "title",
+                openapi.IN_QUERY,
+                type=openapi.TYPE_STRING,
+                description="Case-insensitive title filter",
+            ),
+            openapi.Parameter(
+                "search",
+                openapi.IN_QUERY,
+                type=openapi.TYPE_STRING,
+                description="Case-insensitive search across title and project_name",
+            ),
+            openapi.Parameter(
+                "ordering",
+                openapi.IN_QUERY,
+                type=openapi.TYPE_STRING,
+                description="Order by title, created_at, month, or year (prefix - for desc)",
+            ),
         ],
         tags=["Site Images"],
     )
@@ -338,6 +451,40 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
             self.get_serializer(instance).data,
         )
 
+    def partial_update(self, request, *args, **kwargs):
+        """Update title without requiring image re-upload."""
+        try:
+            instance = self.get_object()
+        except Exception:
+            return self._error(
+                "Site image not found",
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+
+        enforce_project_write_by_name(
+            request.user,
+            instance.project_name,
+            RBACDomain.ENGINEERING,
+        )
+
+        serializer = self.get_serializer(instance, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return self._error(
+                "Validation failed",
+                errors=_flatten_errors(serializer.errors),
+            )
+
+        # Only persist title — ignore any other writable attempt
+        title = serializer.validated_data.get("title", instance.title or "")
+        instance.title = title or ""
+        instance.save(update_fields=["title", "updated_at"])
+        _invalidate_site_image_cache()
+
+        return self._success(
+            "Site image updated successfully",
+            self.get_serializer(instance).data,
+        )
+
     def destroy(self, request, *args, **kwargs):
         try:
             instance = self.get_object()
@@ -365,6 +512,7 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
             )
 
         instance.delete()
+        _invalidate_site_image_cache()
         return self._success("Site image deleted successfully", {})
 
     @swagger_auto_schema(

@@ -20,6 +20,13 @@ class SiteProgressImage(models.Model):
     project_name = models.CharField(max_length=255, db_index=True)
     month = models.PositiveSmallIntegerField(db_index=True)
     year = models.PositiveSmallIntegerField(db_index=True)
+    title = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        default="",
+        help_text="Optional display title for the site image",
+    )
     image_url = models.URLField(max_length=500)
     cloudinary_public_id = models.CharField(
         max_length=500,

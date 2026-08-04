@@ -7,6 +7,7 @@ from .models import SiteProgressImage
 class SiteProgressImageAdmin(admin.ModelAdmin):
     list_display = [
         "id",
+        "title",
         "project_name",
         "month",
         "year",
@@ -16,5 +17,5 @@ class SiteProgressImageAdmin(admin.ModelAdmin):
         "created_at",
     ]
     list_filter = ["year", "month", "created_at"]
-    search_fields = ["project_name", "cloudinary_public_id"]
+    search_fields = ["title", "project_name", "cloudinary_public_id"]
     readonly_fields = ["image_url", "cloudinary_public_id", "created_at", "updated_at"]
