@@ -44,7 +44,15 @@ class MonthlyScopeWorkSerializer(serializers.ModelSerializer):
             'custom_subcategory_name', 'status', 'created_by', 'updated_by',
             'created_at', 'updated_at'
         ]
-        read_only_fields = ['created_by', 'updated_by', 'created_at', 'updated_at']
+        read_only_fields = [
+            'created_by',
+            'updated_by',
+            'created_at',
+            'updated_at',
+            'cumulative_quantity',
+            'remaining_quantity',
+            'progress_percentage',
+        ]
         extra_kwargs = {
             'project': {'required': False},
             'month': {'required': False},

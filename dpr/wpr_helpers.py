@@ -219,11 +219,17 @@ def aggregate_tasks(activities: List[DPRActivity]) -> Dict[str, Any]:
                 'latest_entry': activity
             }
 
-        # Update task progress and dates
+        # Update task progress and dates — progress from CUMULATIVE executed qty
         task = tasks[task_id]
         task['executed_quantity'] += activity.executed_quantity
-        task['progress_percentage'] = max(task['progress_percentage'], activity.progress_percentage)
-        task['remaining_quantity'] = task['planned_quantity'] - task['executed_quantity']
+        planned = task['planned_quantity'] or 0
+        executed = task['executed_quantity']
+        if planned and float(planned) > 0:
+            raw_pct = (float(executed) / float(planned)) * 100.0
+            task['progress_percentage'] = round(min(raw_pct, 100.0), 2)
+        else:
+            task['progress_percentage'] = 0
+        task['remaining_quantity'] = max(float(planned) - float(executed), 0)
         task['status'] = calculate_status(task['progress_percentage'])
         task['start_date'] = min(task['start_date'], activity.dpr.report_date)
         task['end_date'] = max(task['end_date'], activity.dpr.report_date)

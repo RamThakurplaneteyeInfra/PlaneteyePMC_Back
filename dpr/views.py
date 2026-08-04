@@ -24,6 +24,7 @@ from accounts.rbac_checks import (
     site_engineer_cannot_delete_approved_dpr,
 )
 from core.cache_keys import build_rbac_list_cache_key
+from monthly_scope.services import ScopeProgressService
 
 import logging
 logger = logging.getLogger(__name__)
@@ -351,7 +352,12 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         }
     )
     def perform_destroy(self, instance):
+        # Capture scopes before CASCADE deletes activities
+        scope_ids = list(
+            instance.activities.exclude(scope_id=None).values_list("scope_id", flat=True)
+        )
         super().perform_destroy(instance)
+        ScopeProgressService.recalculate_scopes(scope_ids)
         # Cache invalidation
         safe_cache_delete_pattern("dpr_list:*")
         safe_cache_delete_pattern("dpr_pending_approval:*")
@@ -509,23 +515,20 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                                 "remarks", existing_activity.remarks
                             )
                             existing_activity.save()
-                            activity_id = existing_activity.id
                         else:
                             activity = DPRActivity(dpr=dpr, **activity_data)
                             activity.save()
-                            activity_id = activity.id
-                        ScopeProgressService = __import__(
-                            "monthly_scope.services", fromlist=["ScopeProgressService"]
-                        ).ScopeProgressService
-                        ScopeProgressService.update_dpr_activity_progress(activity_id)
 
-                # Update DPR status and submitter
+                # Update DPR status and submitter BEFORE progress recalc so
+                # draft → pending quantities are included in the cumulative SUM.
                 dpr.status = DailyProgressReport.Status.PENDING_TEAM_LEAD
                 dpr.submitted_by = request.user
                 dpr.current_approver_role = 'Team Leader'
                 dpr.rejection_reason = ''  # Clear rejection reason on resubmission
                 dpr.rejected_by = None
                 dpr.save()
+
+                ScopeProgressService.recalculate_for_dpr(dpr)
 
                 # Send notification
                 logger.info(f"Submitting DPR ID={dpr.id} for project '{dpr.project_name}'")
@@ -584,6 +587,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         dpr.status = DailyProgressReport.Status.PENDING_COORDINATOR
         dpr.current_approver_role = 'PMC Manager'
         dpr.save()
+        ScopeProgressService.recalculate_for_dpr(dpr)
 
         # Send approval notification to submitter (Site Engineer)
         notify_dpr_approved_by_role(dpr, 'Team Leader')
@@ -629,6 +633,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         dpr.status = DailyProgressReport.Status.PENDING_PMC_HEAD
         dpr.current_approver_role = 'PMC Head'
         dpr.save()
+        ScopeProgressService.recalculate_for_dpr(dpr)
 
         # Send approval notification to Team Lead and Site Engineer
         notify_dpr_approved_by_role(dpr, 'PMC Manager')
@@ -675,6 +680,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         dpr.approved_at = timezone.now()
         dpr.current_approver_role = ''
         dpr.save()
+        ScopeProgressService.recalculate_for_dpr(dpr)
 
         # Send final approval notification to Coordinator, Team Lead, and Site Engineer
         notify_dpr_approved_by_role(dpr, 'PMC Head')
@@ -745,6 +751,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         dpr.rejection_reason = rejection_reason
         dpr.rejected_by = request.user
         dpr.save()
+        ScopeProgressService.recalculate_for_dpr(dpr)
 
         # Send rejection notification to appropriate recipients
         if rejected_by_role:
