@@ -128,9 +128,10 @@ class DPRActivitySerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         activity = super().create(validated_data)
 
-        # Update progress calculations after creation
+        # Update progress calculations after creation (includes draft)
         from monthly_scope.services import ScopeProgressService
         ScopeProgressService.update_dpr_activity_progress(activity.id)
+        activity.refresh_from_db()
 
         return activity
 
@@ -140,6 +141,7 @@ class DPRActivitySerializer(serializers.ModelSerializer):
         # Update progress calculations after update
         from monthly_scope.services import ScopeProgressService
         ScopeProgressService.update_dpr_activity_progress(activity.id)
+        activity.refresh_from_db()
 
         return activity
 
@@ -266,12 +268,16 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
                                     activities_added += 1
                                     activity_id = activity.id
 
-                                # Update progress for this scope
+                                # Update progress for this scope (draft counts)
                                 from monthly_scope.services import ScopeProgressService
                                 ScopeProgressService.update_dpr_activity_progress(activity_id)
 
                     # Update DPR timestamp
                     dpr.save(update_fields=['updated_at'])
+
+                    # Ensure nested response reads fresh cumulative fields
+                    if hasattr(dpr, "_prefetched_objects_cache"):
+                        dpr._prefetched_objects_cache = {}
 
                     # Add custom response data
                     dpr._activities_added = activities_added
@@ -288,9 +294,12 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
                             activity = DPRActivity(dpr=dpr, **activity_data)
                             activity.save()
 
-                            # Update progress for this scope
+                            # Update progress for this scope (draft counts)
                             from monthly_scope.services import ScopeProgressService
                             ScopeProgressService.update_dpr_activity_progress(activity.id)
+
+                    if hasattr(dpr, "_prefetched_objects_cache"):
+                        dpr._prefetched_objects_cache = {}
 
                     return dpr
 
@@ -357,6 +366,9 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
                                 ).first()
                                 if created_activity:
                                     ScopeProgressService.update_dpr_activity_progress(created_activity.id)
+
+                if hasattr(instance, "_prefetched_objects_cache"):
+                    instance._prefetched_objects_cache = {}
 
                 return instance
         except IntegrityError as e:
