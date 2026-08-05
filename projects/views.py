@@ -241,7 +241,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         GET /api/projects/overview/?paginate=true&page=1&page_size=20
             → optional paginated response
 
-        Cached (RBAC-scoped, SWR) under prefix ``project_overview_v2``.
+        Cached (RBAC-scoped, SWR) under prefix ``project_overview_v3``.
         Cache hits skip queryset aggregation and serialization.
         """
         from core.cache_keys import build_rbac_list_cache_key

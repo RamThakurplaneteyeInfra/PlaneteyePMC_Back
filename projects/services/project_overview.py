@@ -30,10 +30,11 @@ from .overview_kpis import (
     build_safety_kpi,
     build_time_kpi,
     compute_health_score,
+    compute_project_status,
     extract_project_code,
 )
 
-CACHE_PREFIX = "project_overview_v2"
+CACHE_PREFIX = "project_overview_v3"
 CACHE_TTL_SECONDS = TTL_OVERVIEW
 # Soft TTL = configured overview TTL; hard TTL keeps stale payload for SWR window.
 CACHE_HARD_TTL_SECONDS = TTL_OVERVIEW * 2
@@ -313,6 +314,9 @@ class ProjectOverviewService:
         project_names = [p.name for p in projects]
 
         progress_by_name = self._latest_progress_by_name(project_names)
+        scope_pct_by_id = self._scope_progress_by_project_id(project_ids)
+        schedule_by_id = self._schedule_dates_by_project_id(project_ids)
+        eot_by_id = self._latest_approved_eot_date_by_project_id(project_ids)
         cost_by_id = self._latest_cost_by_project_id(project_ids)
         quality_by_name = self._latest_quality_by_name(project_names)
         safety_by_name = self._safety_by_name(project_names)
@@ -321,8 +325,22 @@ class ProjectOverviewService:
 
         cards: list[dict[str, Any]] = []
         for project in projects:
-            progress = build_progress_kpi(progress_by_name.get(project.name))
-            time_kpi = build_time_kpi(project, progress["percentage"])
+            schedule = schedule_by_id.get(project.id) or {}
+            eot_date = eot_by_id.get(project.id)
+            contract_finish = schedule.get("contract_finish") or project.contract_finish
+            project_start = schedule.get("project_start") or project.project_start
+
+            progress = build_progress_kpi(
+                scope_pct=scope_pct_by_id.get(project.id),
+                progress_row=progress_by_name.get(project.name),
+            )
+            time_kpi = build_time_kpi(
+                project,
+                progress["percentage"],
+                latest_eot_date=eot_date,
+                contract_finish=contract_finish,
+                project_start=project_start,
+            )
             cost = build_cost_kpi(cost_by_id.get(project.id))
             quality = build_quality_kpi(quality_by_name.get(project.name))
             safety = build_safety_kpi(safety_by_name.get(project.name))
@@ -332,6 +350,11 @@ class ProjectOverviewService:
                 cost["percentage"],
                 quality["percentage"],
                 safety["percentage"],
+            )
+            project_status = compute_project_status(
+                project,
+                latest_eot_date=eot_date,
+                contract_finish=contract_finish,
             )
             team_lead = project.team_lead
             completed_by = project.completed_by
@@ -344,6 +367,7 @@ class ProjectOverviewService:
                     "project_type": "",
                     "project_icon": "",
                     "status": project.status,
+                    "project_status": project_status,
                     "completed_at": project.completed_at.isoformat()
                     if project.completed_at
                     else None,
@@ -395,6 +419,78 @@ class ProjectOverviewService:
             if row.projectName not in latest:
                 latest[row.projectName] = row
         return latest
+
+    @staticmethod
+    def _scope_progress_by_project_id(project_ids: list[int]) -> dict[int, float]:
+        """
+        Bulk Assigned Scope progress:
+          SUM(cumulative_quantity) / SUM(planned_quantity) * 100
+        """
+        from django.db.models import Sum
+
+        from monthly_scope.models import MonthlyScopeWork
+
+        rows = (
+            MonthlyScopeWork.objects.filter(project_id__in=project_ids)
+            .values("project_id")
+            .annotate(
+                planned=Sum("planned_quantity"),
+                executed=Sum("cumulative_quantity"),
+            )
+        )
+        out: dict[int, float] = {}
+        for row in rows:
+            planned = float(row["planned"] or 0)
+            executed = float(row["executed"] or 0)
+            if planned <= 0:
+                continue
+            out[row["project_id"]] = min(100.0, (executed / planned) * 100.0)
+        return out
+
+    @staticmethod
+    def _schedule_dates_by_project_id(project_ids: list[int]) -> dict[int, dict]:
+        """Prefer SCL ProjectDates row per project."""
+        from project_dates.models import ProjectDates
+
+        rows = (
+            ProjectDates.objects.filter(
+                project_id__in=project_ids,
+                date_type=ProjectDates.DATE_TYPE_SCL,
+            )
+            .only("project_id", "project_start", "contract_finish", "forecast_finish", "eot_date")
+            .order_by("project_id", "id")
+        )
+        out: dict[int, dict] = {}
+        for row in rows:
+            if row.project_id in out:
+                continue
+            out[row.project_id] = {
+                "project_start": row.project_start,
+                "contract_finish": row.contract_finish,
+                "forecast_finish": row.forecast_finish,
+                "eot_date": row.eot_date,
+            }
+        return out
+
+    @staticmethod
+    def _latest_approved_eot_date_by_project_id(project_ids: list[int]) -> dict:
+        """Latest approved active EOT revised_completion_date per project."""
+        from project_dates.eot_models import ProjectEOT
+
+        rows = (
+            ProjectEOT.objects.filter(
+                project_id__in=project_ids,
+                is_active=True,
+                status=ProjectEOT.STATUS_APPROVED,
+            )
+            .only("project_id", "eot_number", "revised_completion_date")
+            .order_by("project_id", "-eot_number", "-revised_completion_date", "-id")
+        )
+        out = {}
+        for row in rows:
+            if row.project_id not in out and row.revised_completion_date:
+                out[row.project_id] = row.revised_completion_date
+        return out
 
     @staticmethod
     def _latest_cost_by_project_id(project_ids: list[int]) -> dict[int, ProjectCostPerformance]:

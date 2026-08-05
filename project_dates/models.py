@@ -294,3 +294,7 @@ class ProjectBGStatus(models.Model):
     def __str__(self) -> str:
         project_name = self.project.name if self.project_id else "Unknown"
         return f"{project_name} — BG Status"
+
+
+# Multi-EOT history (Project → many ProjectEOT)
+from .eot_models import ProjectEOT  # noqa: E402,F401

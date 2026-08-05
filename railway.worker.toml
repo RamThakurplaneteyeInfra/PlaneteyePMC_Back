@@ -1,0 +1,18 @@
+# Railway Config-as-Code — Celery Worker service
+#
+# In Railway:
+#   1. New → GitHub Repo → same repository as Backend
+#   2. Settings → Config-as-Code → path: railway.worker.toml
+#      OR set Custom Start Command to the startCommand below
+#   3. Variables → copy/share from Backend (see DEPLOY_CELERY_WORKER.md)
+#   4. Set SERVICE_ROLE=worker (optional if startCommand is set)
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "celery -A backend worker -l info"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+# No public HTTP healthcheck — worker has no web port

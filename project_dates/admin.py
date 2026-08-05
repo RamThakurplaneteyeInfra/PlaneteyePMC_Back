@@ -4,6 +4,7 @@ Django admin registration for the Project Dates app.
 
 from django.contrib import admin
 
+from .eot_models import ProjectEOT
 from .models import BGStatus, ProjectBGStatus, ProjectDates
 
 
@@ -18,6 +19,21 @@ class BGStatusInline(admin.TabularInline):
         "remarks",
     ]
     readonly_fields = []
+
+
+class ProjectEOTInline(admin.TabularInline):
+    model = ProjectEOT
+    fk_name = "project_dates"
+    extra = 0
+    fields = [
+        "eot_number",
+        "extension_days",
+        "revised_completion_date",
+        "status",
+        "is_active",
+    ]
+    readonly_fields = ["eot_number"]
+    show_change_link = True
 
 
 @admin.register(ProjectDates)
@@ -37,7 +53,7 @@ class ProjectDatesAdmin(admin.ModelAdmin):
     search_fields = ["project__name", "date_type", "contractor_name"]
     readonly_fields = ["created_at", "updated_at"]
     ordering = ["project__name", "date_type", "contractor_name"]
-    inlines = [BGStatusInline]
+    inlines = [BGStatusInline, ProjectEOTInline]
 
     fieldsets = (
         ("Project & Type", {"fields": ("project", "date_type", "contractor_name")}),
@@ -46,13 +62,31 @@ class ProjectDatesAdmin(admin.ModelAdmin):
             {
                 "fields": ("project_start", "contract_finish", "forecast_finish", "eot_date"),
                 "description": (
-                    "Business rules: project_start <= contract_finish; "
-                    "contract_finish <= eot_date when eot_date is set."
+                    "eot_date is kept in sync with the latest approved ProjectEOT "
+                    "revised_completion_date for backward compatibility."
                 ),
             },
         ),
         ("Timestamps", {"fields": ("created_at", "updated_at"), "classes": ("collapse",)}),
     )
+
+
+@admin.register(ProjectEOT)
+class ProjectEOTAdmin(admin.ModelAdmin):
+    list_display = [
+        "project",
+        "eot_number",
+        "extension_days",
+        "revised_completion_date",
+        "status",
+        "is_active",
+        "approval_date",
+        "created_at",
+    ]
+    list_filter = ["status", "is_active", "created_at"]
+    search_fields = ["project__name", "reason", "remarks"]
+    readonly_fields = ["created_at", "updated_at", "created_by", "updated_by"]
+    ordering = ["project__name", "eot_number"]
 
 
 @admin.register(BGStatus)

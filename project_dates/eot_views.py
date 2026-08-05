@@ -1,0 +1,241 @@
+"""
+Project EOT ViewSet — multiple Extension of Time records per project.
+
+Endpoints:
+  GET/POST   /api/project-eot/
+  GET/PATCH/PUT/DELETE /api/project-eot/{id}/
+  GET        /api/project-eot/project/{projectName}/
+"""
+
+from __future__ import annotations
+
+import logging
+from urllib.parse import unquote
+
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django_filters.rest_framework import DjangoFilterBackend
+from drf_yasg import openapi
+from drf_yasg.utils import swagger_auto_schema
+from rest_framework import filters, status, viewsets
+from rest_framework.decorators import action
+from rest_framework.pagination import PageNumberPagination
+from rest_framework.response import Response
+
+from accounts.permissions import IsAuthenticatedProjectRBAC
+from accounts.rbac import RBACDomain
+from contractors.resolvers import resolve_project_for_module
+from project_dates.eot_filters import ProjectEOTFilter
+from project_dates.eot_models import ProjectEOT
+from project_dates.eot_serializers import ProjectEOTSerializer
+from project_dates.eot_services import (
+    invalidate_eot_caches,
+    project_eot_summary,
+    soft_delete_eot,
+    sync_legacy_eot_date,
+)
+
+logger = logging.getLogger("pmc.eot")
+
+
+class LegacyEOTOrderingFilter(filters.OrderingFilter):
+    """Accept legacy Project Dates ordering keys (eot_date, contract_finish, …)."""
+
+    ALIASES = {
+        "eot_date": "revised_completion_date",
+        "-eot_date": "-revised_completion_date",
+        "contract_finish": "original_completion_date",
+        "-contract_finish": "-original_completion_date",
+        "project_name": "project__name",
+        "-project_name": "-project__name",
+    }
+
+    def get_ordering(self, request, queryset, view):
+        ordering = super().get_ordering(request, queryset, view)
+        if not ordering:
+            return ordering
+        return [self.ALIASES.get(item, item) for item in ordering]
+
+
+class ProjectEOTPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
+class ProjectEOTViewSet(viewsets.ModelViewSet):
+    """CRUD for multi-EOT history. Soft-delete on destroy."""
+
+    serializer_class = ProjectEOTSerializer
+    permission_classes = [IsAuthenticatedProjectRBAC]
+    rbac_domain = RBACDomain.GENERAL
+    pagination_class = ProjectEOTPagination
+    filter_backends = [
+        DjangoFilterBackend,
+        filters.SearchFilter,
+        LegacyEOTOrderingFilter,
+    ]
+    filterset_class = ProjectEOTFilter
+    search_fields = [
+        "reason",
+        "remarks",
+        "project__name",
+        "status",
+        "eot_number",
+    ]
+    ordering_fields = [
+        "eot_number",
+        "extension_days",
+        "revised_completion_date",
+        "original_completion_date",
+        "approval_date",
+        "created_at",
+        "updated_at",
+        "status",
+        "eot_date",
+        "contract_finish",
+        "project_name",
+    ]
+    ordering = ["project__name", "eot_number"]
+    queryset = ProjectEOT.objects.select_related(
+        "project",
+        "created_by",
+        "updated_by",
+        "project_dates",
+        "project_dates__contractor",
+    )
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        # Default list hides soft-deleted unless explicitly requested
+        show_inactive = str(
+            self.request.query_params.get("include_inactive", "")
+        ).lower() in ("1", "true", "yes")
+        if not show_inactive and self.action in ("list", "by_project"):
+            qs = qs.filter(is_active=True)
+        return qs
+
+    def _success(self, message, data, http_status=status.HTTP_200_OK):
+        return Response(
+            {"success": True, "message": message, "data": data},
+            status=http_status,
+        )
+
+    def _error(self, message, errors=None, http_status=status.HTTP_400_BAD_REQUEST):
+        body = {"success": False, "message": message}
+        if errors is not None:
+            body["errors"] = errors
+        return Response(body, status=http_status)
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        ser = self.get_serializer(page if page is not None else queryset, many=True)
+        if page is not None:
+            return self.get_paginated_response(
+                {
+                    "success": True,
+                    "message": "EOT list retrieved successfully",
+                    "data": ser.data,
+                }
+            )
+        return self._success("EOT list retrieved successfully", ser.data)
+
+    def retrieve(self, request, *args, **kwargs):
+        try:
+            instance = self.get_queryset().get(pk=kwargs["pk"])
+        except ProjectEOT.DoesNotExist:
+            return self._error(
+                "EOT record not found", http_status=status.HTTP_404_NOT_FOUND
+            )
+        return self._success(
+            "EOT record retrieved successfully",
+            self.get_serializer(instance).data,
+        )
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            return self._error("Validation failed", errors=serializer.errors)
+        try:
+            instance = serializer.save()
+        except DjangoValidationError as exc:
+            return self._error(
+                "Validation failed",
+                errors=getattr(exc, "message_dict", str(exc)),
+            )
+        sync_legacy_eot_date(instance.project)
+        invalidate_eot_caches()
+        return self._success(
+            "EOT created successfully",
+            self.get_serializer(instance).data,
+            http_status=status.HTTP_201_CREATED,
+        )
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        try:
+            instance = self.get_queryset().get(pk=kwargs["pk"])
+        except ProjectEOT.DoesNotExist:
+            return self._error(
+                "EOT record not found", http_status=status.HTTP_404_NOT_FOUND
+            )
+        if not instance.is_active:
+            return self._error("Cannot update an inactive (deleted) EOT.")
+
+        serializer = self.get_serializer(
+            instance, data=request.data, partial=partial
+        )
+        if not serializer.is_valid():
+            return self._error("Validation failed", errors=serializer.errors)
+        try:
+            updated = serializer.save()
+        except DjangoValidationError as exc:
+            return self._error(
+                "Validation failed",
+                errors=getattr(exc, "message_dict", str(exc)),
+            )
+        sync_legacy_eot_date(updated.project)
+        invalidate_eot_caches()
+        return self._success(
+            "EOT updated successfully",
+            self.get_serializer(updated).data,
+        )
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        try:
+            instance = self.get_queryset().get(pk=kwargs["pk"])
+        except ProjectEOT.DoesNotExist:
+            return self._error(
+                "EOT record not found", http_status=status.HTTP_404_NOT_FOUND
+            )
+        if not instance.is_active:
+            return self._error("EOT is already inactive.")
+        project = instance.project
+        soft_delete_eot(instance, user=request.user)
+        return self._success(
+            f"EOT #{instance.eot_number} for '{project.name}' deleted successfully",
+            {},
+        )
+
+    @swagger_auto_schema(
+        operation_summary="EOT summary for a project",
+        responses={200: openapi.Response("OK"), 404: "Project not found"},
+        tags=["Project EOT"],
+    )
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path=r"project/(?P<projectName>[^/.]+)",
+    )
+    def by_project(self, request, projectName=None):
+        name = unquote(projectName or "").strip()
+        try:
+            project = resolve_project_for_module(name)
+        except Exception as exc:
+            return self._error(str(exc), http_status=status.HTTP_404_NOT_FOUND)
+        summary = project_eot_summary(project)
+        return self._success("Project EOT summary retrieved successfully", summary)

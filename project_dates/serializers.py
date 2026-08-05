@@ -274,11 +274,26 @@ class ProjectDatesSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data.pop("project_name", None)
-        return ProjectDates.objects.create(**validated_data)
+        instance = ProjectDates.objects.create(**validated_data)
+        self._sync_eot_history(instance)
+        return instance
 
     def update(self, instance, validated_data):
         validated_data.pop("project_name", None)
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
+        self._sync_eot_history(instance)
         return instance
+
+    def _sync_eot_history(self, instance):
+        """Mirror legacy eot_date into ProjectEOT for multi-EOT history."""
+        from project_dates.eot_services import ensure_eot_from_legacy_project_dates
+
+        request = self.context.get("request")
+        user = getattr(request, "user", None) if request else None
+        try:
+            ensure_eot_from_legacy_project_dates(instance, user=user)
+        except Exception:
+            # Never break ProjectDates writes if EOT mirror fails
+            pass

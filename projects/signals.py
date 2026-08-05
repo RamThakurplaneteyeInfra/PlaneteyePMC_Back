@@ -53,6 +53,9 @@ def connect_overview_invalidation_signals():
     from cost_performance.models import ProjectCostPerformance
     from dpr.models import DailyProgressReport
     from health_safety.models import HSERecord
+    from monthly_scope.models import MonthlyScopeWork
+    from project_dates.eot_models import ProjectEOT
+    from project_dates.models import ProjectDates
     from project_quality_status.models.project_quality_status import ProjectQualityStatus
 
     for model in (
@@ -62,6 +65,9 @@ def connect_overview_invalidation_signals():
         HSERecord,
         Bottleneck,
         DailyProgressReport,
+        MonthlyScopeWork,
+        ProjectDates,
+        ProjectEOT,
     ):
         post_save.connect(_invalidate_overview, sender=model, weak=False)
         post_delete.connect(_invalidate_overview, sender=model, weak=False)

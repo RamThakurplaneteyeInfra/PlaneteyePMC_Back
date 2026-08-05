@@ -170,7 +170,7 @@ class InitListSiteDeleteTest(APITestCase):
 
     def test_cache_version_bumped(self):
         authenticate_client(self.client, username="site_del_ho", password="Project@123")
-        v_before = get_list_cache_version("project_overview_v2")
+        v_before = get_list_cache_version("project_overview_v3")
         self._delete()
-        v_after = get_list_cache_version("project_overview_v2")
+        v_after = get_list_cache_version("project_overview_v3")
         self.assertGreater(v_after, v_before)

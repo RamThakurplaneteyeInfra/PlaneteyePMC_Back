@@ -473,6 +473,8 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        is_resubmit = dpr.status == DailyProgressReport.Status.REJECTED
+
         try:
             with transaction.atomic():
                 # Handle activities if provided (scope-based model)
@@ -530,14 +532,19 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
 
                 ScopeProgressService.recalculate_for_dpr(dpr)
 
-                # Send notification
-                logger.info(f"Submitting DPR ID={dpr.id} for project '{dpr.project_name}'")
-                notify_dpr_submitted(dpr)
-
-                # Cache invalidation
+                # Cache invalidation (before commit — version bump is cheap)
                 safe_cache_delete_pattern("dpr_list:*")
                 safe_cache_delete_pattern("dpr_pending_approval:*")
                 safe_cache_delete_pattern("dpr_rejected:*")
+
+                # Notifications: WebSocket sync + email via ThreadPoolExecutor on_commit
+                logger.info(
+                    "DPR submitted successfully dpr_id=%s project=%s resubmit=%s",
+                    dpr.id,
+                    dpr.project_name,
+                    is_resubmit,
+                )
+                notify_dpr_submitted(dpr, is_resubmit=is_resubmit)
 
                 serializer = self.get_serializer(dpr)
                 return Response(serializer.data, status=status.HTTP_200_OK)

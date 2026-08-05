@@ -810,6 +810,10 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
             ProjectDatesSerializer(record).data for record in contractor_records
         ]
 
+        from project_dates.eot_services import project_eot_summary
+
+        eot_summary = project_eot_summary(project)
+
         payload = {
             "project_name": actual_name,
             "scl": ProjectDatesSerializer(scl_record).data if scl_record else None,
@@ -818,6 +822,11 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
             "contractor_bg": bg_payload["contractor_bg"],
             "scl_bg": bg_payload["scl_bg"],
             "bg_summary": bg_payload["bg_summary"],
+            # Multi-EOT (additive — does not remove legacy eot_date on scl/contractor)
+            "current_eot": eot_summary["current_eot"],
+            "eot_count": eot_summary["eot_count"],
+            "latest_completion_date": eot_summary["latest_completion_date"],
+            "eot_history": eot_summary["eot_history"],
         }
 
         if request.query_params.get("export", "").lower() == "csv":

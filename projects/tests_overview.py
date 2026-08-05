@@ -12,20 +12,38 @@ from rest_framework.test import APITestCase
 
 from bottlenecks.models import Bottleneck
 from construction_progress.models.construction_progress import ConstructionProgress
+from core.cache_keys import get_list_cache_version
 from core.test_auth import authenticate_client
 from cost_performance.models import ProjectCostPerformance
 from dpr.models import DailyProgressReport
 from health_safety.models import HSERecord
+from project_dates.eot_models import ProjectEOT
+from project_dates.models import ProjectDates
 from project_quality_status.models.project_quality_status import ProjectQualityStatus
 from projects.models import Project
+from projects.overview_thresholds import (
+    STATUS_AT_RISK,
+    STATUS_COMPLETED,
+    STATUS_CRITICAL,
+    STATUS_NO_DATA,
+    STATUS_ON_TRACK,
+    STATUS_WATCH,
+)
 from projects.serializers_overview import ProjectOverviewSerializer
 from projects.services.overview_kpis import (
     CARD_DELAY,
     CARD_EXCELLENT,
+    CARD_NO_DATA,
+    build_safety_kpi,
     compute_health_score,
+    compute_project_status,
     extract_project_code,
 )
-from projects.services.project_overview import ProjectOverviewService
+from projects.services.project_overview import (
+    CACHE_PREFIX,
+    ProjectOverviewService,
+    invalidate_project_overview_cache,
+)
 
 
 class OverviewKpiHelpersTest(TestCase):
@@ -36,8 +54,67 @@ class OverviewKpiHelpersTest(TestCase):
         )
         self.assertEqual(extract_project_code("Miyapur Flyover"), "")
 
-    def test_health_score_average(self):
-        self.assertEqual(compute_health_score(49, 49, 83, 68, 100), 70)
+    def test_health_score_weighted(self):
+        # 49*0.25 + 49*0.25 + 68*0.20 + 100*0.20 + 83*0.10 = 66.4 → 66
+        self.assertEqual(compute_health_score(49, 49, 83, 68, 100), 66)
+
+    def test_safety_no_hse_is_zero_no_data(self):
+        self.assertEqual(
+            build_safety_kpi(None),
+            {"percentage": 0, "status": CARD_NO_DATA},
+        )
+
+    def test_project_status_completed(self):
+        project = Project(status="completed")
+        self.assertEqual(compute_project_status(project), STATUS_COMPLETED)
+
+    def test_project_status_on_track(self):
+        project = Project(status="active")
+        finish = date.today() + timedelta(days=90)
+        self.assertEqual(
+            compute_project_status(project, contract_finish=finish),
+            STATUS_ON_TRACK,
+        )
+
+    def test_project_status_at_risk_approaching(self):
+        project = Project(status="active")
+        finish = date.today() + timedelta(days=10)
+        self.assertEqual(
+            compute_project_status(project, contract_finish=finish),
+            STATUS_AT_RISK,
+        )
+
+    def test_project_status_watch_minor_delay(self):
+        project = Project(status="active")
+        finish = date.today() - timedelta(days=5)
+        self.assertEqual(
+            compute_project_status(project, contract_finish=finish),
+            STATUS_WATCH,
+        )
+
+    def test_project_status_critical_past_threshold(self):
+        project = Project(status="active")
+        finish = date.today() - timedelta(days=20)
+        self.assertEqual(
+            compute_project_status(project, contract_finish=finish),
+            STATUS_CRITICAL,
+        )
+
+    def test_project_status_prefers_approved_eot(self):
+        project = Project(status="active")
+        # Contract finish expired, but approved EOT still ahead → On Track
+        self.assertEqual(
+            compute_project_status(
+                project,
+                latest_eot_date=date.today() + timedelta(days=60),
+                contract_finish=date.today() - timedelta(days=30),
+            ),
+            STATUS_ON_TRACK,
+        )
+
+    def test_project_status_no_dates(self):
+        project = Project(status="active")
+        self.assertEqual(compute_project_status(project), STATUS_NO_DATA)
 
 
 class ProjectOverviewAPITest(APITestCase):
@@ -170,6 +247,7 @@ class ProjectOverviewAPITest(APITestCase):
             "project_type",
             "project_icon",
             "status",
+            "project_status",
             "completed_at",
             "completed_by",
             "health_score",
@@ -187,6 +265,7 @@ class ProjectOverviewAPITest(APITestCase):
         }
         self.assertEqual(set(card.keys()), expected_keys)
         self.assertEqual(card["status"], "active")
+        self.assertEqual(card["project_status"], STATUS_ON_TRACK)
         self.assertIsNone(card["completed_at"])
         self.assertIsNone(card["completed_by"])
         self.assertEqual(card["project_code"], "B3482")
@@ -196,6 +275,7 @@ class ProjectOverviewAPITest(APITestCase):
         self.assertEqual(card["cost"]["percentage"], 83)
         self.assertEqual(card["quality"]["percentage"], 68)
         self.assertEqual(card["safety"]["status"], CARD_EXCELLENT)
+        self.assertGreater(card["safety"]["percentage"], 0)
         self.assertEqual(card["issues_count"], 1)
         self.assertEqual(card["dpr_count"], 1)
         self.assertEqual(card["team_leader"]["username"], "ov_tl")
@@ -204,11 +284,105 @@ class ProjectOverviewAPITest(APITestCase):
         for banned in ("cashflow", "equipment", "budget", "charts", "notifications"):
             self.assertNotIn(banned, card)
 
+        # Project with no HSE / cost / quality → No Data, never fake 100% safety
+        beta = next(c for c in response.data["data"] if c["project_id"] == self.p2.id)
+        self.assertEqual(beta["safety"]["percentage"], 0)
+        self.assertEqual(beta["safety"]["status"], CARD_NO_DATA)
+        self.assertEqual(beta["project_status"], STATUS_NO_DATA)
+
     def test_serializer_validates_card(self):
         service = ProjectOverviewService(Project.objects.filter(id=self.p1.id))
         payload = service.get_paginated_overview(use_cache=False)
         serializer = ProjectOverviewSerializer(data=payload["data"], many=True)
         self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_completed_project_status(self):
+        completed = Project.objects.create(
+            name="Overview Completed KPI",
+            status="completed",
+            client_name="X",
+            project_start=date.today() - timedelta(days=200),
+            contract_finish=date.today() - timedelta(days=10),
+        )
+        response = self.client.get(self.URL)
+        card = next(c for c in response.data["data"] if c["project_id"] == completed.id)
+        self.assertEqual(card["project_status"], STATUS_COMPLETED)
+
+    def test_approved_eot_drives_time_and_status(self):
+        ProjectDates.objects.create(
+            project=self.p1,
+            date_type=ProjectDates.DATE_TYPE_SCL,
+            project_start=date.today() - timedelta(days=100),
+            contract_finish=date.today() - timedelta(days=30),
+            forecast_finish=date.today() - timedelta(days=20),
+        )
+        ProjectEOT.objects.create(
+            project=self.p1,
+            eot_number=1,
+            extension_days=90,
+            original_completion_date=date.today() - timedelta(days=30),
+            revised_completion_date=date.today() + timedelta(days=60),
+            approval_date=date.today() - timedelta(days=20),
+            reason="Weather",
+            status=ProjectEOT.STATUS_APPROVED,
+            is_active=True,
+            created_by=self.ho,
+        )
+        service = ProjectOverviewService(Project.objects.filter(id=self.p1.id))
+        card = service.get_paginated_overview(use_cache=False)["data"][0]
+        self.assertEqual(card["project_status"], STATUS_ON_TRACK)
+        self.assertIn(
+            card["time"]["status"],
+            (STATUS_ON_TRACK, STATUS_WATCH, STATUS_AT_RISK),
+        )
+
+    def test_expired_eot_is_critical_or_watch(self):
+        ProjectEOT.objects.create(
+            project=self.p1,
+            eot_number=1,
+            extension_days=10,
+            original_completion_date=date.today() - timedelta(days=40),
+            revised_completion_date=date.today() - timedelta(days=20),
+            approval_date=date.today() - timedelta(days=35),
+            reason="Delay",
+            status=ProjectEOT.STATUS_APPROVED,
+            is_active=True,
+            created_by=self.ho,
+        )
+        service = ProjectOverviewService(Project.objects.filter(id=self.p1.id))
+        card = service.get_paginated_overview(use_cache=False)["data"][0]
+        self.assertEqual(card["project_status"], STATUS_CRITICAL)
+
+    def test_cache_invalidation_on_hse_and_eot(self):
+        v_before = get_list_cache_version(CACHE_PREFIX)
+        HSERecord.objects.create(
+            projectName=self.p2.name,
+            fatalities=0,
+            significant=0,
+            major=0,
+            minor=1,
+            nearMiss=0,
+            totalManhours=Decimal("5000"),
+        )
+        self.assertGreater(get_list_cache_version(CACHE_PREFIX), v_before)
+
+        v2 = get_list_cache_version(CACHE_PREFIX)
+        ProjectEOT.objects.create(
+            project=self.p2,
+            eot_number=1,
+            extension_days=5,
+            original_completion_date=date.today(),
+            revised_completion_date=date.today() + timedelta(days=5),
+            approval_date=date.today(),
+            reason="Test",
+            status=ProjectEOT.STATUS_APPROVED,
+            is_active=True,
+            created_by=self.ho,
+        )
+        self.assertGreater(get_list_cache_version(CACHE_PREFIX), v2)
+
+        invalidate_project_overview_cache()
+        self.assertGreaterEqual(get_list_cache_version(CACHE_PREFIX), v2)
 
     def test_rbac_team_leader_only_assigned(self):
         authenticate_client(self.client, username="ov_tl", password="Project@123")
@@ -332,8 +506,8 @@ class ProjectOverviewAPITest(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertGreaterEqual(response.data["count"], 60)
         self.assertEqual(response.data["count"], len(response.data["data"]))
-        # RBAC + project list + 6 bulk KPI maps should stay well under N*projects.
-        self.assertLess(len(ctx.captured_queries), 25)
+        # RBAC + project list + bulk KPI maps should stay well under N*projects.
+        self.assertLess(len(ctx.captured_queries), 35)
 
     def test_large_dataset_service_builds_without_n_plus_one(self):
         projects = Project.objects.bulk_create(
@@ -361,7 +535,7 @@ class ProjectOverviewAPITest(APITestCase):
         self.assertEqual(len(payload["data"]), 120)
         self.assertEqual(payload["count"], 120)
         self.assertNotIn("page", payload)
-        self.assertLess(len(ctx.captured_queries), 15)
+        self.assertLess(len(ctx.captured_queries), 20)
 
         paginated = service.get_paginated_overview(
             paginate=True, page=1, page_size=50, use_cache=False

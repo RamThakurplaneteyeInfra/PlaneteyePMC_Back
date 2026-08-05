@@ -1,8 +1,13 @@
 """
 Card KPI helpers for Project Overview.
 
-Reuses existing domain formulas — does not invent new calculation logic.
-Maps domain statuses onto the dashboard card labels: Excellent / Watch / Delay.
+Computes live KPIs from:
+  - Progress: Assigned Scope cumulative (DPR) with ConstructionProgress fallback
+  - Time / project_status: Contract finish + approved EOT + today
+  - Cost: Cost Performance CPI
+  - Quality: QAQC pass rate
+  - Safety: HSE severity (never stub 100% when missing)
+  - Health: configurable weighted average
 """
 
 from __future__ import annotations
@@ -22,11 +27,27 @@ from project_quality_status.controllers.quality_metrics import (
     compute_quality_performance,
     quality_status_from_performance,
 )
+from projects.overview_thresholds import (
+    AT_RISK_DAYS,
+    CRITICAL_DELAY_DAYS,
+    HEALTH_SCORE_WEIGHTS,
+    STATUS_AT_RISK,
+    STATUS_COMPLETED,
+    STATUS_CRITICAL,
+    STATUS_NO_DATA,
+    STATUS_ON_TRACK,
+    STATUS_WATCH,
+    WATCH_DELAY_DAYS,
+)
 
-# Dashboard card badge labels (frontend contract).
+# Dashboard card badge labels (frontend contract — keep Excellent/Watch/Delay).
 CARD_EXCELLENT = "Excellent"
 CARD_WATCH = "Watch"
 CARD_DELAY = "Delay"
+CARD_NO_DATA = STATUS_NO_DATA
+CARD_ON_TRACK = STATUS_ON_TRACK
+CARD_AT_RISK = STATUS_AT_RISK
+CARD_CRITICAL = STATUS_CRITICAL
 
 _PROGRESS_STATUS_TO_CARD = {
     "on_track": CARD_EXCELLENT,
@@ -88,13 +109,6 @@ def _clamp_pct(value: float | int | Decimal | None) -> int:
 
 
 def progress_status_from_performance(performance_percentage: float) -> str:
-    """
-    Same bands as ConstructionProgress.progressStatus.
-      >= 100 → on_track
-      >= 80  → slight_delay
-      >= 60  → delayed
-      < 60   → critical
-    """
     pct = float(performance_percentage or 0)
     if pct >= 100:
         return "on_track"
@@ -106,7 +120,6 @@ def progress_status_from_performance(performance_percentage: float) -> str:
 
 
 def cost_status_from_cpi(cpi: float | Decimal | None) -> str:
-    """Same bands as cost_performance dashboard EVM status."""
     if cpi is None:
         return "unknown"
     value = float(cpi)
@@ -117,10 +130,25 @@ def cost_status_from_cpi(cpi: float | Decimal | None) -> str:
     return "over_budget"
 
 
-def build_progress_kpi(progress_row) -> dict[str, Any]:
-    """Reuse ConstructionProgress actual + performanceStatus bands."""
+def build_progress_kpi(
+    *,
+    scope_pct: float | int | Decimal | None = None,
+    progress_row=None,
+) -> dict[str, Any]:
+    """
+    Prefer Assigned Scope cumulative progress; fall back to ConstructionProgress.
+    """
+    if scope_pct is not None:
+        pct = _clamp_pct(scope_pct)
+        domain = progress_status_from_performance(float(scope_pct))
+        return {
+            "percentage": pct,
+            "status": _PROGRESS_STATUS_TO_CARD.get(domain, CARD_WATCH),
+        }
+
     if progress_row is None:
-        return {"percentage": 0, "status": CARD_WATCH}
+        return {"percentage": 0, "status": CARD_NO_DATA}
+
     actual = getattr(progress_row, "actualProgress", 0) or 0
     performance = getattr(progress_row, "performancePercentage", None)
     if performance is None:
@@ -133,22 +161,48 @@ def build_progress_kpi(progress_row) -> dict[str, Any]:
     }
 
 
-def build_time_kpi(project, progress_percentage: int) -> dict[str, Any]:
+def resolve_completion_date(
+    project,
+    *,
+    latest_eot_date: date | None = None,
+    contract_finish: date | None = None,
+) -> date | None:
+    """Latest approved EOT revised date, else contract finish / Project dates."""
+    if latest_eot_date:
+        return latest_eot_date
+    if contract_finish:
+        return contract_finish
+    return (
+        getattr(project, "contract_finish", None)
+        or getattr(project, "end_date", None)
+    )
+
+
+def build_time_kpi(
+    project,
+    progress_percentage: int,
+    *,
+    latest_eot_date: date | None = None,
+    contract_finish: date | None = None,
+    project_start: date | None = None,
+) -> dict[str, Any]:
     """
-    Schedule elapsed % from existing project dates.
-    Status uses Project.delay_days and progress-vs-time comparison.
+    Schedule elapsed % using start → latest completion (approved EOT or contract finish).
+    Status reflects delay vs latest completion date.
     """
     start = (
-        getattr(project, "project_start", None)
+        project_start
+        or getattr(project, "project_start", None)
         or getattr(project, "start_date", None)
         or getattr(project, "commencement_date", None)
     )
-    finish = getattr(project, "contract_finish", None) or getattr(project, "end_date", None)
+    finish = resolve_completion_date(
+        project,
+        latest_eot_date=latest_eot_date,
+        contract_finish=contract_finish,
+    )
     if not start or not finish:
-        delay_days = getattr(project, "delay_days", 0) or 0
-        if delay_days > 0:
-            return {"percentage": 0, "status": CARD_DELAY}
-        return {"percentage": 0, "status": CARD_WATCH}
+        return {"percentage": 0, "status": CARD_NO_DATA}
 
     total_days = (finish - start).days
     if total_days <= 0:
@@ -158,27 +212,68 @@ def build_time_kpi(project, progress_percentage: int) -> dict[str, Any]:
     elapsed_days = (min(today, finish) - start).days
     percentage = _clamp_pct((elapsed_days / total_days) * 100)
 
-    delay_days = getattr(project, "delay_days", 0) or 0
-    if delay_days > 0:
-        status = CARD_DELAY
+    delay_days = (today - finish).days  # positive = overdue
+    if delay_days > CRITICAL_DELAY_DAYS:
+        status = CARD_CRITICAL
+    elif delay_days > 0:
+        status = CARD_AT_RISK if delay_days > WATCH_DELAY_DAYS else CARD_WATCH
+    elif 0 <= (finish - today).days <= AT_RISK_DAYS:
+        status = CARD_AT_RISK
     elif progress_percentage + 5 < percentage:
-        status = CARD_DELAY
+        status = CARD_WATCH
     elif progress_percentage >= percentage:
-        status = CARD_EXCELLENT
+        status = CARD_ON_TRACK
     else:
         status = CARD_WATCH
 
+    # Map onto legacy Excellent/Watch/Delay when needed for older FE chips,
+    # but prefer explicit On Track / At Risk / Critical per product request.
     return {"percentage": percentage, "status": status}
 
 
+def compute_project_status(
+    project,
+    *,
+    latest_eot_date: date | None = None,
+    contract_finish: date | None = None,
+) -> str:
+    """
+    Card-level project_status:
+      Completed | Critical | At Risk | Watch | On Track | No Data
+    """
+    if (getattr(project, "status", None) or "").lower() == "completed":
+        return STATUS_COMPLETED
+
+    finish = resolve_completion_date(
+        project,
+        latest_eot_date=latest_eot_date,
+        contract_finish=contract_finish,
+    )
+    if not finish:
+        return STATUS_NO_DATA
+
+    today = date.today()
+    delay_days = (today - finish).days
+    days_remaining = (finish - today).days
+
+    if delay_days > CRITICAL_DELAY_DAYS:
+        return STATUS_CRITICAL
+    if delay_days > 0:
+        # 1 .. CRITICAL_DELAY_DAYS overdue
+        if delay_days <= WATCH_DELAY_DAYS:
+            return STATUS_WATCH
+        return STATUS_CRITICAL
+    if 0 <= days_remaining <= AT_RISK_DAYS:
+        return STATUS_AT_RISK
+    return STATUS_ON_TRACK
+
+
 def build_cost_kpi(cost_row) -> dict[str, Any]:
-    """Reuse ProjectCostPerformance.cpi and EVM budget status bands."""
     if cost_row is None:
-        return {"percentage": 0, "status": CARD_WATCH}
+        return {"percentage": 0, "status": CARD_NO_DATA}
     cpi = getattr(cost_row, "cpi", None)
     domain_status = cost_status_from_cpi(cpi)
     percentage = _clamp_pct(float(cpi) * 100) if cpi is not None else 0
-    # Mild over-budget still maps to Watch when CPI >= 0.7
     if domain_status == "over_budget" and percentage >= 70:
         card_status = CARD_WATCH
     else:
@@ -187,9 +282,8 @@ def build_cost_kpi(cost_row) -> dict[str, Any]:
 
 
 def build_quality_kpi(quality_row) -> dict[str, Any]:
-    """Reuse compute_quality_performance + quality_status_from_performance."""
     if quality_row is None:
-        return {"percentage": 0, "status": CARD_WATCH}
+        return {"percentage": 0, "status": CARD_NO_DATA}
     pct = compute_quality_performance(
         getattr(quality_row, "tests_passed", 0),
         getattr(quality_row, "tests_conducted", 0),
@@ -203,11 +297,10 @@ def build_quality_kpi(quality_row) -> dict[str, Any]:
 
 def build_safety_kpi(hse_row) -> dict[str, Any]:
     """
-    Reuse health_safety.services severity + determine_safety_status.
-    Card percentage = 100 - severity_index (existing 0–100 index).
+    Live HSE severity. If no HSE record → 0% / No Data (never stub 100%).
     """
     if hse_row is None:
-        return {"percentage": 100, "status": CARD_EXCELLENT}
+        return {"percentage": 0, "status": CARD_NO_DATA}
 
     input_data = HealthSafetyInput(
         total_manhours=float(getattr(hse_row, "totalManhours", 0) or 0),
@@ -232,9 +325,28 @@ def build_safety_kpi(hse_row) -> dict[str, Any]:
     }
 
 
-def compute_health_score(*kpi_percentages: int) -> int:
-    """Average of card KPI percentages (progress/time/cost/quality/safety)."""
-    values = [int(v) for v in kpi_percentages]
-    if not values:
-        return 0
-    return int(round(sum(values) / len(values)))
+def compute_health_score(
+    progress: int,
+    time: int,
+    cost: int,
+    quality: int,
+    safety: int,
+    *,
+    weights: dict[str, float] | None = None,
+) -> int:
+    """
+    Weighted health score 0–100.
+
+    Default weights: Progress 25%, Time 25%, Quality 20%, Safety 20%, Cost 10%.
+    """
+    w = weights or HEALTH_SCORE_WEIGHTS
+    parts = {
+        "progress": (int(progress), float(w.get("progress", 0.25))),
+        "time": (int(time), float(w.get("time", 0.25))),
+        "quality": (int(quality), float(w.get("quality", 0.20))),
+        "safety": (int(safety), float(w.get("safety", 0.20))),
+        "cost": (int(cost), float(w.get("cost", 0.10))),
+    }
+    total_w = sum(weight for _, weight in parts.values()) or 1.0
+    score = sum(pct * weight for pct, weight in parts.values()) / total_w
+    return int(round(max(0.0, min(100.0, score))))

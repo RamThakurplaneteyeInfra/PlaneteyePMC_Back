@@ -1,0 +1,502 @@
+"""
+In-process async DPR SMTP emails (WebSockets stay in-request).
+
+Uses a shared ThreadPoolExecutor after transaction.on_commit — no Celery worker.
+See dpr.email_executor for pool metrics, shutdown, and submit helpers.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from typing import Any, Callable
+
+from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.core.cache import cache
+from django.db import close_old_connections, transaction
+
+from dpr.email_executor import (
+    EMAIL_EXECUTOR,  # noqa: F401 — re-export for tests / callers
+    get_email_pool_snapshot,  # noqa: F401
+    submit_email_job,
+)
+
+logger = logging.getLogger("pmc.dpr.email")
+User = get_user_model()
+
+_LOG = "[DPR Email]"
+_DEDUP_TTL_SECONDS = 300
+_MAX_ATTEMPTS = 3
+_RETRY_DELAYS_SEC = (1, 2, 4)
+
+
+def _dedup_key(kind: str, dpr_id: int, recipient_ids: list[int], extra: str = "") -> str:
+    ids = "-".join(str(i) for i in sorted(recipient_ids or []))
+    extra_clean = (extra or "").replace(" ", "_")
+    return f"dpr:{kind}:{dpr_id}:{ids}:{extra_clean}"
+
+
+def _acquire_dedup(key: str) -> bool:
+    return bool(cache.add(key, "1", timeout=_DEDUP_TTL_SECONDS))
+
+
+def _release_dedup(key: str) -> None:
+    cache.delete(key)
+
+
+def _resolve_project(project_name: str):
+    from projects.models import Project
+
+    clean = (project_name or "").strip()
+    project = Project.objects.filter(name__iexact=clean).first()
+    if not project and clean:
+        project = Project.objects.filter(name__icontains=clean).first()
+    return project
+
+
+def _load_dpr(dpr_id: int):
+    from dpr.models import DailyProgressReport
+
+    return (
+        DailyProgressReport.objects.select_related(
+            "submitted_by", "approved_by", "rejected_by"
+        )
+        .filter(pk=dpr_id)
+        .first()
+    )
+
+
+def _users_with_email(recipient_ids: list[int]) -> list:
+    return list(
+        User.objects.filter(id__in=recipient_ids or [], is_active=True).exclude(email="")
+    )
+
+
+def _user_payload(user) -> dict[str, str] | None:
+    if not user:
+        return None
+    return {
+        "username": user.username or "Unknown",
+        "get_full_name": user.get_full_name() or "Unknown User",
+    }
+
+
+def _send_smtp(*, subject: str, template_name: str, context: dict, recipient_emails: list[str]) -> None:
+    from services.email_utils import send_html_email
+
+    logger.info("%s SMTP Connected / sending template=%s", _LOG, template_name)
+    ok = send_html_email(
+        subject=subject,
+        template_name=template_name,
+        context=context,
+        recipient_list=recipient_emails,
+    )
+    if not ok:
+        raise RuntimeError(f"SMTP send_html_email returned failure template={template_name}")
+
+
+def _run_email_job(
+    *,
+    kind: str,
+    dpr_id: int,
+    recipient_ids: list[int],
+    build_context_and_subject: Callable,
+    extra_dedup: str = "",
+) -> dict[str, Any]:
+    """
+    Fetch fresh DB rows by ID, send SMTP with retries (1s / 2s / 4s).
+    Dedup lock held for the whole attempt cycle so retries never double-send.
+    """
+    recipient_ids = list(recipient_ids or [])
+    dedup = _dedup_key(kind, dpr_id, recipient_ids, extra_dedup)
+    send_ms_total = 0.0
+
+    if not _acquire_dedup(dedup):
+        logger.info("%s Skipped duplicate kind=%s dpr_id=%s", _LOG, kind, dpr_id)
+        return {"status": "skipped_duplicate", "dpr_id": dpr_id, "kind": kind}
+
+    thread_db = not getattr(settings, "DPR_EMAIL_INLINE", False)
+    if thread_db:
+        close_old_connections()
+
+    dpr = None
+    project = None
+    recipients = None
+    context = None
+    try:
+        dpr = _load_dpr(dpr_id)
+        if dpr is None:
+            logger.error("%s Email Failed DPR not found kind=%s dpr_id=%s", _LOG, kind, dpr_id)
+            return {"status": "dpr_not_found", "dpr_id": dpr_id, "kind": kind}
+
+        recipients = _users_with_email(recipient_ids)
+        recipient_emails = [u.email for u in recipients if u.email]
+        if not recipient_emails:
+            logger.warning(
+                "%s Email Failed no recipients kind=%s dpr_id=%s",
+                _LOG,
+                kind,
+                dpr_id,
+            )
+            return {"status": "no_recipients", "dpr_id": dpr_id, "kind": kind}
+
+        project = _resolve_project(dpr.project_name)
+        subject, template_name, context = build_context_and_subject(
+            dpr=dpr, project=project, recipients=recipients
+        )
+
+        last_exc: Exception | None = None
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                logger.info(
+                    "%s Sending email kind=%s dpr_id=%s attempt=%s/%s recipients=%s",
+                    _LOG,
+                    kind,
+                    dpr_id,
+                    attempt,
+                    _MAX_ATTEMPTS,
+                    recipient_emails,
+                )
+                t0 = time.perf_counter()
+                _send_smtp(
+                    subject=subject,
+                    template_name=template_name,
+                    context=context,
+                    recipient_emails=recipient_emails,
+                )
+                elapsed_ms = (time.perf_counter() - t0) * 1000.0
+                send_ms_total += elapsed_ms
+                logger.info(
+                    "%s Email Sent kind=%s dpr_id=%s attempt=%s execution_ms=%.1f",
+                    _LOG,
+                    kind,
+                    dpr_id,
+                    attempt,
+                    elapsed_ms,
+                )
+                return {
+                    "status": "sent",
+                    "dpr_id": dpr_id,
+                    "kind": kind,
+                    "recipients": recipient_emails,
+                    "attempts": attempt,
+                    "send_ms": round(send_ms_total, 2),
+                }
+            except Exception as exc:
+                last_exc = exc
+                if attempt < _MAX_ATTEMPTS:
+                    delay = _RETRY_DELAYS_SEC[attempt - 1]
+                    logger.warning(
+                        "%s Retry %s kind=%s dpr_id=%s delay_sec=%s err=%s",
+                        _LOG,
+                        attempt,
+                        kind,
+                        dpr_id,
+                        delay,
+                        exc,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.exception(
+                        "%s Email Failed final kind=%s dpr_id=%s attempts=%s",
+                        _LOG,
+                        kind,
+                        dpr_id,
+                        _MAX_ATTEMPTS,
+                    )
+                    _release_dedup(dedup)
+
+        return {
+            "status": "failed",
+            "dpr_id": dpr_id,
+            "kind": kind,
+            "error": str(last_exc),
+            "send_ms": round(send_ms_total, 2),
+        }
+    finally:
+        dpr = None
+        project = None
+        recipients = None
+        context = None
+        if thread_db:
+            close_old_connections()
+
+
+def queue_after_commit(fn: Callable, **kwargs) -> None:
+    """
+    After DB commit, run ``fn(**kwargs)`` on EMAIL_EXECUTOR (or inline in tests).
+
+    Pass only lightweight IDs in kwargs — never Django model instances.
+    """
+
+    def _enqueue():
+        logger.info(
+            "%s Queued fn=%s kwargs=%s",
+            _LOG,
+            getattr(fn, "__name__", str(fn)),
+            {k: v for k, v in kwargs.items()},
+        )
+        submit_email_job(fn, kwargs)
+
+    transaction.on_commit(_enqueue)
+
+
+# ---------------------------------------------------------------------------
+# Submission / resubmission
+# ---------------------------------------------------------------------------
+
+
+def _build_submission(dpr, project, recipients):
+    submitted_by = dpr.submitted_by
+    context = {
+        "dpr": {
+            "project_name": dpr.project_name,
+            "report_date": dpr.report_date.isoformat() if dpr.report_date else "",
+            "job_no": dpr.job_no,
+            "issued_by": dpr.issued_by,
+            "designation": dpr.designation,
+            "submitted_by": _user_payload(submitted_by),
+        },
+        "project": {
+            "name": project.name if project else dpr.project_name,
+            "client_name": getattr(project, "client_name", "") if project else "",
+            "location": getattr(project, "location", "") if project else "",
+        },
+        "approver": {
+            "username": recipients[0].username,
+            "get_full_name": recipients[0].get_full_name(),
+        }
+        if recipients
+        else None,
+    }
+    subject = f"DPR Submitted for Approval: {dpr.project_name} - {dpr.report_date}"
+    return subject, "dpr_submitted", context
+
+
+def send_dpr_submission_email(
+    dpr_id: int,
+    submitted_by_id: int | None = None,
+    recipient_ids: list[int] | None = None,
+    **_kwargs,
+) -> dict:
+    return _run_email_job(
+        kind="submit_email",
+        dpr_id=dpr_id,
+        recipient_ids=list(recipient_ids or []),
+        build_context_and_subject=_build_submission,
+    )
+
+
+def send_dpr_resubmission_email(
+    dpr_id: int,
+    submitted_by_id: int | None = None,
+    recipient_ids: list[int] | None = None,
+    **_kwargs,
+) -> dict:
+    """Same content as submission; separate dedup key for resubmit after reject."""
+    return _run_email_job(
+        kind="resubmit_email",
+        dpr_id=dpr_id,
+        recipient_ids=list(recipient_ids or []),
+        build_context_and_subject=_build_submission,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Role-based approval
+# ---------------------------------------------------------------------------
+
+
+def _build_approval_by_role(approved_by_role: str):
+    def _builder(dpr, project, recipients):
+        context = {
+            "dpr": {
+                "project_name": dpr.project_name,
+                "report_date": dpr.report_date.isoformat() if dpr.report_date else "",
+                "job_no": dpr.job_no,
+                "status": "Approved",
+                "approved_at": dpr.approved_at.isoformat() if dpr.approved_at else None,
+                "approved_by": _user_payload(dpr.approved_by),
+            },
+            "project": {"name": project.name if project else dpr.project_name},
+            "submitter": _user_payload(dpr.submitted_by) or {
+                "username": "Unknown",
+                "get_full_name": "Unknown User",
+            },
+            "approved_by_role": approved_by_role,
+        }
+        subject = (
+            f"DPR Approved by {approved_by_role}: {dpr.project_name} - {dpr.report_date}"
+        )
+        return subject, "dpr_approved", context
+
+    return _builder
+
+
+def _approval_job(*, role: str, kind: str, dpr_id: int, recipient_ids: list[int]) -> dict:
+    return _run_email_job(
+        kind=kind,
+        dpr_id=dpr_id,
+        recipient_ids=recipient_ids,
+        build_context_and_subject=_build_approval_by_role(role),
+        extra_dedup=role,
+    )
+
+
+def send_dpr_team_leader_approval_email(
+    dpr_id: int, recipient_ids: list[int] | None = None, **_kwargs
+) -> dict:
+    return _approval_job(
+        role="Team Leader",
+        kind="approval_tl",
+        dpr_id=dpr_id,
+        recipient_ids=list(recipient_ids or []),
+    )
+
+
+def send_dpr_coordinator_approval_email(
+    dpr_id: int, recipient_ids: list[int] | None = None, **_kwargs
+) -> dict:
+    return _approval_job(
+        role="PMC Manager",
+        kind="approval_coordinator",
+        dpr_id=dpr_id,
+        recipient_ids=list(recipient_ids or []),
+    )
+
+
+def send_dpr_pmc_head_approval_email(
+    dpr_id: int, recipient_ids: list[int] | None = None, **_kwargs
+) -> dict:
+    return _approval_job(
+        role="PMC Head",
+        kind="approval_pmc_head",
+        dpr_id=dpr_id,
+        recipient_ids=list(recipient_ids or []),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Role-based rejection
+# ---------------------------------------------------------------------------
+
+
+def _build_rejection_by_role(rejected_by_role: str):
+    def _builder(dpr, project, recipients):
+        context = {
+            "dpr": {
+                "project_name": dpr.project_name,
+                "report_date": dpr.report_date.isoformat() if dpr.report_date else "",
+                "job_no": dpr.job_no,
+                "status": "Rejected",
+                "rejection_reason": dpr.rejection_reason,
+                "rejected_by": _user_payload(dpr.rejected_by),
+            },
+            "project": {"name": project.name if project else dpr.project_name},
+            "submitter": _user_payload(dpr.submitted_by) or {
+                "username": "Unknown",
+                "get_full_name": "Unknown User",
+            },
+            "rejected_by_role": rejected_by_role,
+        }
+        subject = (
+            f"DPR Rejected by {rejected_by_role}: {dpr.project_name} - {dpr.report_date}"
+        )
+        return subject, "dpr_rejected", context
+
+    return _builder
+
+
+def send_dpr_rejection_email(
+    dpr_id: int,
+    recipient_ids: list[int] | None = None,
+    role: str = "",
+    **_kwargs,
+) -> dict:
+    role = role or "Unknown"
+    return _run_email_job(
+        kind="rejection",
+        dpr_id=dpr_id,
+        recipient_ids=list(recipient_ids or []),
+        build_context_and_subject=_build_rejection_by_role(role),
+        extra_dedup=role,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Legacy simple approve / reject (submitter only)
+# ---------------------------------------------------------------------------
+
+
+def _build_legacy_approved(dpr, project, recipients):
+    context = {
+        "dpr": {
+            "project_name": dpr.project_name,
+            "report_date": dpr.report_date.isoformat() if dpr.report_date else "",
+            "job_no": dpr.job_no,
+            "status": "Approved",
+            "approved_at": dpr.approved_at.isoformat() if dpr.approved_at else None,
+            "approved_by": _user_payload(dpr.approved_by),
+        },
+        "project": {"name": project.name if project else dpr.project_name},
+        "submitter": _user_payload(dpr.submitted_by) or {
+            "username": "Unknown",
+            "get_full_name": "Unknown User",
+        },
+    }
+    subject = f"DPR Approved: {dpr.project_name} - {dpr.report_date}"
+    return subject, "dpr_approved", context
+
+
+def _build_legacy_rejected(dpr, project, recipients):
+    context = {
+        "dpr": {
+            "project_name": dpr.project_name,
+            "report_date": dpr.report_date.isoformat() if dpr.report_date else "",
+            "job_no": dpr.job_no,
+            "status": "Rejected",
+            "rejection_reason": dpr.rejection_reason,
+            "rejected_by": _user_payload(dpr.rejected_by),
+        },
+        "project": {"name": project.name if project else dpr.project_name},
+        "submitter": _user_payload(dpr.submitted_by) or {
+            "username": "Unknown",
+            "get_full_name": "Unknown User",
+        },
+    }
+    subject = f"DPR Rejected: {dpr.project_name} - {dpr.report_date}"
+    return subject, "dpr_rejected", context
+
+
+def send_dpr_approved_email(
+    dpr_id: int, recipient_ids: list[int] | None = None, **_kwargs
+) -> dict:
+    return _run_email_job(
+        kind="legacy_approved",
+        dpr_id=dpr_id,
+        recipient_ids=list(recipient_ids or []),
+        build_context_and_subject=_build_legacy_approved,
+    )
+
+
+def send_dpr_rejected_email(
+    dpr_id: int, recipient_ids: list[int] | None = None, **_kwargs
+) -> dict:
+    return _run_email_job(
+        kind="legacy_rejected",
+        dpr_id=dpr_id,
+        recipient_ids=list(recipient_ids or []),
+        build_context_and_subject=_build_legacy_rejected,
+    )
+
+
+def approval_task_for_role(approved_by_role: str):
+    """Map workflow role → approval email job (same name kept for call sites)."""
+    if approved_by_role == "Team Leader":
+        return send_dpr_team_leader_approval_email
+    if approved_by_role in ("PMC Manager", "Coordinator"):
+        return send_dpr_coordinator_approval_email
+    if approved_by_role == "PMC Head":
+        return send_dpr_pmc_head_approval_email
+    return send_dpr_coordinator_approval_email

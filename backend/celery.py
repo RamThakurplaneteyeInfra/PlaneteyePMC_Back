@@ -1,9 +1,9 @@
 """
-Celery application for optional background jobs.
+Celery application for background jobs (DPR email, cache prewarm, etc.).
 
-Default configuration runs tasks eagerly in-process (no broker required).
-Existing request paths do NOT depend on Celery. Enable a real broker later
-via CELERY_BROKER_URL / CELERY_TASK_ALWAYS_EAGER=false when ready.
+Broker defaults to REDIS_URL when set. For async email delivery in production:
+  CELERY_TASK_ALWAYS_EAGER=false
+  celery -A backend worker -l info
 """
 
 from __future__ import annotations

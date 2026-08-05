@@ -196,6 +196,30 @@ class ProjectSerializer(serializers.ModelSerializer):
             return str(dd_value)
         return str(obj.forecast_finish) if obj.forecast_finish else None
 
+    def to_representation(self, instance):
+        """Include multi-EOT summary without breaking existing field contracts."""
+        data = super().to_representation(instance)
+        try:
+            from project_dates.eot_serializers import ProjectEOTSerializer
+            from project_dates.eot_services import (
+                current_eot,
+                latest_completion_date,
+                active_eots_qs,
+            )
+
+            cur = current_eot(instance)
+            data["current_eot"] = (
+                ProjectEOTSerializer(cur, context=self.context).data if cur else None
+            )
+            data["eot_count"] = active_eots_qs(instance).count()
+            latest = latest_completion_date(instance)
+            data["latest_completion_date"] = latest.isoformat() if latest else None
+        except Exception:
+            data.setdefault("current_eot", None)
+            data.setdefault("eot_count", 0)
+            data.setdefault("latest_completion_date", None)
+        return data
+
     def to_internal_value(self, data):
         """
         Handle boolean fields sent as strings from FormData.

@@ -56,7 +56,7 @@ INSTALLED_APPS = [
     'channels',
     'notifications',
     'projects',
-    'dpr',
+    'dpr.apps.DprConfig',
     'monthly_scope',
     'accounts',
     'operations',
@@ -443,6 +443,16 @@ CACHE_TTL_DROPDOWN = int(os.environ.get("CACHE_TTL_DROPDOWN", "1800"))  # 30 min
 CACHE_TTL_REPORT = int(os.environ.get("CACHE_TTL_REPORT", "900"))  # 15 min
 CACHE_TTL_REFERENCE = int(os.environ.get("CACHE_TTL_REFERENCE", "3600"))  # 1 hour
 CACHE_SLOW_REBUILD_MS = float(os.environ.get("CACHE_SLOW_REBUILD_MS", "500"))
+
+# Project Overview KPI thresholds / health weights (overridable via env)
+OVERVIEW_AT_RISK_DAYS = int(os.environ.get("OVERVIEW_AT_RISK_DAYS", "30"))
+OVERVIEW_CRITICAL_DELAY_DAYS = int(os.environ.get("OVERVIEW_CRITICAL_DELAY_DAYS", "15"))
+OVERVIEW_WATCH_DELAY_DAYS = int(os.environ.get("OVERVIEW_WATCH_DELAY_DAYS", "15"))
+OVERVIEW_WEIGHT_PROGRESS = float(os.environ.get("OVERVIEW_WEIGHT_PROGRESS", "0.25"))
+OVERVIEW_WEIGHT_TIME = float(os.environ.get("OVERVIEW_WEIGHT_TIME", "0.25"))
+OVERVIEW_WEIGHT_QUALITY = float(os.environ.get("OVERVIEW_WEIGHT_QUALITY", "0.20"))
+OVERVIEW_WEIGHT_SAFETY = float(os.environ.get("OVERVIEW_WEIGHT_SAFETY", "0.20"))
+OVERVIEW_WEIGHT_COST = float(os.environ.get("OVERVIEW_WEIGHT_COST", "0.10"))
 # Optional: rebuild hot caches a few seconds after process start
 CACHE_PREWARM_ON_STARTUP = os.environ.get("CACHE_PREWARM_ON_STARTUP", "false").lower() == "true"
 
@@ -505,18 +515,36 @@ MEETING_DOCUMENTS_S3_PREFIX = os.environ.get('MEETING_DOCUMENTS_S3_PREFIX', 'pmc
 # Project Feedback attachments — configurable S3 folder (bucket URL configured later).
 FEEDBACK_ATTACHMENTS_S3_PREFIX = os.environ.get('FEEDBACK_ATTACHMENTS_S3_PREFIX', 'feedback')
 
+# DPR email SMTP is async via ThreadPoolExecutor (dpr.email_executor.EMAIL_EXECUTOR).
+# Set True in tests to run email jobs inline after on_commit (no real threads).
+DPR_EMAIL_INLINE = os.environ.get("DPR_EMAIL_INLINE", "false").lower() == "true"
+DPR_EMAIL_MAX_WORKERS = int(os.environ.get("DPR_EMAIL_MAX_WORKERS", "4"))
+DPR_EMAIL_SLOW_SEC = float(os.environ.get("DPR_EMAIL_SLOW_SEC", "10"))
+# SMTP connect/read timeout (seconds) — prevents worker threads hanging forever
+EMAIL_TIMEOUT = float(os.environ.get("EMAIL_TIMEOUT", "30"))
+
 # ==============================
-# CELERY (optional background jobs — eager by default, no broker required)
-# Existing API flows do not depend on Celery. Set CELERY_TASK_ALWAYS_EAGER=false
-# and CELERY_BROKER_URL when you are ready to run a real worker.
+# CELERY — optional (non-DPR jobs); DPR emails do NOT require a Celery worker
 # ==============================
-CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'memory://')
-CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'cache+memory://')
-CELERY_TASK_ALWAYS_EAGER = os.environ.get('CELERY_TASK_ALWAYS_EAGER', 'true').lower() == 'true'
+_redis_url = os.environ.get("REDIS_URL") or os.environ.get("REDIS_CACHE_URL") or ""
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL") or _redis_url or "memory://"
+CELERY_RESULT_BACKEND = (
+    os.environ.get("CELERY_RESULT_BACKEND")
+    or (_redis_url if _redis_url else "cache+memory://")
+)
+_celery_eager_default = "true" if ("test" in sys.argv or not _redis_url) else "false"
+CELERY_TASK_ALWAYS_EAGER = (
+    os.environ.get("CELERY_TASK_ALWAYS_EAGER", _celery_eager_default).lower() == "true"
+)
 CELERY_TASK_EAGER_PROPAGATES = True
-CELERY_ACCEPT_CONTENT = ['json']
-CELERY_TASK_SERIALIZER = 'json'
-CELERY_RESULT_SERIALIZER = 'json'
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_BROKER_CONNECTION_RETRY = True
+CELERY_BROKER_CONNECTION_MAX_RETRIES = 10
 
 

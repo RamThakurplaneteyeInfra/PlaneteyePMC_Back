@@ -247,14 +247,19 @@ def _get_dpr_notification_recipients(project, approver_role):
     return recipients
 
 
-def notify_dpr_submitted(dpr):
+def notify_dpr_submitted(dpr, *, is_resubmit: bool = False):
     """
-    Send notification when a DPR is submitted for approval to the next approver.
+    Notify next approver(s) when a DPR is submitted (or resubmitted).
 
-    Args:
-        dpr (DailyProgressReport): The DPR instance
+    - WebSocket notifications: synchronous (immediate in-app)
+    - SMTP email: ThreadPoolExecutor after DB transaction commit (no Celery worker)
     """
-    # Find the project by name
+    from dpr.tasks import (
+        queue_after_commit,
+        send_dpr_resubmission_email,
+        send_dpr_submission_email,
+    )
+
     project_name_clean = (dpr.project_name or '').strip()
     project = Project.objects.filter(name__iexact=project_name_clean).first()
     if not project and project_name_clean:
@@ -264,15 +269,12 @@ def notify_dpr_submitted(dpr):
         logger.error(f"Project '{dpr.project_name}' not found for DPR {dpr.id}")
         return
 
-    # Get approvers (with fallback logic)
     approvers = _get_dpr_notification_recipients(project, dpr.current_approver_role)
 
     if not approvers:
-        # Log detailed diagnostic information when no recipients can be found
         tl = project.team_lead
         pmc = project.pmc_head
         coords = list(project.coordinators.all())
-
         logger.warning(
             f"No recipients found for DPR submission notification. "
             f"Project: {project.name} | Role: {dpr.current_approver_role} | "
@@ -283,43 +285,19 @@ def notify_dpr_submitted(dpr):
         return
 
     recipient_emails = [user.email for user in approvers]
+    recipient_ids = [user.id for user in approvers]
+    dpr_id = dpr.id
+    submitted_by_id = dpr.submitted_by_id
 
     logger.info(
-        f"DPR submitted notification for project '{dpr.project_name}' (ID: {dpr.id}). "
-        f"Role: {dpr.current_approver_role} | Recipients: {recipient_emails}"
+        "DPR submitted successfully dpr_id=%s project=%s role=%s resubmit=%s recipients=%s",
+        dpr_id,
+        dpr.project_name,
+        dpr.current_approver_role,
+        is_resubmit,
+        recipient_emails,
     )
 
-    context = {
-        'dpr': {
-            'project_name': dpr.project_name,
-            'report_date': dpr.report_date.isoformat(),
-            'job_no': dpr.job_no,
-            'issued_by': dpr.issued_by,
-            'designation': dpr.designation,
-            'submitted_by': {
-                'username': dpr.submitted_by.username if dpr.submitted_by else 'Unknown',
-                'get_full_name': dpr.submitted_by.get_full_name() if dpr.submitted_by else 'Unknown User',
-            } if dpr.submitted_by else None,
-        },
-        'project': {
-            'name': project.name,
-            'client_name': project.client_name,
-            'location': project.location,
-        },
-        'approver': {
-            'username': approvers[0].username,
-            'get_full_name': approvers[0].get_full_name(),
-        } if approvers else None,
-    }
-
-    send_html_email(
-        subject=f"DPR Submitted for Approval: {dpr.project_name} - {dpr.report_date}",
-        template_name='dpr_submitted',
-        context=context,
-        recipient_list=recipient_emails
-    )
-
-    # WebSocket notifications
     for approver in approvers:
         ws_message = create_notification_message(
             'dpr_submitted',
@@ -329,7 +307,6 @@ def notify_dpr_submitted(dpr):
         )
         send_websocket_notification(approver.id, ws_message)
 
-    # Notify submitter
     if dpr.submitted_by and dpr.submitted_by.email:
         submitter_ws_message = create_notification_message(
             'dpr_submitted',
@@ -339,16 +316,25 @@ def notify_dpr_submitted(dpr):
         )
         send_websocket_notification(dpr.submitted_by.id, submitter_ws_message)
 
+    task = send_dpr_resubmission_email if is_resubmit else send_dpr_submission_email
+    logger.info(
+        "Queued %s Email dpr_id=%s recipients=%s",
+        "Resubmission" if is_resubmit else "Submission",
+        dpr_id,
+        recipient_ids,
+    )
+    queue_after_commit(
+        task,
+        dpr_id=dpr_id,
+        submitted_by_id=submitted_by_id,
+        recipient_ids=recipient_ids,
+    )
+
 
 def notify_dpr_approved_by_role(dpr, approved_by_role):
-    """
-    Send approval notification to appropriate recipients based on who approved it.
+    """Approval notification. WebSocket sync; SMTP via thread pool after commit."""
+    from dpr.tasks import approval_task_for_role, queue_after_commit
 
-    Args:
-        dpr (DailyProgressReport): The DPR instance
-        approved_by_role (str): The role that approved ('Team Leader', 'PMC Manager', 'PMC Head')
-    """
-    # Find the project
     project = Project.objects.filter(name=dpr.project_name).first()
     if not project:
         logger.error(f"Project '{dpr.project_name}' not found for DPR {dpr.id}")
@@ -357,64 +343,28 @@ def notify_dpr_approved_by_role(dpr, approved_by_role):
     recipients = []
 
     if approved_by_role == 'Team Leader':
-        # Team Lead approved → Send to Site Engineer (submitter)
         if dpr.submitted_by and dpr.submitted_by.email:
             recipients.append(dpr.submitted_by)
-
     elif approved_by_role in ('PMC Manager', 'Coordinator'):
-        # PMC Manager approved → Send to Team Lead and Site Engineer
-        team_leads = _get_project_approvers(project, 'Team Leader')
-        recipients.extend(team_leads)
+        recipients.extend(_get_project_approvers(project, 'Team Leader'))
         if dpr.submitted_by and dpr.submitted_by.email:
             recipients.append(dpr.submitted_by)
-
     elif approved_by_role == 'PMC Head':
-        # PMC Head approved → Send to PMC Manager, Team Lead, and Site Engineer
-        managers = _get_project_approvers(project, 'PMC Manager')
-        team_leads = _get_project_approvers(project, 'Team Leader')
-        recipients.extend(managers)
-        recipients.extend(team_leads)
+        recipients.extend(_get_project_approvers(project, 'PMC Manager'))
+        recipients.extend(_get_project_approvers(project, 'Team Leader'))
         if dpr.submitted_by and dpr.submitted_by.email:
             recipients.append(dpr.submitted_by)
 
-    # Remove duplicates
     recipients = list(set(recipients))
     recipient_emails = [user.email for user in recipients if user.email]
+    recipient_ids = [user.id for user in recipients if user.email]
 
     if not recipient_emails:
-        logger.warning(f"No recipients found for DPR approval notification (approved by {approved_by_role})")
+        logger.warning(
+            f"No recipients found for DPR approval notification (approved by {approved_by_role})"
+        )
         return
 
-    context = {
-        'dpr': {
-            'project_name': dpr.project_name,
-            'report_date': dpr.report_date.isoformat(),
-            'job_no': dpr.job_no,
-            'status': 'Approved',
-            'approved_at': dpr.approved_at.isoformat() if dpr.approved_at else None,
-            'approved_by': {
-                'username': dpr.approved_by.username if dpr.approved_by else 'Unknown',
-                'get_full_name': dpr.approved_by.get_full_name() if dpr.approved_by else 'Unknown User',
-            } if dpr.approved_by else None,
-        },
-        'project': {
-            'name': project.name,
-        },
-        'submitter': {
-            'username': dpr.submitted_by.username if dpr.submitted_by else 'Unknown',
-            'get_full_name': dpr.submitted_by.get_full_name() if dpr.submitted_by else 'Unknown User',
-        },
-        'approved_by_role': approved_by_role,
-    }
-
-    send_html_email(
-        subject=f"DPR Approved by {approved_by_role}: {dpr.project_name} - {dpr.report_date}",
-        template_name='dpr_approved',
-        context=context,
-        recipient_list=recipient_emails
-    )
-
-    # Send WebSocket notifications
     for recipient in recipients:
         if recipient.email in recipient_emails:
             ws_message = create_notification_message(
@@ -425,18 +375,20 @@ def notify_dpr_approved_by_role(dpr, approved_by_role):
             )
             send_websocket_notification(recipient.id, ws_message)
 
-    logger.info(f"DPR approval notification sent to {len(recipients)} recipients (approved by {approved_by_role})")
+    task = approval_task_for_role(approved_by_role)
+    logger.info(
+        "Queued %s Approval Email dpr_id=%s recipients=%s",
+        approved_by_role,
+        dpr.id,
+        recipient_ids,
+    )
+    queue_after_commit(task, dpr_id=dpr.id, recipient_ids=recipient_ids)
 
 
 def notify_dpr_rejected_by_role(dpr, rejected_by_role):
-    """
-    Send rejection notification to appropriate recipients based on who rejected it.
+    """Rejection notification. WebSocket sync; SMTP via thread pool after commit."""
+    from dpr.tasks import queue_after_commit, send_dpr_rejection_email
 
-    Args:
-        dpr (DailyProgressReport): The DPR instance
-        rejected_by_role (str): The role that rejected ('Team Leader', 'PMC Manager', 'PMC Head')
-    """
-    # Find the project
     project = Project.objects.filter(name=dpr.project_name).first()
     if not project:
         logger.error(f"Project '{dpr.project_name}' not found for DPR {dpr.id}")
@@ -445,182 +397,127 @@ def notify_dpr_rejected_by_role(dpr, rejected_by_role):
     recipients = []
 
     if rejected_by_role == 'Team Leader':
-        # Team Lead rejected → Send to Site Engineer (submitter)
         if dpr.submitted_by and dpr.submitted_by.email:
             recipients.append(dpr.submitted_by)
-
     elif rejected_by_role in ('PMC Manager', 'Coordinator'):
-        # PMC Manager rejected → Send to Team Lead and Site Engineer
-        team_leads = _get_project_approvers(project, 'Team Leader')
-        recipients.extend(team_leads)
+        recipients.extend(_get_project_approvers(project, 'Team Leader'))
         if dpr.submitted_by and dpr.submitted_by.email:
             recipients.append(dpr.submitted_by)
-
     elif rejected_by_role == 'PMC Head':
-        # PMC Head rejected → Send to PMC Manager, Team Lead, and Site Engineer
-        managers = _get_project_approvers(project, 'PMC Manager')
-        team_leads = _get_project_approvers(project, 'Team Leader')
-        recipients.extend(managers)
-        recipients.extend(team_leads)
+        recipients.extend(_get_project_approvers(project, 'PMC Manager'))
+        recipients.extend(_get_project_approvers(project, 'Team Leader'))
         if dpr.submitted_by and dpr.submitted_by.email:
             recipients.append(dpr.submitted_by)
 
-    # Remove duplicates
     recipients = list(set(recipients))
     recipient_emails = [user.email for user in recipients if user.email]
+    recipient_ids = [user.id for user in recipients if user.email]
 
     if not recipient_emails:
-        logger.warning(f"No recipients found for DPR rejection notification (rejected by {rejected_by_role})")
+        logger.warning(
+            f"No recipients found for DPR rejection notification (rejected by {rejected_by_role})"
+        )
         return
 
-    context = {
-        'dpr': {
-            'project_name': dpr.project_name,
-            'report_date': dpr.report_date.isoformat(),
-            'job_no': dpr.job_no,
-            'status': 'Rejected',
-            'rejection_reason': dpr.rejection_reason,
-            'rejected_by': {
-                'username': dpr.rejected_by.username if dpr.rejected_by else 'Unknown',
-                'get_full_name': dpr.rejected_by.get_full_name() if dpr.rejected_by else 'Unknown User',
-            } if dpr.rejected_by else None,
-        },
-        'project': {
-            'name': project.name,
-        },
-        'submitter': {
-            'username': dpr.submitted_by.username if dpr.submitted_by else 'Unknown',
-            'get_full_name': dpr.submitted_by.get_full_name() if dpr.submitted_by else 'Unknown User',
-        },
-        'rejected_by_role': rejected_by_role,
-    }
-
-    send_html_email(
-        subject=f"DPR Rejected by {rejected_by_role}: {dpr.project_name} - {dpr.report_date}",
-        template_name='dpr_rejected',
-        context=context,
-        recipient_list=recipient_emails
-    )
-
-    # Send WebSocket notifications
     for recipient in recipients:
         if recipient.email in recipient_emails:
             ws_message = create_notification_message(
                 'dpr_rejected',
                 f'DPR Rejected: {dpr.project_name}',
                 f'DPR has been rejected by {rejected_by_role}. Please review the feedback.',
-                {'dpr_id': dpr.id, 'project_name': dpr.project_name, 'rejected_by': rejected_by_role, 'reason': dpr.rejection_reason}
+                {
+                    'dpr_id': dpr.id,
+                    'project_name': dpr.project_name,
+                    'rejected_by': rejected_by_role,
+                    'reason': dpr.rejection_reason,
+                },
             )
             send_websocket_notification(recipient.id, ws_message)
 
-    logger.info(f"DPR rejection notification sent to {len(recipients)} recipients (rejected by {rejected_by_role})")
+    logger.info(
+        "Queued Rejection Email dpr_id=%s role=%s recipients=%s",
+        dpr.id,
+        rejected_by_role,
+        recipient_ids,
+    )
+    queue_after_commit(
+        send_dpr_rejection_email,
+        dpr_id=dpr.id,
+        recipient_ids=recipient_ids,
+        role=rejected_by_role,
+    )
 
 
 def notify_dpr_approved(dpr):
-    """
-    Send notification when a DPR is approved.
+    """Legacy approve (submitter only). WebSocket sync; SMTP via thread pool after commit."""
+    from dpr.tasks import queue_after_commit, send_dpr_approved_email
 
-    Args:
-        dpr (DailyProgressReport): The DPR instance
-    """
     if not dpr.submitted_by or not dpr.submitted_by.email:
         logger.warning(f"DPR {dpr.id} has no submitter or submitter has no email")
         return
 
-    # Find the project
     project = Project.objects.filter(name=dpr.project_name).first()
     if not project:
         logger.error(f"Project '{dpr.project_name}' not found for DPR {dpr.id}")
         return
 
-    context = {
-        'dpr': {
-            'project_name': dpr.project_name,
-            'report_date': dpr.report_date.isoformat(),
-            'job_no': dpr.job_no,
-            'status': 'Approved',
-            'approved_at': dpr.approved_at.isoformat() if dpr.approved_at else None,
-            'approved_by': {
-                'username': dpr.approved_by.username if dpr.approved_by else 'Unknown',
-                'get_full_name': dpr.approved_by.get_full_name() if dpr.approved_by else 'Unknown User',
-            } if dpr.approved_by else None,
-        },
-        'project': {
-            'name': project.name,
-        },
-        'submitter': {
-            'username': dpr.submitted_by.username if dpr.submitted_by else 'Unknown',
-            'get_full_name': dpr.submitted_by.get_full_name() if dpr.submitted_by else 'Unknown User',
-        },
-    }
-
-    send_html_email(
-        subject=f"DPR Approved: {dpr.project_name} - {dpr.report_date}",
-        template_name='dpr_approved',
-        context=context,
-        recipient_list=[dpr.submitted_by.email]
-    )
-
-    # Send WebSocket notification to submitter
     ws_message = create_notification_message(
         'dpr_approved',
         f'DPR Approved: {dpr.project_name}',
         f'Your DPR has been approved.',
-        {'dpr_id': dpr.id, 'project_name': dpr.project_name, 'approved_by': dpr.approved_by.username}
+        {
+            'dpr_id': dpr.id,
+            'project_name': dpr.project_name,
+            'approved_by': dpr.approved_by.username if dpr.approved_by else None,
+        },
     )
     send_websocket_notification(dpr.submitted_by.id, ws_message)
 
+    logger.info(
+        "Queued legacy Approval Email dpr_id=%s recipient=%s",
+        dpr.id,
+        dpr.submitted_by_id,
+    )
+    queue_after_commit(
+        send_dpr_approved_email,
+        dpr_id=dpr.id,
+        recipient_ids=[dpr.submitted_by_id],
+    )
+
 
 def notify_dpr_rejected(dpr):
-    """
-    Send notification when a DPR is rejected.
+    """Legacy reject (submitter only). WebSocket sync; SMTP via thread pool after commit."""
+    from dpr.tasks import queue_after_commit, send_dpr_rejected_email
 
-    Args:
-        dpr (DailyProgressReport): The DPR instance
-    """
     if not dpr.submitted_by or not dpr.submitted_by.email:
         logger.warning(f"DPR {dpr.id} has no submitter or submitter has no email")
         return
 
-    # Find the project
     project = Project.objects.filter(name=dpr.project_name).first()
     if not project:
         logger.error(f"Project '{dpr.project_name}' not found for DPR {dpr.id}")
         return
 
-    context = {
-        'dpr': {
-            'project_name': dpr.project_name,
-            'report_date': dpr.report_date.isoformat(),
-            'job_no': dpr.job_no,
-            'status': 'Rejected',
-            'rejection_reason': dpr.rejection_reason,
-            'rejected_by': {
-                'username': dpr.rejected_by.username if dpr.rejected_by else 'Unknown',
-                'get_full_name': dpr.rejected_by.get_full_name() if dpr.rejected_by else 'Unknown User',
-            } if dpr.rejected_by else None,
-        },
-        'project': {
-            'name': project.name,
-        },
-        'submitter': {
-            'username': dpr.submitted_by.username if dpr.submitted_by else 'Unknown',
-            'get_full_name': dpr.submitted_by.get_full_name() if dpr.submitted_by else 'Unknown User',
-        },
-    }
-
-    send_html_email(
-        subject=f"DPR Rejected: {dpr.project_name} - {dpr.report_date}",
-        template_name='dpr_rejected',
-        context=context,
-        recipient_list=[dpr.submitted_by.email]
-    )
-
-    # Send WebSocket notification to submitter
     ws_message = create_notification_message(
         'dpr_rejected',
         f'DPR Rejected: {dpr.project_name}',
         f'Your DPR has been rejected. Please review the feedback.',
-        {'dpr_id': dpr.id, 'project_name': dpr.project_name, 'rejected_by': dpr.rejected_by.username, 'reason': dpr.rejection_reason}
+        {
+            'dpr_id': dpr.id,
+            'project_name': dpr.project_name,
+            'rejected_by': dpr.rejected_by.username if dpr.rejected_by else None,
+            'reason': dpr.rejection_reason,
+        },
     )
     send_websocket_notification(dpr.submitted_by.id, ws_message)
+
+    logger.info(
+        "Queued legacy Rejection Email dpr_id=%s recipient=%s",
+        dpr.id,
+        dpr.submitted_by_id,
+    )
+    queue_after_commit(
+        send_dpr_rejected_email,
+        dpr_id=dpr.id,
+        recipient_ids=[dpr.submitted_by_id],
+    )

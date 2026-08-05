@@ -115,9 +115,9 @@ class ProjectCompleteAPITest(APITestCase):
 
     def test_cache_invalidated(self):
         authenticate_client(self.client, username="cmp_ho", password="Project@123")
-        v_before = get_list_cache_version("project_overview_v2")
+        v_before = get_list_cache_version("project_overview_v3")
         self.client.post(self._url(), {}, format="json")
-        self.assertGreater(get_list_cache_version("project_overview_v2"), v_before)
+        self.assertGreater(get_list_cache_version("project_overview_v3"), v_before)
 
     def test_overview_includes_completion_fields(self):
         authenticate_client(self.client, username="cmp_ho", password="Project@123")
