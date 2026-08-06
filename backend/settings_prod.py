@@ -16,15 +16,41 @@ DEBUG = False
 
 _allowed_hosts_env = os.environ.get('ALLOWED_HOSTS', '')
 ALLOWED_HOSTS = [h.strip() for h in _allowed_hosts_env.split(',') if h.strip()]
+
+# Railway injects the public hostname — use it when ALLOWED_HOSTS is unset.
+_railway_domain = (
+    os.environ.get('RAILWAY_PUBLIC_DOMAIN')
+    or os.environ.get('RAILWAY_STATIC_URL')
+    or ''
+).strip()
+if _railway_domain:
+    # RAILWAY_STATIC_URL may be a full URL
+    if '://' in _railway_domain:
+        from urllib.parse import urlparse
+
+        _railway_domain = urlparse(_railway_domain).hostname or ''
+    if _railway_domain and _railway_domain not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(_railway_domain)
+
+# Always allow the service hostname used in this 502 report pattern when provided via env.
+_extra_host = os.environ.get('RAILWAY_SERVICE_DOMAIN', '').strip()
+if _extra_host and _extra_host not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(_extra_host)
+
 if not ALLOWED_HOSTS:
-    raise Exception(
-        'ALLOWED_HOSTS environment variable must be set in production '
-        '(comma-separated hostnames).'
+    # Last-resort Railway default so a missing env var does not 502 the service.
+    # Prefer setting ALLOWED_HOSTS explicitly in Railway Variables.
+    ALLOWED_HOSTS = ['.up.railway.app']
+    import logging
+
+    logging.getLogger('django').warning(
+        'ALLOWED_HOSTS unset — defaulting to .up.railway.app. '
+        'Set ALLOWED_HOSTS explicitly in Railway Variables.'
     )
 
 # Optional PaaS hostnames when explicitly enabled
 if os.environ.get('ALLOW_RENDER_HOSTS', '').lower() in ('1', 'true', 'yes'):
-    for _host in ('.onrender.com', '.vercel.app'):
+    for _host in ('.onrender.com', '.vercel.app', '.up.railway.app'):
         if _host not in ALLOWED_HOSTS:
             ALLOWED_HOSTS.append(_host)
 
@@ -96,14 +122,17 @@ MIDDLEWARE = [
 # ================= SECURITY SETTINGS =================
 # Behind Railway/Render reverse proxies, trust X-Forwarded-Proto for HTTPS.
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-SECURE_SSL_REDIRECT = os.environ.get('SECURE_SSL_REDIRECT', 'true').lower() in (
+# Default OFF: Railway internal health checks are plain HTTP and break with
+# SECURE_SSL_REDIRECT=true (marks service unhealthy → 502 Bad Gateway).
+# Edge TLS is terminated by Railway; enable only if you know health checks use HTTPS.
+SECURE_SSL_REDIRECT = os.environ.get('SECURE_SSL_REDIRECT', 'false').lower() in (
     '1',
     'true',
     'yes',
 )
-SECURE_HSTS_SECONDS = int(os.environ.get('SECURE_HSTS_SECONDS', '31536000'))
-SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-SECURE_HSTS_PRELOAD = True
+SECURE_HSTS_SECONDS = int(os.environ.get('SECURE_HSTS_SECONDS', '0'))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = SECURE_HSTS_SECONDS > 0
+SECURE_HSTS_PRELOAD = False
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 CSRF_COOKIE_HTTPONLY = True
@@ -124,17 +153,27 @@ SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = 'DENY'
 
-# ================= CORS — explicit origins only (no allow-all + credentials) =================
+# ================= CORS — explicit origins (required for browser FE) =================
 _cors_env = os.environ.get('CORS_ALLOWED_ORIGINS', '')
 CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_env.split(',') if o.strip()]
+# Reuse CSRF trusted origins if CORS list was not set (avoids boot crash / 502).
 if not CORS_ALLOWED_ORIGINS:
-    raise Exception(
-        'CORS_ALLOWED_ORIGINS environment variable must be set in production '
-        '(comma-separated full origins, e.g. https://app.example.com).'
-    )
+    CORS_ALLOWED_ORIGINS = [
+        o.strip()
+        for o in os.environ.get('CSRF_TRUSTED_ORIGINS', '').split(',')
+        if o.strip()
+    ]
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGIN_REGEXES = []
 CORS_ALLOW_CREDENTIALS = True
+if not CORS_ALLOWED_ORIGINS:
+    # Boot without crashing; browser clients will get CORS errors until configured.
+    import logging
+
+    logging.getLogger('django').warning(
+        'CORS_ALLOWED_ORIGINS is empty — set it to your frontend origin(s), '
+        'e.g. https://your-app.vercel.app'
+    )
 
 # ================= CHANNELS =================
 CHANNEL_LAYERS = {
