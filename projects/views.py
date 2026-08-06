@@ -110,6 +110,18 @@ class ProjectViewSet(viewsets.ModelViewSet):
             if statuses:
                 qs = qs.filter(status__in=statuses)
 
+        billing_param = (self.request.query_params.get("billing_status") or "").strip()
+        if billing_param:
+            from projects.services.project_completion import normalize_billing_status
+
+            billing_values = []
+            for raw in billing_param.split(","):
+                normalized = normalize_billing_status(raw)
+                if normalized:
+                    billing_values.append(normalized)
+            if billing_values:
+                qs = qs.filter(billing_status__in=billing_values)
+
         return qs.order_by("-created_at", "name")
 
     def _has_group_permission(self, user, group_names: List[str]) -> bool:
@@ -191,6 +203,18 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 if statuses:
                     qs = qs.filter(status__in=statuses)
 
+            billing_param = (request.query_params.get("billing_status") or "").strip()
+            if billing_param:
+                from projects.services.project_completion import normalize_billing_status
+
+                billing_values = []
+                for raw in billing_param.split(","):
+                    normalized = normalize_billing_status(raw)
+                    if normalized:
+                        billing_values.append(normalized)
+                if billing_values:
+                    qs = qs.filter(billing_status__in=billing_values)
+
             search = (request.query_params.get("search") or "").strip()
             if search:
                 qs = qs.filter(
@@ -200,13 +224,16 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 )
 
             rows = list(
-                qs.order_by("name").values("id", "name", "status", "client_name")
+                qs.order_by("name").values(
+                    "id", "name", "status", "billing_status", "client_name"
+                )
             )
             data = [
                 {
                     "id": row["id"],
                     "name": row["name"],
                     "status": row["status"],
+                    "billing_status": row["billing_status"] or Project.BILLING_STATUS_PENDING,
                     "client_name": row["client_name"] or "",
                 }
                 for row in rows
@@ -241,7 +268,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         GET /api/projects/overview/?paginate=true&page=1&page_size=20
             → optional paginated response
 
-        Cached (RBAC-scoped, SWR) under prefix ``project_overview_v3``.
+        Cached (RBAC-scoped, SWR) under prefix ``project_overview_v4``.
         Cache hits skip queryset aggregation and serialization.
         """
         from core.cache_keys import build_rbac_list_cache_key
@@ -262,6 +289,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
             or request.query_params.get("client_name", "")
         )
         status_filter = request.query_params.get("status", "")
+        billing_status_filter = request.query_params.get("billing_status", "")
         project_type = request.query_params.get("project_type", "")
         project_name = (
             request.query_params.get("project_name", "")
@@ -293,6 +321,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 f"s{search}",
                 f"c{client}",
                 f"st{status_filter}",
+                f"bs{billing_status_filter}",
                 f"pt{project_type}",
                 f"pn{project_name}",
                 f"o{ordering or default_ordering}",
@@ -316,6 +345,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 search=search,
                 client=client,
                 status=status_filter,
+                billing_status=billing_status_filter,
                 project_type=project_type,
                 project_name=project_name,
                 ordering=ordering,
@@ -557,7 +587,11 @@ class ProjectViewSet(viewsets.ModelViewSet):
         Mark a project as completed (HO / CEO / PMC Head / superuser).
 
         POST /api/projects/{id}/complete/
-        Body: { "completion_notes": "Optional remarks" }
+        Body: {
+            "billing_status": "Pending" | "Completed",  # required
+            "completion_notes": "Optional remarks",
+            "billing_completion_notes": "Optional when billing_status=Completed"
+        }
         """
         from accounts.rbac import can_manage_users
         from projects.services.project_completion import (
@@ -579,21 +613,76 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
         project = self.get_object()
         notes = ""
+        billing_status = None
+        billing_notes = None
         if isinstance(request.data, dict):
             notes = request.data.get("completion_notes") or ""
+            billing_status = request.data.get("billing_status")
+            if "billing_completion_notes" in request.data:
+                billing_notes = request.data.get("billing_completion_notes") or ""
 
         try:
             result = complete_project(
                 project=project,
                 actor=request.user,
                 completion_notes=notes,
+                billing_status=billing_status,
+                billing_completion_notes=billing_notes,
             )
             return Response(result, status=200)
         except ProjectCompletionBlocked as exc:
             return Response(
                 {
                     "success": False,
-                    "message": "Project cannot be marked as completed.",
+                    "message": exc.message,
+                    "errors": exc.errors,
+                },
+                status=400,
+            )
+
+    @action(detail=True, methods=["post"], url_path="complete-billing")
+    def complete_billing(self, request, pk=None):
+        """
+        Mark billing as completed for an already-completed project.
+
+        POST /api/projects/{id}/complete-billing/
+        Body: { "billing_completion_notes": "Optional remarks" }
+        """
+        from accounts.rbac import can_manage_users
+        from projects.services.project_completion import (
+            BillingCompletionBlocked,
+            complete_billing,
+        )
+
+        if not can_manage_users(request.user):
+            return Response(
+                {
+                    "success": False,
+                    "message": (
+                        "Only Admin, Head Office, CEO, or PMC Head may mark "
+                        "billing as completed."
+                    ),
+                },
+                status=403,
+            )
+
+        project = self.get_object()
+        notes = ""
+        if isinstance(request.data, dict):
+            notes = request.data.get("billing_completion_notes") or ""
+
+        try:
+            result = complete_billing(
+                project=project,
+                actor=request.user,
+                billing_completion_notes=notes,
+            )
+            return Response(result, status=200)
+        except BillingCompletionBlocked as exc:
+            return Response(
+                {
+                    "success": False,
+                    "message": exc.message,
                     "errors": exc.errors,
                 },
                 status=400,
@@ -1098,6 +1187,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
         
         return Response({
             'success': False,
+            'message': 'Some information is missing or invalid. Please review the highlighted fields.',
             'errors': serializer.errors
         }, status=400)
 

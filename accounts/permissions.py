@@ -73,9 +73,9 @@ class IsAuthenticatedProjectRBAC(BasePermission):
         if project is None:
             return True
         if getattr(project, "status", None) == "completed":
-            # Skip lock for the dedicated complete action (idempotent already-completed handled in service).
+            # Skip lock for dedicated completion / billing-completion actions.
             action = getattr(view, "action", None)
-            if action != "complete_project":
+            if action not in {"complete_project", "complete_billing"}:
                 from accounts.rbac_checks import ProjectReadOnlyError
 
                 raise ProjectReadOnlyError()
@@ -93,7 +93,7 @@ class IsAuthenticatedProjectRBAC(BasePermission):
 
         if getattr(project, "status", None) == "completed":
             action = getattr(view, "action", None)
-            if action != "complete_project":
+            if action not in {"complete_project", "complete_billing"}:
                 from accounts.rbac_checks import ProjectReadOnlyError
 
                 raise ProjectReadOnlyError()

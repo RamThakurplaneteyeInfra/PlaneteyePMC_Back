@@ -396,7 +396,8 @@ def integrity_error_message(exc: BaseException) -> str:
             if "delete" in text or "restrict" in text or "cascade" in text
             else "Related record could not be found. Please check your selection."
         )
-    if "not null" in text:
+    # Postgres uses "not-null"; SQLite / some drivers use "NOT NULL".
+    if "not null" in text or "not-null" in text:
         return "Please complete all required fields before submitting."
     return "Unable to save this record. Please check your input and try again."
 

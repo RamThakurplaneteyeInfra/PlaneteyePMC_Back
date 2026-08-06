@@ -34,7 +34,7 @@ from .overview_kpis import (
     extract_project_code,
 )
 
-CACHE_PREFIX = "project_overview_v3"
+CACHE_PREFIX = "project_overview_v4"
 CACHE_TTL_SECONDS = TTL_OVERVIEW
 # Soft TTL = configured overview TTL; hard TTL keeps stale payload for SWR window.
 CACHE_HARD_TTL_SECONDS = TTL_OVERVIEW * 2
@@ -90,6 +90,7 @@ class ProjectOverviewService:
         search: str = "",
         client: str = "",
         status: str = "",
+        billing_status: str = "",
         project_type: str = "",
         project_name: str = "",
         ordering: str = "",
@@ -117,6 +118,7 @@ class ProjectOverviewService:
                     f"s{search}",
                     f"c{client}",
                     f"st{status}",
+                    f"bs{billing_status}",
                     f"pt{project_type}",
                     f"pn{project_name}",
                     f"o{ordering or self.DEFAULT_ORDERING}",
@@ -132,6 +134,7 @@ class ProjectOverviewService:
                     search=search,
                     client=client,
                     status=status,
+                    billing_status=billing_status,
                     project_type=project_type,
                     project_name=project_name,
                     ordering=ordering,
@@ -153,6 +156,7 @@ class ProjectOverviewService:
             search=search,
             client=client,
             status=status,
+            billing_status=billing_status,
             project_type=project_type,
             project_name=project_name,
             ordering=ordering,
@@ -167,6 +171,7 @@ class ProjectOverviewService:
         search: str,
         client: str,
         status: str,
+        billing_status: str,
         project_type: str,
         project_name: str,
         ordering: str,
@@ -181,6 +186,7 @@ class ProjectOverviewService:
                 search=search,
                 client=client,
                 status=status,
+                billing_status=billing_status,
                 project_type=project_type,
                 project_name=project_name,
                 ordering=ordering,
@@ -195,6 +201,7 @@ class ProjectOverviewService:
         search: str,
         client: str,
         status: str,
+        billing_status: str,
         project_type: str,
         project_name: str,
         ordering: str,
@@ -204,6 +211,7 @@ class ProjectOverviewService:
                 search=search,
                 client=client,
                 status=status,
+                billing_status=billing_status,
                 project_type=project_type,
                 project_name=project_name,
             )
@@ -238,6 +246,7 @@ class ProjectOverviewService:
         search: str,
         client: str,
         status: str,
+        billing_status: str,
         project_type: str,
         project_name: str,
     ) -> QuerySet[Project]:
@@ -249,6 +258,7 @@ class ProjectOverviewService:
                 "client_name",
                 "location",
                 "status",
+                "billing_status",
                 "updated_at",
                 "project_start",
                 "commencement_date",
@@ -300,6 +310,18 @@ class ProjectOverviewService:
         project_name = (project_name or "").strip()
         if project_name:
             qs = qs.filter(name__icontains=project_name)
+
+        billing_param = (billing_status or "").strip()
+        if billing_param:
+            from projects.services.project_completion import normalize_billing_status
+
+            billing_values = []
+            for raw in billing_param.split(","):
+                normalized = normalize_billing_status(raw)
+                if normalized:
+                    billing_values.append(normalized)
+            if billing_values:
+                qs = qs.filter(billing_status__in=billing_values)
 
         # project_type is not a stored Project field yet — reserved for future filter.
         _ = (project_type or "").strip()
@@ -367,6 +389,8 @@ class ProjectOverviewService:
                     "project_type": "",
                     "project_icon": "",
                     "status": project.status,
+                    "billing_status": project.billing_status
+                    or Project.BILLING_STATUS_PENDING,
                     "project_status": project_status,
                     "completed_at": project.completed_at.isoformat()
                     if project.completed_at

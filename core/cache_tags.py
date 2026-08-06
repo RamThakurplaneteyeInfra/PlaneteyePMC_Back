@@ -20,10 +20,10 @@ logger = logging.getLogger("pmc.cache.tags")
 
 # Logical groups → existing cache prefixes (backward compatible).
 CACHE_TAG_PREFIXES: dict[str, tuple[str, ...]] = {
-    "projects": ("project_overview_v3", "projects_dropdown", "projects_init_list"),
-    "sites": ("projects_init_list", "project_overview_v3", "projects_dropdown"),
+    "projects": ("project_overview_v4", "projects_dropdown", "projects_init_list"),
+    "sites": ("projects_init_list", "project_overview_v4", "projects_dropdown"),
     "dropdown": ("projects_dropdown",),
-    "overview": ("project_overview_v3",),
+    "overview": ("project_overview_v4",),
     "dashboard": (
         "cashflow_dashboard",
         "cost_performance_dashboard",
@@ -42,7 +42,7 @@ CACHE_TAG_PREFIXES: dict[str, tuple[str, ...]] = {
         "correspondence_list",
     ),
     "statistics": ("bottlenecks_summary", "budget_performance_list"),
-    "bottlenecks": ("bottlenecks_summary", "project_overview_v3"),
+    "bottlenecks": ("bottlenecks_summary", "project_overview_v4"),
     "invoicing": ("invoicing_list",),
     "cashflow": ("cashflow_list", "cashflow_dashboard"),
     "equipment": ("equipment_list", "equipment_dashboard"),

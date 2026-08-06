@@ -247,6 +247,7 @@ class ProjectOverviewAPITest(APITestCase):
             "project_type",
             "project_icon",
             "status",
+            "billing_status",
             "project_status",
             "completed_at",
             "completed_by",
@@ -265,6 +266,7 @@ class ProjectOverviewAPITest(APITestCase):
         }
         self.assertEqual(set(card.keys()), expected_keys)
         self.assertEqual(card["status"], "active")
+        self.assertEqual(card["billing_status"], "Pending")
         self.assertEqual(card["project_status"], STATUS_ON_TRACK)
         self.assertIsNone(card["completed_at"])
         self.assertIsNone(card["completed_by"])

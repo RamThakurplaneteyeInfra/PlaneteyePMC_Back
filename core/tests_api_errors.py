@@ -90,6 +90,18 @@ class FriendlyMessageUnitTests(SimpleTestCase):
             "A record with the same details already exists.",
         )
 
+    def test_integrity_not_null_hyphen(self):
+        """Postgres reports 'not-null' (hyphen), not 'not null' (space)."""
+        self.assertEqual(
+            integrity_error_message(
+                IntegrityError(
+                    'null value in column "billing_status" of relation '
+                    '"projects_project" violates not-null constraint'
+                )
+            ),
+            "Please complete all required fields before submitting.",
+        )
+
 
 class ExceptionHandlerTests(SimpleTestCase):
     def setUp(self):

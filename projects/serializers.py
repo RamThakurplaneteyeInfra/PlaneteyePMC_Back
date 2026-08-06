@@ -358,8 +358,9 @@ class ProjectInitSerializer(serializers.ModelSerializer):
         return project
 
     def to_representation(self, instance):
-        """Return the project with auto-calculated fields."""
-        instance.save()
+        """Return the project with auto-calculated fields (no extra write)."""
+        # Derived fields are already computed in Project.save(); avoid a
+        # redundant write that can fail if the DB schema is ahead of the code.
         return super().to_representation(instance)
 
 

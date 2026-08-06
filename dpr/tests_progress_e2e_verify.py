@@ -136,7 +136,7 @@ class CumulativeProgressE2EVerification(TestCase):
             ),
             "cache_ver_dpr_list": get_list_cache_version("dpr_list"),
             "cache_ver_monthly_scope": get_list_cache_version("monthly_scope_list"),
-            "cache_ver_overview": get_list_cache_version("project_overview_v3"),
+            "cache_ver_overview": get_list_cache_version("project_overview_v4"),
         }
         self.report[label] = row
         print("\n=== STAGE:", label, "===")

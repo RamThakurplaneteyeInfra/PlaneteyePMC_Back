@@ -30,6 +30,7 @@ class ProjectOverviewSerializer(serializers.Serializer):
     project_type = serializers.CharField(allow_blank=True)
     project_icon = serializers.CharField(allow_blank=True)
     status = serializers.CharField()
+    billing_status = serializers.CharField(required=False)
     project_status = serializers.CharField(required=False)
     completed_at = serializers.CharField(allow_null=True, required=False)
     completed_by = OverviewCompletedBySerializer(allow_null=True, required=False)

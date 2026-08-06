@@ -91,7 +91,7 @@ class TagBatchInvalidationTest(TestCase):
             # One flush with unique prefixes
             self.assertGreaterEqual(mocked.call_count, 1)
             prefixes = [c.args[0] for c in mocked.call_args_list]
-            self.assertIn("project_overview_v3", prefixes)
+            self.assertIn("project_overview_v4", prefixes)
             self.assertIn("projects_dropdown", prefixes)
 
 

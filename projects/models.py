@@ -16,6 +16,13 @@ class Project(models.Model):
         ('merged', 'Merged into another project'),
     ]
 
+    BILLING_STATUS_PENDING = "Pending"
+    BILLING_STATUS_COMPLETED = "Completed"
+    BILLING_STATUS_CHOICES = [
+        (BILLING_STATUS_PENDING, "Pending"),
+        (BILLING_STATUS_COMPLETED, "Completed"),
+    ]
+
     name = models.CharField(max_length=255, db_index=True)
     client_name = models.CharField(max_length=255, blank=True)
     description = models.TextField(blank=True)
@@ -86,6 +93,33 @@ class Project(models.Model):
         blank=True,
         default="",
         help_text="Optional remarks captured at completion",
+    )
+    # Billing closure (independent of physical project completion)
+    billing_status = models.CharField(
+        max_length=20,
+        choices=BILLING_STATUS_CHOICES,
+        default=BILLING_STATUS_PENDING,
+        db_index=True,
+        help_text="Commercial/billing closure status (Pending or Completed)",
+    )
+    billing_completed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="When billing was marked completed",
+    )
+    billing_completed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="billing_completed_projects",
+        help_text="User who marked billing as completed",
+    )
+    billing_completion_notes = models.TextField(
+        null=True,
+        blank=True,
+        help_text="Optional remarks captured at billing completion",
     )
     start_date = models.DateField(null=True, blank=True) # Keeping for compatibility
     end_date = models.DateField(null=True, blank=True)
@@ -226,6 +260,10 @@ class Project(models.Model):
             models.Index(fields=["status", "-updated_at"], name="project_status_updated_idx"),
             # Client filter on overview/dropdown (client_name__icontains still prefers trgm at huge scale)
             models.Index(fields=["client_name"], name="project_client_name_idx"),
+            models.Index(
+                fields=["status", "billing_status"],
+                name="project_status_billing_idx",
+            ),
         ]
 
     def __str__(self):
