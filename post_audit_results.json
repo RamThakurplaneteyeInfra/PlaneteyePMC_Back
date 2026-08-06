@@ -1,0 +1,102 @@
+{
+  "user": "test_admin",
+  "project": "testing8",
+  "results": [
+    {
+      "path": "/api/dpr/",
+      "status": 400,
+      "ms": 4105.4,
+      "sql": 1,
+      "bytes": 426,
+      "snippet": "{\"success\":false,\"message\":\"Please correct the highlighted fields.\",\"errors\":[{\"field\":\"project_name\",\"message\":\"Project is required.\"},{\"field\":\"job_no\",\"message\":\"This field is required to continue."
+    },
+    {
+      "path": "/api/cost-performance/",
+      "status": 400,
+      "ms": 1927.1,
+      "sql": 1,
+      "bytes": 456,
+      "snippet": "{\"success\":false,\"message\":\"Please correct the highlighted fields.\",\"errors\":[{\"field\":\"project_name\",\"message\":\"Project is required.\"},{\"field\":\"month_year\",\"message\":\"Please provide a value.\"},{\"fie"
+    },
+    {
+      "path": "/api/project-feedback/",
+      "status": 400,
+      "ms": 983.2,
+      "sql": 1,
+      "bytes": 266,
+      "snippet": "{\"success\":false,\"message\":\"Please correct the highlighted fields.\",\"errors\":[{\"field\":\"project\",\"message\":\"Project is required.\"},{\"field\":\"issue_title\",\"message\":\"Please enter an issue title.\"},{\"fi"
+    },
+    {
+      "path": "/api/bottlenecks/",
+      "status": 400,
+      "ms": 982.0,
+      "sql": 1,
+      "bytes": 356,
+      "snippet": "{\"success\":false,\"message\":\"Please correct the highlighted fields.\",\"errors\":[{\"field\":\"project_id\",\"message\":\"This field is required to continue.\"},{\"field\":\"type\",\"message\":\"This field is required t"
+    },
+    {
+      "path": "/api/monthly-scope/",
+      "status": 403,
+      "ms": 299.6,
+      "sql": 2,
+      "bytes": 183,
+      "snippet": "{\"success\":false,\"message\":\"You do not have permission to perform this action.\",\"errors\":[{\"field\":\"non_field_errors\",\"message\":\"You do not have permission to perform this action.\"}]}"
+    },
+    {
+      "path": "/api/contract-values/",
+      "status": 403,
+      "ms": 2015.3,
+      "sql": 1,
+      "bytes": 183,
+      "snippet": "{\"success\":false,\"message\":\"You do not have permission to perform this action.\",\"errors\":[{\"field\":\"non_field_errors\",\"message\":\"You do not have permission to perform this action.\"}]}"
+    },
+    {
+      "path": "/api/users/",
+      "status": 400,
+      "ms": 90.5,
+      "sql": 1,
+      "bytes": 338,
+      "snippet": "{\"success\":false,\"message\":\"Please correct the highlighted fields.\",\"errors\":[{\"field\":\"username\",\"message\":\"Please enter your username.\"},{\"field\":\"role\",\"message\":\"This field is required to continue"
+    },
+    {
+      "path": "/api/site-images/",
+      "status": 400,
+      "ms": 1897.0,
+      "sql": 1,
+      "bytes": 187,
+      "snippet": "{\"success\":false,\"message\":\"At least one image file is required (images or images[]).\",\"errors\":[{\"field\":\"images\",\"message\":\"At least one image file is required (images or images[]).\"}]}"
+    },
+    {
+      "path": "/api/project-eot/",
+      "status": 400,
+      "ms": 1100.2,
+      "sql": 1,
+      "bytes": 119,
+      "snippet": "{\"success\":false,\"message\":\"Project is required.\",\"errors\":[{\"field\":\"project_name\",\"message\":\"Project is required.\"}]}"
+    },
+    {
+      "path": "/api/projects/init/",
+      "status": 400,
+      "ms": 1000.2,
+      "sql": 1,
+      "bytes": 183,
+      "snippet": "{\"success\":false,\"message\":\"Some information is missing or invalid. Please review the highlighted fields.\",\"errors\":[{\"field\":\"name\",\"message\":\"This field is required to continue.\"}]}"
+    },
+    {
+      "path": "/api/token/",
+      "status": 401,
+      "ms": 2905.4,
+      "sql": 2,
+      "bytes": 145,
+      "snippet": "{\"success\":false,\"message\":\"Incorrect username or password.\",\"errors\":[{\"field\":\"non_field_errors\",\"message\":\"Incorrect username or password.\"}]}"
+    },
+    {
+      "path": "/api/cost-performance/",
+      "status": 400,
+      "ms": 1999.0,
+      "sql": 2,
+      "bytes": 339,
+      "snippet": "{\"success\":false,\"message\":\"Please correct the highlighted fields.\",\"errors\":[{\"field\":\"bcws\",\"message\":\"This field is required to continue.\"},{\"field\":\"bcwp\",\"message\":\"This field is required to cont"
+    }
+  ]
+}

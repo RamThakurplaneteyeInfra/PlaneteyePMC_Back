@@ -92,6 +92,10 @@ class ProjectFeedbackViewSet(viewsets.ModelViewSet):
         qs = (
             ProjectFeedback.objects.filter(is_active=True)
             .select_related("project", "reported_by", "assigned_team_leader")
+            .prefetch_related(
+                "reported_by__groups",
+                "assigned_team_leader__groups",
+            )
             .annotate(priority_rank=PRIORITY_ORDER)
         )
         return filter_queryset_by_project_access(qs, self.request.user, "project")

@@ -311,11 +311,14 @@ def _build_queryset(
         contract_type: exact contract type filter (SCL | Contractor)
         search       : free-text search across projectName
     """
-    qs = ContractValue.objects.only(
+    qs = ContractValue.objects.select_related("contractor").only(
         "id",
         "project_name",
         "contract_type",
         "contractor_name",
+        "contractor_id",
+        "contractor__id",
+        "contractor__contractor_name",
         "original_contract_value",
         "excess_value",
         "saving",
@@ -504,11 +507,10 @@ class ContractValueViewSet(viewsets.ModelViewSet):
             instance = serializer.save()
         except DjangoValidationError as exc:
             return self._error("Validation failed", errors=exc.message_dict)
-        except Exception as exc:
-            logger.error(f"ContractValue create error: {exc}", exc_info=True)
+        except Exception:
+            logger.exception("ContractValue create error")
             return self._error(
                 "Failed to save contract value record",
-                errors=str(exc),
                 http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -521,6 +523,22 @@ class ContractValueViewSet(viewsets.ModelViewSet):
         )
 
         self._invalidate_cache()
+
+        from core.business_audit import write_business_audit
+        from core.models import BusinessAuditLog
+
+        write_business_audit(
+            entity_type=BusinessAuditLog.ENTITY_CONTRACT_VALUE,
+            action=(
+                BusinessAuditLog.ACTION_UPDATED
+                if existing
+                else BusinessAuditLog.ACTION_CREATED
+            ),
+            actor=request.user,
+            entity_id=instance.pk,
+            project_name=project_name,
+            detail=f"Contract value {contract_type} saved",
+        )
 
         http_status = status.HTTP_200_OK if existing else status.HTTP_201_CREATED
         message = (

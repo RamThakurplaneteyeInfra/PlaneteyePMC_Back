@@ -19,17 +19,18 @@ def project_assigned_users_changed(sender, instance, action, reverse, model, pk_
                 pass
 
     if action in {"post_add", "post_remove", "post_clear"}:
-        from projects.services.project_overview import invalidate_project_overview_cache
+        from projects.services.project_overview import invalidate_project_directory_cache
 
-        invalidate_project_overview_cache()
+        # Assignment changes affect directory/RBAC lists, not KPI card math.
+        invalidate_project_directory_cache()
 
 
 @receiver(m2m_changed, sender=Project.site_engineers.through)
 def project_site_engineers_changed(sender, action, **kwargs):
     if action in {"post_add", "post_remove", "post_clear"}:
-        from projects.services.project_overview import invalidate_project_overview_cache
+        from projects.services.project_overview import invalidate_project_directory_cache
 
-        invalidate_project_overview_cache()
+        invalidate_project_directory_cache()
 
 
 @receiver(post_save, sender=Project)
@@ -37,13 +38,14 @@ def project_site_engineers_changed(sender, action, **kwargs):
 def invalidate_overview_on_project_change(sender, **kwargs):
     from projects.services.project_overview import invalidate_project_overview_cache
 
+    # Project row changes (name/status/team_lead/dates) affect cards + directories.
     invalidate_project_overview_cache()
 
 
-def _invalidate_overview(*_args, **_kwargs):
-    from projects.services.project_overview import invalidate_project_overview_cache
+def _invalidate_overview_kpi(*_args, **_kwargs):
+    from projects.services.project_overview import invalidate_overview_kpi_cache
 
-    invalidate_project_overview_cache()
+    invalidate_overview_kpi_cache()
 
 
 def connect_overview_invalidation_signals():
@@ -69,8 +71,8 @@ def connect_overview_invalidation_signals():
         ProjectDates,
         ProjectEOT,
     ):
-        post_save.connect(_invalidate_overview, sender=model, weak=False)
-        post_delete.connect(_invalidate_overview, sender=model, weak=False)
+        post_save.connect(_invalidate_overview_kpi, sender=model, weak=False)
+        post_delete.connect(_invalidate_overview_kpi, sender=model, weak=False)
 
 
 connect_overview_invalidation_signals()

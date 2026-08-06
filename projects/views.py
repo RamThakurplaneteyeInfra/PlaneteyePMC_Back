@@ -3,7 +3,7 @@ from typing import List, Dict, Any
 
 import pandas as pd
 from django.contrib.auth.models import User
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 from django.utils.dateparse import parse_date
 from rest_framework import viewsets
 from rest_framework.decorators import action
@@ -12,6 +12,7 @@ from rest_framework.response import Response
 
 from accounts.rbac import RBACDomain, get_user_assigned_projects_qs, is_admin_user
 from accounts.permissions import IsAuthenticatedProjectRBAC
+from project_dates.eot_models import ProjectEOT
 
 from .models import Project, ProjectDashboardData, Site, ProjectLog, ProjectLogEntry
 from .serializers import (
@@ -21,6 +22,44 @@ from .serializers import (
     SiteSerializer,
     ProjectLogSerializer,
 )
+
+
+def _active_eots_prefetch() -> Prefetch:
+    return Prefetch(
+        "eots",
+        queryset=ProjectEOT.objects.filter(is_active=True)
+        .select_related(
+            "created_by",
+            "updated_by",
+            "project_dates",
+            "project_dates__contractor",
+        )
+        .order_by("-eot_number", "-id"),
+    )
+
+
+def _scl_project_dates_prefetch() -> Prefetch:
+    from project_dates.models import ProjectDates
+
+    return Prefetch(
+        "project_dates",
+        queryset=ProjectDates.objects.filter(date_type=ProjectDates.DATE_TYPE_SCL)
+        .select_related("contractor")
+        .only(
+            "id",
+            "project_id",
+            "date_type",
+            "contract_finish",
+            "project_start",
+            "forecast_finish",
+            "eot_date",
+            "contractor_id",
+            "contractor_name",
+            "contractor__id",
+            "contractor__contractor_name",
+        ),
+        to_attr="_prefetched_scl_dates",
+    )
 
 class ProjectViewSet(viewsets.ModelViewSet):
     """
@@ -72,7 +111,10 @@ class ProjectViewSet(viewsets.ModelViewSet):
         ).prefetch_related(
             'sites',
             'coordinators',
-            'site_engineers'
+            'site_engineers',
+            'assigned_users',
+            _active_eots_prefetch(),
+            _scl_project_dates_prefetch(),
         )
 
         user = self.request.user
@@ -94,6 +136,9 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 'sites',
                 'coordinators',
                 'site_engineers',
+                'assigned_users',
+                _active_eots_prefetch(),
+                _scl_project_dates_prefetch(),
             )
 
         # Hide merged duplicates from normal lists/dropdowns unless explicitly requested.
@@ -159,7 +204,18 @@ class ProjectViewSet(viewsets.ModelViewSet):
             save_kwargs["status"] = "active"
         if is_admin_user(user):
             save_kwargs["pmc_head"] = user
-        serializer.save(**save_kwargs)
+        project = serializer.save(**save_kwargs)
+        from core.business_audit import write_business_audit
+        from core.models import BusinessAuditLog
+
+        write_business_audit(
+            entity_type=BusinessAuditLog.ENTITY_PROJECT,
+            action=BusinessAuditLog.ACTION_CREATED,
+            actor=user,
+            entity_id=project.pk,
+            project=project,
+            detail=f"Project '{project.name}' created",
+        )
 
     @action(detail=False, methods=["get"], url_path="dropdown")
     def dropdown(self, request):
@@ -821,14 +877,31 @@ class ProjectViewSet(viewsets.ModelViewSet):
             project.team_lead = team_lead
             project.save()
 
+            from core.business_audit import write_business_audit
+            from core.models import BusinessAuditLog
+
+            write_business_audit(
+                entity_type=BusinessAuditLog.ENTITY_ASSIGNMENT,
+                action=BusinessAuditLog.ACTION_ASSIGNED,
+                actor=request.user,
+                entity_id=project.pk,
+                project=project,
+                detail=f"Team Leader {team_lead.username} assigned",
+            )
+
             serializer = ProjectSerializer(project, context={'request': request})
             return Response({
                 'success': True,
                 'message': f'Team Leader {team_lead.username} assigned successfully',
                 'project': serializer.data
             })
-        except Exception as e:
-            return Response({'error': str(e)}, status=400)
+        except Exception:
+            logger = __import__("logging").getLogger(__name__)
+            logger.exception("assign_team_lead failed project_id=%s", project.pk)
+            return Response(
+                {'error': 'Failed to assign team lead. Please verify the user and try again.'},
+                status=400,
+            )
 
     @action(detail=True, methods=['post'], url_path='add-site-engineers')
     def add_site_engineers(self, request, pk=None):
@@ -1303,7 +1376,7 @@ class SiteViewSet(viewsets.ModelViewSet):
         # was prior behaviour for live dropdowns.
         qs = Site.objects.select_related("project").exclude(
             project__status__in=["merged", "on_hold"]
-        )
+        ).order_by("-created_at", "name")
         # Keep completed project sites visible for historical views.
         project_id = self.request.query_params.get("project_id")
         if project_id:

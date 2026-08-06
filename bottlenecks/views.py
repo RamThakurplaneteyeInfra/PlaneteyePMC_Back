@@ -6,9 +6,10 @@ from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from accounts.permissions import IsAuthenticatedProjectRBAC
+from accounts.rbac import RBACDomain, filter_queryset_by_project_access
 from accounts.rbac_checks import enforce_project_access
 from core.cache_keys import build_rbac_list_cache_key
 from core.cache_ops import TTL_DASHBOARD
@@ -33,11 +34,12 @@ class BottleneckViewSet(viewsets.ModelViewSet):
     """
 
     serializer_class = BottleneckSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticatedProjectRBAC]
+    rbac_domain = RBACDomain.GENERAL
     filterset_class = BottleneckFilter
 
     def get_queryset(self):
-        return (
+        qs = (
             Bottleneck.objects.select_related(
                 "project",
                 "assigned_to",
@@ -47,6 +49,7 @@ class BottleneckViewSet(viewsets.ModelViewSet):
             .all()
             .order_by("-created_at")
         )
+        return filter_queryset_by_project_access(qs, self.request.user, "project")
 
     def _invalidate_caches(self):
         invalidate_tags("bottlenecks", "overview")

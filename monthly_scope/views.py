@@ -17,7 +17,9 @@ class ScopeCategoryViewSet(viewsets.ReadOnlyModelViewSet):
     """
     ViewSet for Scope Categories
     """
-    queryset = ScopeCategory.objects.filter(is_active=True)
+    queryset = ScopeCategory.objects.filter(is_active=True).prefetch_related(
+        "subcategories"
+    )
     serializer_class = ScopeCategorySerializer
     permission_classes = [IsAuthenticated]
 
@@ -103,10 +105,12 @@ class MonthlyScopeWorkViewSet(viewsets.ModelViewSet):
                 assigned_count += 1
 
     def perform_create(self, serializer):
-        scope = serializer.save(created_by=self.request.user)
+        from django.db import transaction
 
-        # Automatic assignment to Site Engineers only
-        self._assign_scope_to_site_engineers(scope)
+        with transaction.atomic():
+            scope = serializer.save(created_by=self.request.user)
+            # Automatic assignment to Site Engineers only
+            self._assign_scope_to_site_engineers(scope)
 
     def perform_update(self, serializer):
         serializer.save(updated_by=self.request.user)

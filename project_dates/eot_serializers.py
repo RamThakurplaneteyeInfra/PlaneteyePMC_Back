@@ -105,16 +105,36 @@ class ProjectEOTSerializer(serializers.Serializer):
     # -------------------------------------------------------------------------
 
     def _schedule_row(self, obj: ProjectEOT) -> ProjectDates | None:
+        if getattr(obj, "_schedule_row_resolved", False):
+            return getattr(obj, "_cached_schedule_row", None)
+
+        row: ProjectDates | None = None
         if obj.project_dates_id:
-            return obj.project_dates
-        return (
-            ProjectDates.objects.filter(
-                project_id=obj.project_id,
-                date_type=ProjectDates.DATE_TYPE_SCL,
-            )
-            .order_by("id")
-            .first()
-        )
+            row = obj.project_dates
+        else:
+            project = None
+            # Prefer already-loaded project with SCL prefetch (project list).
+            try:
+                project = obj.project
+            except Exception:
+                project = None
+            scl = getattr(project, "_prefetched_scl_dates", None) if project else None
+            if scl is not None:
+                row = scl[0] if scl else None
+            elif obj.project_id:
+                row = (
+                    ProjectDates.objects.filter(
+                        project_id=obj.project_id,
+                        date_type=ProjectDates.DATE_TYPE_SCL,
+                    )
+                    .select_related("contractor")
+                    .order_by("id")
+                    .first()
+                )
+
+        obj._cached_schedule_row = row
+        obj._schedule_row_resolved = True
+        return row
 
     def _user_name(self, user) -> str | None:
         if not user:

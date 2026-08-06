@@ -12,8 +12,9 @@ def get_user_role(user):
     if not user or not user.is_authenticated:
         return None
 
-    groups = user.groups.all()
-    if not groups.exists():
+    # Prefer prefetched groups (one query / in-memory) over N× exists() hits.
+    group_names = {g.name for g in user.groups.all()}
+    if not group_names:
         return None
 
     # Priority: CEO > Head Office > PMC Head > Team Leader > PMC Manager > Site Engineers
@@ -32,7 +33,7 @@ def get_user_role(user):
     ]
 
     for role in role_priority:
-        if groups.filter(name=role).exists():
+        if role in group_names:
             if role in ("HO",):
                 return "Head Office"
             if role == "Coordinator":

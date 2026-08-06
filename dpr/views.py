@@ -268,7 +268,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                     "errors": [
                         {
                             "field": "non_field_errors",
-                            "message": str(e) or "Unexpected error while saving the DPR.",
+                            "message": "Unexpected error while saving the DPR.",
                         }
                     ],
                 },
@@ -276,6 +276,18 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
             )
 
         headers = self.get_success_headers(serializer.data)
+
+        from core.business_audit import write_business_audit
+        from core.models import BusinessAuditLog
+
+        write_business_audit(
+            entity_type=BusinessAuditLog.ENTITY_DPR,
+            action=BusinessAuditLog.ACTION_CREATED,
+            actor=request.user,
+            entity_id=instance.pk,
+            project_name=instance.project_name or "",
+            detail=f"DPR created for {instance.project_name} on {instance.report_date}",
+        )
 
         # Trigger notification if DPR was created directly in a pending state
         # (some frontends may bypass the separate /submit/ endpoint)
@@ -546,10 +558,22 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                 )
                 notify_dpr_submitted(dpr, is_resubmit=is_resubmit)
 
+                from core.business_audit import write_business_audit
+                from core.models import BusinessAuditLog
+
+                write_business_audit(
+                    entity_type=BusinessAuditLog.ENTITY_DPR,
+                    action=BusinessAuditLog.ACTION_SUBMITTED,
+                    actor=request.user,
+                    entity_id=dpr.pk,
+                    project_name=dpr.project_name or "",
+                    detail="DPR submitted" + (" (resubmit)" if is_resubmit else ""),
+                )
+
                 serializer = self.get_serializer(dpr)
                 return Response(serializer.data, status=status.HTTP_200_OK)
 
-        except Exception as e:
+        except Exception:
             logger.exception("DPR submit failed for dpr_id=%s", dpr.id)
             return Response(
                 {
@@ -558,7 +582,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                     "errors": [
                         {
                             "field": "non_field_errors",
-                            "message": str(e) or "Unexpected error while submitting the DPR.",
+                            "message": "Unexpected error while submitting the DPR.",
                         }
                     ],
                 },
@@ -607,6 +631,18 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         safe_cache_delete_pattern("dpr_pending_approval:*")
         safe_cache_delete_pattern("dpr_rejected:*")
 
+        from core.business_audit import write_business_audit
+        from core.models import BusinessAuditLog
+
+        write_business_audit(
+            entity_type=BusinessAuditLog.ENTITY_DPR,
+            action=BusinessAuditLog.ACTION_APPROVED,
+            actor=request.user,
+            entity_id=dpr.pk,
+            project_name=dpr.project_name or "",
+            detail="Approved by Team Leader",
+        )
+
         serializer = self.get_serializer(dpr)
         return Response(serializer.data)
 
@@ -653,6 +689,18 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         safe_cache_delete_pattern("dpr_pending_approval:*")
         safe_cache_delete_pattern("dpr_rejected:*")
 
+        from core.business_audit import write_business_audit
+        from core.models import BusinessAuditLog
+
+        write_business_audit(
+            entity_type=BusinessAuditLog.ENTITY_DPR,
+            action=BusinessAuditLog.ACTION_APPROVED,
+            actor=request.user,
+            entity_id=dpr.pk,
+            project_name=dpr.project_name or "",
+            detail="Approved by PMC Manager",
+        )
+
         serializer = self.get_serializer(dpr)
         return Response(serializer.data)
 
@@ -696,6 +744,18 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         safe_cache_delete_pattern("dpr_list:*")
         safe_cache_delete_pattern("dpr_pending_approval:*")
         safe_cache_delete_pattern("dpr_rejected:*")
+
+        from core.business_audit import write_business_audit
+        from core.models import BusinessAuditLog
+
+        write_business_audit(
+            entity_type=BusinessAuditLog.ENTITY_DPR,
+            action=BusinessAuditLog.ACTION_APPROVED,
+            actor=request.user,
+            entity_id=dpr.pk,
+            project_name=dpr.project_name or "",
+            detail="Approved by PMC Head (final)",
+        )
 
         serializer = self.get_serializer(dpr)
         return Response(serializer.data)
@@ -768,6 +828,18 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         safe_cache_delete_pattern("dpr_list:*")
         safe_cache_delete_pattern("dpr_pending_approval:*")
         safe_cache_delete_pattern("dpr_rejected:*")
+
+        from core.business_audit import write_business_audit
+        from core.models import BusinessAuditLog
+
+        write_business_audit(
+            entity_type=BusinessAuditLog.ENTITY_DPR,
+            action=BusinessAuditLog.ACTION_REJECTED,
+            actor=request.user,
+            entity_id=dpr.pk,
+            project_name=dpr.project_name or "",
+            detail=f"Rejected by {rejected_by_role or 'approver'}",
+        )
 
         serializer = self.get_serializer(dpr)
         return Response(serializer.data)

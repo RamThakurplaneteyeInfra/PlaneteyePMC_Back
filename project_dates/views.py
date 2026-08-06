@@ -258,7 +258,9 @@ class ProjectDatesViewSet(viewsets.ModelViewSet):
     All duration fields are calculated fresh on every read — never stored.
     """
 
-    queryset = ProjectDates.objects.select_related("project").prefetch_related(
+    queryset = ProjectDates.objects.select_related(
+        "project", "contractor"
+    ).prefetch_related(
         Prefetch(
             "bg_statuses",
             queryset=BGStatus.objects.order_by("id"),

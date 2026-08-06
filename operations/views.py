@@ -10,26 +10,27 @@ class TaskViewSet(viewsets.ModelViewSet):
     queryset = Task.objects.all()
     serializer_class = TaskSerializer
     def get_queryset(self):
+        base = Task.objects.select_related("site", "assigned_to")
         # Filter tasks by site if site_id is provided
         site_id = self.request.query_params.get('site_id')
         if site_id:
-            return Task.objects.filter(site_id=site_id)
-        
+            return base.filter(site_id=site_id)
+
         # Role-based filtering for tasks
         user = self.request.user
         if is_admin_user(user):
-            return Task.objects.all()
+            return base.all()
         elif user.groups.filter(name='Team Leader').exists():
             # Team lead sees tasks from their assigned projects
             from projects.models import Project
             project_ids = Project.objects.filter(team_lead=user).values_list('id', flat=True)
             site_ids = Task.objects.filter(project_id__in=project_ids).values_list('site_id', flat=True)
-            return Task.objects.filter(site_id__in=site_ids)
+            return base.filter(site_id__in=site_ids)
         elif user.groups.filter(name__in=['Site Engineer', 'Billing Site Engineer', 'QAQC Site Engineer']).exists():
             # Site engineer sees only their assigned tasks
-            return Task.objects.filter(assigned_to=user)
-        
-        return Task.objects.all()
+            return base.filter(assigned_to=user)
+
+        return base.all()
 
 
 class DailyProgressReportViewSet(viewsets.ModelViewSet):
@@ -49,27 +50,30 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         is_team_lead = user.groups.filter(name='Team Leader').exists()
         is_site_engineer = user.groups.filter(name__in=['Site Engineer', 'Billing Site Engineer', 'QAQC Site Engineer']).exists()
         
+        base = DailyProgressReport.objects.select_related(
+            "task", "site", "project", "submitted_by", "approved_by"
+        )
         # Filter by task_id if provided
         task_id = self.request.query_params.get('task_id')
         if task_id:
-            return DailyProgressReport.objects.filter(task_id=task_id)
-        
+            return base.filter(task_id=task_id)
+
         # Admin sees all
         if is_admin:
-            return DailyProgressReport.objects.all().order_by('-created_at')
-        
+            return base.all().order_by('-created_at')
+
         # Team Lead sees DPRs from their projects
         if is_team_lead:
             from projects.models import Project
             project_ids = Project.objects.filter(team_lead=user).values_list('id', flat=True)
-            return DailyProgressReport.objects.filter(project_id__in=project_ids).order_by('-created_at')
-        
+            return base.filter(project_id__in=project_ids).order_by('-created_at')
+
         # Site Engineer sees only their own DPRs
         if is_site_engineer:
-            return DailyProgressReport.objects.filter(submitted_by=user).order_by('-created_at')
-        
+            return base.filter(submitted_by=user).order_by('-created_at')
+
         # Default: return all (for backward compatibility)
-        return DailyProgressReport.objects.all().order_by('-created_at')
+        return base.all().order_by('-created_at')
 
     def perform_create(self, serializer):
         """Automatically set the submitted_by user to the current user."""

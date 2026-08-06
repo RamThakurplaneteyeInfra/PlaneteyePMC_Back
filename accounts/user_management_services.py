@@ -242,6 +242,65 @@ def get_assigned_projects_for_user(user: User) -> list[Project]:
     )
 
 
+def get_assigned_projects_for_users(users: list[User]) -> dict[int, list[Project]]:
+    """
+    Bulk variant of get_assigned_projects_for_user — one query for many users.
+    Returns {user_id: [Project, ...]} preserving name ordering.
+    """
+    from django.db.models import Q
+
+    if not users:
+        return {}
+    user_ids = [u.id for u in users]
+    q = (
+        Q(team_lead_id__in=user_ids)
+        | Q(site_engineer_id__in=user_ids)
+        | Q(billing_site_engineer_id__in=user_ids)
+        | Q(qaqc_site_engineer_id__in=user_ids)
+        | Q(hse_site_engineer_id__in=user_ids)
+        | Q(site_engineers__id__in=user_ids)
+        | Q(assigned_users__id__in=user_ids)
+    )
+    projects = list(
+        Project.objects.filter(q)
+        .distinct()
+        .only(
+            "id",
+            "name",
+            "status",
+            "team_lead_id",
+            "site_engineer_id",
+            "billing_site_engineer_id",
+            "qaqc_site_engineer_id",
+            "hse_site_engineer_id",
+        )
+        .order_by("name")
+        .prefetch_related("site_engineers", "assigned_users")
+    )
+    result: dict[int, list[Project]] = {uid: [] for uid in user_ids}
+    for project in projects:
+        matched: set[int] = set()
+        if project.team_lead_id in result:
+            matched.add(project.team_lead_id)
+        if project.site_engineer_id in result:
+            matched.add(project.site_engineer_id)
+        if project.billing_site_engineer_id in result:
+            matched.add(project.billing_site_engineer_id)
+        if project.qaqc_site_engineer_id in result:
+            matched.add(project.qaqc_site_engineer_id)
+        if project.hse_site_engineer_id in result:
+            matched.add(project.hse_site_engineer_id)
+        for u in project.site_engineers.all():
+            if u.id in result:
+                matched.add(u.id)
+        for u in project.assigned_users.all():
+            if u.id in result:
+                matched.add(u.id)
+        for uid in matched:
+            result[uid].append(project)
+    return result
+
+
 def log_user_management_action(
     *,
     performed_by,

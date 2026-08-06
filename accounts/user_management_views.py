@@ -35,6 +35,7 @@ from accounts.user_management_services import (
     assign_user_to_projects,
     create_managed_user,
     get_assigned_projects_for_user,
+    get_assigned_projects_for_users,
     log_user_management_action,
     resolve_projects,
     set_managed_user_password,
@@ -168,7 +169,12 @@ class ManagedUserViewSet(viewsets.ViewSet):
         start = (page - 1) * page_size
         end = start + page_size
         items = list(qs[start:end])
-        data = ManagedUserSerializer(items, many=True).data
+        assigned_map = get_assigned_projects_for_users(items)
+        data = ManagedUserSerializer(
+            items,
+            many=True,
+            context={"assigned_projects_by_user": assigned_map},
+        ).data
 
         return _ok(
             "Users retrieved successfully.",

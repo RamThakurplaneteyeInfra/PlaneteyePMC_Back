@@ -63,7 +63,11 @@ class ManagedUserSerializer(serializers.ModelSerializer):
         return "active" if obj.is_active else "inactive"
 
     def get_assigned_projects(self, obj):
-        projects = get_assigned_projects_for_user(obj)
+        mapping = self.context.get("assigned_projects_by_user")
+        if mapping is not None:
+            projects = mapping.get(obj.id, [])
+        else:
+            projects = get_assigned_projects_for_user(obj)
         return ManagedUserProjectSerializer(projects, many=True).data
 
 

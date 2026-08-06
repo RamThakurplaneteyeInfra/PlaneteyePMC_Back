@@ -22,8 +22,10 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from accounts.permissions import IsAuthenticatedProjectRBAC
-from accounts.rbac import RBACDomain
+from accounts.rbac import RBACDomain, filter_queryset_by_project_access
 from contractors.resolvers import resolve_project_for_module
+from core.business_audit import write_business_audit
+from core.models import BusinessAuditLog
 from project_dates.eot_filters import ProjectEOTFilter
 from project_dates.eot_models import ProjectEOT
 from project_dates.eot_serializers import ProjectEOTSerializer
@@ -112,7 +114,13 @@ class ProjectEOTViewSet(viewsets.ModelViewSet):
         ).lower() in ("1", "true", "yes")
         if not show_inactive and self.action in ("list", "by_project"):
             qs = qs.filter(is_active=True)
-        return qs
+        return filter_queryset_by_project_access(
+            qs, self.request.user, "project__name"
+        )
+
+    def _get_eot_or_404(self, pk):
+        """Use RBAC-filtered queryset (prevents IDOR via direct pk access)."""
+        return self.filter_queryset(self.get_queryset()).get(pk=pk)
 
     def _success(self, message, data, http_status=status.HTTP_200_OK):
         return Response(
@@ -142,7 +150,7 @@ class ProjectEOTViewSet(viewsets.ModelViewSet):
 
     def retrieve(self, request, *args, **kwargs):
         try:
-            instance = self.get_queryset().get(pk=kwargs["pk"])
+            instance = self._get_eot_or_404(kwargs["pk"])
         except ProjectEOT.DoesNotExist:
             return self._error(
                 "EOT record not found", http_status=status.HTTP_404_NOT_FOUND
@@ -161,10 +169,19 @@ class ProjectEOTViewSet(viewsets.ModelViewSet):
         except DjangoValidationError as exc:
             return self._error(
                 "Validation failed",
-                errors=getattr(exc, "message_dict", str(exc)),
+                errors=getattr(exc, "message_dict", None)
+                or {"non_field_errors": ["Validation failed."]},
             )
         sync_legacy_eot_date(instance.project)
         invalidate_eot_caches()
+        write_business_audit(
+            entity_type=BusinessAuditLog.ENTITY_EOT,
+            action=BusinessAuditLog.ACTION_CREATED,
+            actor=request.user,
+            entity_id=instance.pk,
+            project=instance.project,
+            detail=f"EOT #{instance.eot_number} created",
+        )
         return self._success(
             "EOT created successfully",
             self.get_serializer(instance).data,
@@ -174,7 +191,7 @@ class ProjectEOTViewSet(viewsets.ModelViewSet):
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", False)
         try:
-            instance = self.get_queryset().get(pk=kwargs["pk"])
+            instance = self._get_eot_or_404(kwargs["pk"])
         except ProjectEOT.DoesNotExist:
             return self._error(
                 "EOT record not found", http_status=status.HTTP_404_NOT_FOUND
@@ -192,10 +209,19 @@ class ProjectEOTViewSet(viewsets.ModelViewSet):
         except DjangoValidationError as exc:
             return self._error(
                 "Validation failed",
-                errors=getattr(exc, "message_dict", str(exc)),
+                errors=getattr(exc, "message_dict", None)
+                or {"non_field_errors": ["Validation failed."]},
             )
         sync_legacy_eot_date(updated.project)
         invalidate_eot_caches()
+        write_business_audit(
+            entity_type=BusinessAuditLog.ENTITY_EOT,
+            action=BusinessAuditLog.ACTION_UPDATED,
+            actor=request.user,
+            entity_id=updated.pk,
+            project=updated.project,
+            detail=f"EOT #{updated.eot_number} updated",
+        )
         return self._success(
             "EOT updated successfully",
             self.get_serializer(updated).data,
@@ -207,7 +233,7 @@ class ProjectEOTViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         try:
-            instance = self.get_queryset().get(pk=kwargs["pk"])
+            instance = self._get_eot_or_404(kwargs["pk"])
         except ProjectEOT.DoesNotExist:
             return self._error(
                 "EOT record not found", http_status=status.HTTP_404_NOT_FOUND
@@ -215,9 +241,18 @@ class ProjectEOTViewSet(viewsets.ModelViewSet):
         if not instance.is_active:
             return self._error("EOT is already inactive.")
         project = instance.project
+        eot_number = instance.eot_number
         soft_delete_eot(instance, user=request.user)
+        write_business_audit(
+            entity_type=BusinessAuditLog.ENTITY_EOT,
+            action=BusinessAuditLog.ACTION_DELETED,
+            actor=request.user,
+            entity_id=instance.pk,
+            project=project,
+            detail=f"EOT #{eot_number} soft-deleted",
+        )
         return self._success(
-            f"EOT #{instance.eot_number} for '{project.name}' deleted successfully",
+            f"EOT #{eot_number} for '{project.name}' deleted successfully",
             {},
         )
 
@@ -235,7 +270,12 @@ class ProjectEOTViewSet(viewsets.ModelViewSet):
         name = unquote(projectName or "").strip()
         try:
             project = resolve_project_for_module(name)
-        except Exception as exc:
-            return self._error(str(exc), http_status=status.HTTP_404_NOT_FOUND)
+        except Exception:
+            return self._error(
+                "Project not found", http_status=status.HTTP_404_NOT_FOUND
+            )
+        from accounts.rbac_checks import enforce_project_access
+
+        enforce_project_access(request.user, project)
         summary = project_eot_summary(project)
         return self._success("Project EOT summary retrieved successfully", summary)

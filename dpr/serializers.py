@@ -260,17 +260,15 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
                                     existing_activity.next_day_planned_work = activity_data.get('next_day_planned_work', '')
                                     existing_activity.remarks = activity_data.get('remarks', '')
                                     existing_activity.save()
-                                    activity_id = existing_activity.id
                                 else:
                                     # Create new activity
                                     activity = DPRActivity(dpr=dpr, **activity_data)
                                     activity.save()
                                     activities_added += 1
-                                    activity_id = activity.id
 
-                                # Update progress for this scope (draft counts)
-                                from monthly_scope.services import ScopeProgressService
-                                ScopeProgressService.update_dpr_activity_progress(activity_id)
+                    # One recalculation pass per distinct scope (same formulas).
+                    from monthly_scope.services import ScopeProgressService
+                    ScopeProgressService.recalculate_for_dpr(dpr)
 
                     # Update DPR timestamp
                     dpr.save(update_fields=['updated_at'])
@@ -288,15 +286,14 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
                     validated_data['created_by'] = current_user
                     dpr = DailyProgressReport.objects.create(**validated_data)
 
-                    # Create associated activities with progress updates
                     if activities_data:
                         for activity_data in activities_data:
                             activity = DPRActivity(dpr=dpr, **activity_data)
                             activity.save()
 
-                            # Update progress for this scope (draft counts)
-                            from monthly_scope.services import ScopeProgressService
-                            ScopeProgressService.update_dpr_activity_progress(activity.id)
+                    # One recalculation pass per distinct scope (same formulas).
+                    from monthly_scope.services import ScopeProgressService
+                    ScopeProgressService.recalculate_for_dpr(dpr)
 
                     if hasattr(dpr, "_prefetched_objects_cache"):
                         dpr._prefetched_objects_cache = {}
@@ -312,11 +309,11 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
             })
         except serializers.ValidationError:
             raise
-        except Exception as e:
+        except Exception:
             from rest_framework.exceptions import ValidationError
             raise ValidationError({
                 'non_field_errors': [
-                    str(e) or 'Unexpected error while saving the DPR.'
+                    'Unexpected error while saving the DPR.'
                 ]
             })
 
@@ -343,29 +340,19 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
                             scopes_to_update.add(activity.scope.id)
                     existing_activities.delete()
 
-                    # Update progress for affected scopes
                     from monthly_scope.services import ScopeProgressService
-                    for scope_id in scopes_to_update:
-                        ScopeProgressService.update_scope_progress(scope_id)
 
                     # Bulk create new activities
                     if activities_data:
-                        activities = []
-                        for activity_data in activities_data:
-                            activity = DPRActivity(dpr=instance, **activity_data)
-                            activities.append(activity)
-
+                        activities = [
+                            DPRActivity(dpr=instance, **activity_data)
+                            for activity_data in activities_data
+                        ]
                         DPRActivity.objects.bulk_create(activities)
 
-                        # Update progress for new activities
-                        for activity_data in activities_data:
-                            if 'scope' in activity_data:
-                                scope = activity_data['scope']
-                                created_activity = DPRActivity.objects.filter(
-                                    dpr=instance, scope=scope
-                                ).first()
-                                if created_activity:
-                                    ScopeProgressService.update_dpr_activity_progress(created_activity.id)
+                    # Recalc scopes removed by delete + scopes on the new activities.
+                    ScopeProgressService.recalculate_scopes(scopes_to_update)
+                    ScopeProgressService.recalculate_for_dpr(instance)
 
                 if hasattr(instance, "_prefetched_objects_cache"):
                     instance._prefetched_objects_cache = {}
@@ -378,4 +365,8 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
         except Exception as e:
             # Re-raise as ValidationError for better API response
             from rest_framework.exceptions import ValidationError
-            raise ValidationError({'non_field_errors': [str(e)]})
+            raise ValidationError({
+                'non_field_errors': [
+                    'Unexpected error while saving the DPR.'
+                ]
+            }) from e

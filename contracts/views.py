@@ -50,26 +50,19 @@ def _normalize_role_input(role_input: str) -> str | None:
 
 def _get_role_from_request(request) -> str | None:
     """
-    Role extraction with case-insensitive normalization.
-    Supports multiple input methods for flexibility.
+    Resolve the caller's role for permission checks.
 
-    Priority order:
-    1. request.data['role'] (for POST/PUT bodies)
-    2. query param: ?role=ceo (for GET requests)
-    3. header: X-Role: ceo (fallback)
-
-    All inputs are normalized to canonical role names.
+    Authorization MUST use the authenticated user's role only.
+    Client-supplied role (body / query / X-Role) is ignored for access control
+    so callers cannot spoof elevated privileges. FE may still send `role` for
+    display; it is not used for gates.
     """
-    role = None
-    try:
-        role = request.data.get("role")
-    except Exception:
-        role = None
-    if not role:
-        role = request.query_params.get("role") or request.headers.get("X-Role")
+    user = getattr(request, "user", None)
+    if not user or not user.is_authenticated:
+        return None
+    from accounts.utils import get_user_role
 
-    # Normalize role input to canonical values
-    return _normalize_role_input(role)
+    return get_user_role(user)
 
 
 class ContractViewSet(viewsets.ModelViewSet):

@@ -41,8 +41,23 @@ CACHE_HARD_TTL_SECONDS = TTL_OVERVIEW * 2
 
 
 def invalidate_project_overview_cache() -> None:
-    # Version-bump overview + dropdown via tag groups (no Redis FLUSH).
+    """
+    Invalidate overview cards + dropdown/project list caches.
+
+    Prefer invalidate_overview_kpi_cache() for KPI source-model writes so
+    dropdown/init-list are not churned on every DPR/cost/quality update.
+    """
     invalidate_tags("overview", "dropdown", "projects")
+
+
+def invalidate_overview_kpi_cache() -> None:
+    """Invalidate only overview card cache (KPI aggregates)."""
+    invalidate_tags("overview")
+
+
+def invalidate_project_directory_cache() -> None:
+    """Invalidate dropdown / init-list style project directory caches."""
+    invalidate_tags("dropdown", "projects")
 
 
 class ProjectOverviewService:
@@ -192,6 +207,22 @@ class ProjectOverviewService:
                 ordering=ordering,
             )
 
+    # Orderings that can be applied in SQL before KPI build (page-then-aggregate).
+    _DB_ORDERING_MAP = {
+        "name": "name",
+        "-name": "-name",
+        "updated_at": "updated_at",
+        "-updated_at": "-updated_at",
+        "status": "status",
+        "-status": "-status",
+        "client_name": "client_name",
+        "-client_name": "-client_name",
+        "client": "client_name",
+        "-client": "-client_name",
+        "project_name": "name",
+        "-project_name": "-name",
+    }
+
     def _build_payload_inner(
         self,
         *,
@@ -206,16 +237,37 @@ class ProjectOverviewService:
         project_name: str,
         ordering: str,
     ) -> dict[str, Any]:
-        projects = list(
-            self._filtered_queryset(
-                search=search,
-                client=client,
-                status=status,
-                billing_status=billing_status,
-                project_type=project_type,
-                project_name=project_name,
-            )
+        qs = self._filtered_queryset(
+            search=search,
+            client=client,
+            status=status,
+            billing_status=billing_status,
+            project_type=project_type,
+            project_name=project_name,
         )
+
+        order_key = (ordering or self.DEFAULT_ORDERING).strip()
+        db_order = self._DB_ORDERING_MAP.get(order_key)
+
+        # Paginated + DB-sortable: count + page in SQL, KPI only for that page.
+        # Preserves health_score formulas; health_score ordering still needs full build.
+        if paginate and db_order:
+            total = qs.count()
+            page_qs = qs.order_by(db_order, "id")
+            start = (page - 1) * page_size
+            projects = list(page_qs[start : start + page_size])
+            cards = self._build_cards(projects)
+            return {
+                "success": True,
+                "message": "Project overview retrieved successfully.",
+                "data": cards,
+                "count": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": (total + page_size - 1) // page_size if page_size else 0,
+            }
+
+        projects = list(qs)
         cards = self._build_cards(projects)
         cards = self._sort_cards(cards, ordering)
 
@@ -335,15 +387,40 @@ class ProjectOverviewService:
         project_ids = [p.id for p in projects]
         project_names = [p.name for p in projects]
 
-        progress_by_name = self._latest_progress_by_name(project_names)
-        scope_pct_by_id = self._scope_progress_by_project_id(project_ids)
-        schedule_by_id = self._schedule_dates_by_project_id(project_ids)
-        eot_by_id = self._latest_approved_eot_date_by_project_id(project_ids)
-        cost_by_id = self._latest_cost_by_project_id(project_ids)
-        quality_by_name = self._latest_quality_by_name(project_names)
-        safety_by_name = self._safety_by_name(project_names)
-        issues_by_id = self._issue_counts_by_project_id(project_ids)
-        dpr_by_name = self._dpr_counts_by_name(project_names)
+        # Overlap independent KPI source queries (same formulas; lower wall time
+        # when DB RTT dominates, e.g. remote Neon).
+        from concurrent.futures import ThreadPoolExecutor
+        from django.db import close_old_connections
+
+        def _run(fn, *args):
+            close_old_connections()
+            try:
+                return fn(*args)
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            f_progress = pool.submit(_run, self._latest_progress_by_name, project_names)
+            f_scope = pool.submit(_run, self._scope_progress_by_project_id, project_ids)
+            f_schedule = pool.submit(_run, self._schedule_dates_by_project_id, project_ids)
+            f_eot = pool.submit(
+                _run, self._latest_approved_eot_date_by_project_id, project_ids
+            )
+            f_cost = pool.submit(_run, self._latest_cost_by_project_id, project_ids)
+            f_quality = pool.submit(_run, self._latest_quality_by_name, project_names)
+            f_safety = pool.submit(_run, self._safety_by_name, project_names)
+            f_issues = pool.submit(_run, self._issue_counts_by_project_id, project_ids)
+            f_dpr = pool.submit(_run, self._dpr_counts_by_name, project_names)
+
+            progress_by_name = f_progress.result()
+            scope_pct_by_id = f_scope.result()
+            schedule_by_id = f_schedule.result()
+            eot_by_id = f_eot.result()
+            cost_by_id = f_cost.result()
+            quality_by_name = f_quality.result()
+            safety_by_name = f_safety.result()
+            issues_by_id = f_issues.result()
+            dpr_by_name = f_dpr.result()
 
         cards: list[dict[str, Any]] = []
         for project in projects:

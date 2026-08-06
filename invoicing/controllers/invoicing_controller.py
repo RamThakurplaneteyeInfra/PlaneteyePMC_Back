@@ -294,11 +294,14 @@ def _build_queryset(
         invoice_type : exact invoice type filter (SCL | CONTRACTOR; legacy PMC/Contractor accepted)
         search       : free-text search across project_name
     """
-    qs = InvoicingInformation.objects.only(
+    qs = InvoicingInformation.objects.select_related("contractor").only(
         "id",
         "project_name",
         "invoice_type",
         "contractor_name",
+        "contractor_id",
+        "contractor__id",
+        "contractor__contractor_name",
         "gross_billed",
         "gross_certified_billed",
         "created_at",

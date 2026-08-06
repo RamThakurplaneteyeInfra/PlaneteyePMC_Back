@@ -95,6 +95,8 @@ class TestingDocumentViewSet(viewsets.ModelViewSet):
         qs = TestingDocument.objects.filter(is_active=True).select_related(
             "project",
             "uploaded_by",
+        ).prefetch_related(
+            "uploaded_by__groups",
         )
         return filter_queryset_by_project_access(qs, self.request.user, "project")
 

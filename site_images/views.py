@@ -159,7 +159,7 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
     rbac_domain = RBACDomain.ENGINEERING
 
     def get_queryset(self):
-        qs = SiteProgressImage.objects.all()
+        qs = SiteProgressImage.objects.select_related("uploaded_by")
         project_name = self.request.query_params.get("project_name")
         if project_name:
             qs = qs.filter(project_name__icontains=project_name.strip())
@@ -295,34 +295,32 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
         pending_records: list[SiteProgressImage] = []
 
         try:
+            # Upload to S3/Cloudinary outside the DB transaction so network I/O
+            # does not hold a Neon connection open (matches testing_documents).
+            for index, uploaded_file in enumerate(files):
+                result = upload_image(uploaded_file, folder=folder)
+                storage_key = result["public_id"]
+                storage_backend = result.get(
+                    "storage_backend",
+                    SiteProgressImage.STORAGE_S3,
+                )
+                uploaded_assets.append((storage_key, storage_backend))
+                pending_records.append(
+                    SiteProgressImage(
+                        project_name=project_name,
+                        month=month,
+                        year=year,
+                        title=titles[index] if index < len(titles) else "",
+                        image_url=result["secure_url"],
+                        cloudinary_public_id=storage_key,
+                        storage_backend=storage_backend,
+                        uploaded_by=(
+                            request.user if request.user.is_authenticated else None
+                        ),
+                    )
+                )
+
             with transaction.atomic():
-                for index, uploaded_file in enumerate(files):
-                    try:
-                        result = upload_image(uploaded_file, folder=folder)
-                    except ValueError as exc:
-                        raise ValueError(str(exc)) from exc
-
-                    storage_key = result["public_id"]
-                    storage_backend = result.get(
-                        "storage_backend",
-                        SiteProgressImage.STORAGE_S3,
-                    )
-                    uploaded_assets.append((storage_key, storage_backend))
-                    pending_records.append(
-                        SiteProgressImage(
-                            project_name=project_name,
-                            month=month,
-                            year=year,
-                            title=titles[index] if index < len(titles) else "",
-                            image_url=result["secure_url"],
-                            cloudinary_public_id=storage_key,
-                            storage_backend=storage_backend,
-                            uploaded_by=(
-                                request.user if request.user.is_authenticated else None
-                            ),
-                        )
-                    )
-
                 created_records = SiteProgressImage.objects.bulk_create(pending_records)
         except ValueError as exc:
             for storage_key, storage_backend in uploaded_assets:
@@ -374,6 +372,18 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
             )
 
         _invalidate_site_image_cache()
+
+        from core.business_audit import write_business_audit
+        from core.models import BusinessAuditLog
+
+        write_business_audit(
+            entity_type=BusinessAuditLog.ENTITY_SITE_IMAGE,
+            action=BusinessAuditLog.ACTION_UPLOADED,
+            actor=request.user,
+            entity_id=",".join(str(r.id) for r in created_records[:20]),
+            project_name=project_name,
+            detail=f"Uploaded {len(created_records)} site image(s) for {month}/{year}",
+        )
 
         data = [
             {
@@ -507,12 +517,24 @@ class SiteProgressImageViewSet(viewsets.ModelViewSet):
             )
             return self._error(
                 f"Failed to delete image from {storage_backend}",
-                errors=str(exc),
                 http_status=status.HTTP_502_BAD_GATEWAY,
             )
 
+        image_id = instance.pk
+        project_name = instance.project_name
         instance.delete()
         _invalidate_site_image_cache()
+        from core.business_audit import write_business_audit
+        from core.models import BusinessAuditLog
+
+        write_business_audit(
+            entity_type=BusinessAuditLog.ENTITY_SITE_IMAGE,
+            action=BusinessAuditLog.ACTION_DELETED,
+            actor=request.user,
+            entity_id=image_id,
+            project_name=project_name or "",
+            detail="Site image deleted",
+        )
         return self._success("Site image deleted successfully", {})
 
     @swagger_auto_schema(

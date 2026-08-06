@@ -208,10 +208,20 @@ class ProjectSerializer(serializers.ModelSerializer):
             )
 
             cur = current_eot(instance)
+            if cur is not None:
+                # Reuse the list-row Project instance (SCL prefetch / no extra project fetch).
+                cur.project = instance
             data["current_eot"] = (
                 ProjectEOTSerializer(cur, context=self.context).data if cur else None
             )
-            data["eot_count"] = active_eots_qs(instance).count()
+            # Prefer prefetched active EOTs to avoid per-row COUNT queries.
+            from project_dates.eot_services import _prefetched_active_eots
+
+            prefetched = _prefetched_active_eots(instance)
+            if prefetched is not None:
+                data["eot_count"] = len(prefetched)
+            else:
+                data["eot_count"] = active_eots_qs(instance).count()
             latest = latest_completion_date(instance)
             data["latest_completion_date"] = latest.isoformat() if latest else None
         except Exception:

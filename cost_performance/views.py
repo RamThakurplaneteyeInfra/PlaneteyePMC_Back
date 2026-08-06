@@ -95,8 +95,24 @@ class ProjectCostPerformanceViewSet(viewsets.ModelViewSet):
     pagination_class = PageNumberPagination
 
     def get_queryset(self):
+        # Include every serializer field in .only() — omitting bac/created_at
+        # triggers deferred-field N+1 (1 extra query per page row).
         qs = ProjectCostPerformance.objects.select_related("project").only(
-            "id", "project__name", "month_year", "bcws", "bcwp", "acwp", "fcst", "eac", "cv", "sv", "cpi", "vac"
+            "id",
+            "project_id",
+            "project__name",
+            "month_year",
+            "bcws",
+            "bcwp",
+            "acwp",
+            "fcst",
+            "eac",
+            "cv",
+            "sv",
+            "cpi",
+            "vac",
+            "bac",
+            "created_at",
         )
         pn = self.request.query_params.get("project_name")
         if pn:

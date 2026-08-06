@@ -22,6 +22,14 @@ def active_eots_qs(project) -> QuerySet:
     return ProjectEOT.objects.filter(project=project, is_active=True)
 
 
+def _prefetched_active_eots(project) -> list | None:
+    """Return active EOTs from prefetch cache when available (avoids N+1)."""
+    cache = getattr(project, "_prefetched_objects_cache", None)
+    if cache is None or "eots" not in cache:
+        return None
+    return [e for e in project.eots.all() if getattr(e, "is_active", True)]
+
+
 def approved_eots_qs(project) -> QuerySet:
     from project_dates.eot_models import ProjectEOT
 
@@ -34,6 +42,21 @@ def next_eot_number(project) -> int:
 
 
 def latest_approved_eot(project):
+    prefetched = _prefetched_active_eots(project)
+    if prefetched is not None:
+        from project_dates.eot_models import ProjectEOT
+
+        approved = [e for e in prefetched if e.status == ProjectEOT.STATUS_APPROVED]
+        if not approved:
+            return None
+        return max(
+            approved,
+            key=lambda e: (
+                e.eot_number,
+                e.revised_completion_date or date.min,
+                e.id,
+            ),
+        )
     return (
         approved_eots_qs(project)
         .select_related("created_by", "updated_by", "project")
@@ -46,6 +69,16 @@ def current_eot(project):
     """
     Prefer latest approved; else latest active (pending) for display.
     """
+    prefetched = _prefetched_active_eots(project)
+    if prefetched is not None:
+        from project_dates.eot_models import ProjectEOT
+
+        approved = [e for e in prefetched if e.status == ProjectEOT.STATUS_APPROVED]
+        pool = approved or prefetched
+        if not pool:
+            return None
+        return max(pool, key=lambda e: (e.eot_number, e.id))
+
     approved = latest_approved_eot(project)
     if approved:
         return approved
@@ -61,10 +94,26 @@ def original_completion_for_project(project) -> date | None:
     """Baseline contract finish: ProjectDates SCL, else Project.contract_finish."""
     from project_dates.models import ProjectDates
 
+    # Prefer prefetch (list APIs attach SCL rows via Prefetch to_attr / related manager).
+    cache = getattr(project, "_prefetched_objects_cache", None)
+    if cache is not None and "project_dates" in cache:
+        for row in project.project_dates.all():
+            if row.date_type == ProjectDates.DATE_TYPE_SCL and row.contract_finish:
+                return row.contract_finish
+        return project.contract_finish
+
+    scl_attr = getattr(project, "_prefetched_scl_dates", None)
+    if scl_attr is not None:
+        for row in scl_attr:
+            if row.contract_finish:
+                return row.contract_finish
+        return project.contract_finish
+
     scl = (
         ProjectDates.objects.filter(
             project=project, date_type=ProjectDates.DATE_TYPE_SCL
         )
+        .only("id", "contract_finish")
         .order_by("id")
         .first()
     )
@@ -177,10 +226,22 @@ def project_eot_summary(project) -> dict[str, Any]:
 
 @transaction.atomic
 def soft_delete_eot(eot, *, user=None) -> None:
+    # Remove supporting document from storage when soft-deleting to avoid orphans.
+    if eot.supporting_document:
+        try:
+            eot.supporting_document.delete(save=False)
+        except Exception:
+            logger.exception(
+                "Failed to delete EOT supporting document eot_id=%s", eot.pk
+            )
+        eot.supporting_document = None
+
     eot.is_active = False
+    update_fields = ["is_active", "supporting_document", "updated_at"]
     if user:
         eot.updated_by = user
-    eot.save(update_fields=["is_active", "updated_by", "updated_at"])
+        update_fields.append("updated_by")
+    eot.save(update_fields=update_fields)
     sync_legacy_eot_date(eot.project)
     invalidate_eot_caches()
 

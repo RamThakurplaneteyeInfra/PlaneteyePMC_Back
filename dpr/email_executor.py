@@ -24,6 +24,7 @@ logger = logging.getLogger("pmc.dpr.email")
 _LOG_PREFIX = "[DPR Email]"
 
 _DEFAULT_MAX_WORKERS = 4
+_DEFAULT_MAX_PENDING = 200
 _SLOW_EMAIL_SEC = 10.0
 
 _init_lock = threading.Lock()
@@ -87,6 +88,13 @@ def _max_workers() -> int:
         return _DEFAULT_MAX_WORKERS
 
 
+def _max_pending() -> int:
+    try:
+        return int(getattr(settings, "DPR_EMAIL_MAX_PENDING", _DEFAULT_MAX_PENDING))
+    except (TypeError, ValueError):
+        return _DEFAULT_MAX_PENDING
+
+
 def _slow_threshold_sec() -> float:
     try:
         return float(getattr(settings, "DPR_EMAIL_SLOW_SEC", _SLOW_EMAIL_SEC))
@@ -99,11 +107,16 @@ def _shutdown_executor() -> None:
     exe = _executor
     if exe is None:
         return
-    logger.info("%s Shutting down executor (wait=False)", _LOG_PREFIX)
+    logger.info("%s Shutting down executor (wait=True)", _LOG_PREFIX)
     try:
-        exe.shutdown(wait=False, cancel_futures=False)
+        # Drain in-flight SMTP; cancel_futures requires Python 3.9+
+        exe.shutdown(wait=True, cancel_futures=False)
+    except TypeError:
+        exe.shutdown(wait=True)
     except Exception:
         logger.exception("%s Executor shutdown error", _LOG_PREFIX)
+    finally:
+        _executor = None
 
 
 def get_email_executor() -> ThreadPoolExecutor:
@@ -211,8 +224,23 @@ def mark_finished(
 def submit_email_job(fn: Callable, kwargs: dict) -> Future | None:
     """
     Submit background email work. Never raises to the request thread.
-    Returns Future when using the pool; None when running inline (tests).
+    Returns Future when using the pool; None when running inline (tests)
+    or when the pending queue is at capacity (job dropped + logged).
     """
+    with METRICS.lock:
+        pending_now = METRICS.pending
+    if pending_now >= _max_pending():
+        logger.error(
+            "%s Queue full pending=%s max=%s — dropping fn=%s",
+            _LOG_PREFIX,
+            pending_now,
+            _max_pending(),
+            getattr(fn, "__name__", str(fn)),
+        )
+        with METRICS.lock:
+            METRICS.failed += 1
+        return None
+
     enqueued_at = mark_queued()
     inline = getattr(settings, "DPR_EMAIL_INLINE", False)
 
@@ -239,11 +267,12 @@ def submit_email_job(fn: Callable, kwargs: dict) -> Future | None:
                 success = True
         except Exception:
             success = False
+            # Log keys only — avoid dumping email recipient payloads.
             logger.exception(
-                "%s Unhandled background error fn=%s kwargs=%s",
+                "%s Unhandled background error fn=%s kwargs_keys=%s",
                 _LOG_PREFIX,
                 getattr(fn, "__name__", str(fn)),
-                {k: v for k, v in kwargs.items()},
+                sorted(kwargs.keys()),
             )
         finally:
             mark_finished(

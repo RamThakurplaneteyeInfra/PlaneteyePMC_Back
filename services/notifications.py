@@ -11,69 +11,140 @@ logger = logging.getLogger(__name__)
 
 def notify_project_created(project):
     """
-    Send notification when a new project is created.
-    Sends to coordinators for awareness.
+    Notify coordinators when a new project is created.
 
-    Args:
-        project (Project): The newly created project instance
+    WebSocket stays in-request; SMTP is queued after commit on the shared
+    email ThreadPoolExecutor so project POST is not blocked by SMTP.
     """
-    # Get all coordinators for the project
     coordinators = list(project.coordinators.all())
-
-    if coordinators:
-        recipient_emails = [coord.email for coord in coordinators if coord.email]
-
-        if recipient_emails:
-            context = {
-                'project': {
-                    'name': project.name,
-                    'client_name': project.client_name,
-                    'location': project.location,
-                    'description': project.description,
-                    'budget': float(project.budget),
-                    'created_by': {
-                        'username': project.created_by.username,
-                        'get_full_name': project.created_by.get_full_name(),
-                    },
-                    'created_at': project.created_at.isoformat(),
-                }
-            }
-
-            send_html_email(
-                subject=f"New Project Created: {project.name}",
-                template_name='project_created',
-                context=context,
-                recipient_list=recipient_emails
-            )
-
-            # Send WebSocket notifications to coordinators
-            for coord in coordinators:
-                if coord.email in recipient_emails:
-                    ws_message = create_notification_message(
-                        'project_created',
-                        f'New Project: {project.name}',
-                        f'A new project "{project.name}" has been created and requires your attention.',
-                        {'project_id': project.id, 'project_name': project.name}
-                    )
-                    send_websocket_notification(coord.id, ws_message)
-
-            logger.info(f"Project creation notification sent to coordinators: {recipient_emails}")
-        else:
-            logger.warning("No coordinators have email addresses")
-    else:
+    if not coordinators:
         logger.info("No coordinators assigned - no project creation notification sent")
+        return
+
+    recipient_ids = []
+    for coord in coordinators:
+        if not coord.email:
+            continue
+        ws_message = create_notification_message(
+            "project_created",
+            f"New Project: {project.name}",
+            f'A new project "{project.name}" has been created and requires your attention.',
+            {"project_id": project.id, "project_name": project.name},
+        )
+        send_websocket_notification(coord.id, ws_message)
+        recipient_ids.append(coord.id)
+
+    if not recipient_ids:
+        logger.warning("No coordinators have email addresses")
+        return
+
+    from dpr.tasks import queue_after_commit
+
+    queue_after_commit(
+        send_project_created_email,
+        project_id=project.id,
+        recipient_ids=recipient_ids,
+    )
+
+
+def send_project_created_email(*, project_id: int, recipient_ids: list[int]) -> None:
+    """Background SMTP worker for project-created emails."""
+    from django.contrib.auth import get_user_model
+
+    from projects.models import Project
+
+    User = get_user_model()
+    project = Project.objects.filter(pk=project_id).select_related("created_by").first()
+    if not project:
+        return
+
+    recipients = list(
+        User.objects.filter(id__in=recipient_ids or [], is_active=True).exclude(email="")
+    )
+    emails = [u.email for u in recipients if u.email]
+    if not emails:
+        return
+
+    created_by = project.created_by
+    context = {
+        "project": {
+            "name": project.name,
+            "client_name": project.client_name,
+            "location": project.location,
+            "description": project.description,
+            "budget": float(project.budget or 0),
+            "created_by": {
+                "username": created_by.username if created_by else "",
+                "get_full_name": created_by.get_full_name() if created_by else "",
+            },
+            "created_at": project.created_at.isoformat() if project.created_at else "",
+        }
+    }
+    send_html_email(
+        subject=f"New Project Created: {project.name}",
+        template_name="project_created",
+        context=context,
+        recipient_list=emails,
+    )
+    logger.info(
+        "Project creation email queued/sent project_id=%s recipients=%s",
+        project_id,
+        emails,
+    )
 
 
 def notify_project_assigned(project, assigned_user):
     """
     Send notification when a user is assigned to a project.
 
-    Args:
-        project (Project): The project instance
-        assigned_user (User): The user who was assigned
+    WebSocket stays synchronous; SMTP is queued after commit on the shared
+    email ThreadPoolExecutor so assignment API latency is not blocked by SMTP.
     """
+    # Send WebSocket notification immediately (in-request, non-SMTP).
+    ws_message = create_notification_message(
+        'project_assigned',
+        f'Project Assigned: {project.name}',
+        f'You have been assigned to the project "{project.name}".',
+        {'project_id': project.id, 'project_name': project.name}
+    )
+    send_websocket_notification(assigned_user.id, ws_message)
+
     if not assigned_user.email:
         logger.warning(f"User {assigned_user.username} has no email address")
+        return
+
+    from dpr.tasks import queue_after_commit
+
+    queue_after_commit(
+        send_project_assigned_email,
+        project_id=project.id,
+        user_id=assigned_user.id,
+    )
+
+
+def send_project_assigned_email(*, project_id: int, user_id: int) -> None:
+    """Background SMTP worker for project assignment emails."""
+    from django.contrib.auth import get_user_model
+
+    from projects.models import Project
+
+    User = get_user_model()
+    try:
+        project = Project.objects.only(
+            "id", "name", "client_name", "location", "description"
+        ).get(pk=project_id)
+        assigned_user = User.objects.only(
+            "id", "username", "email", "first_name", "last_name"
+        ).get(pk=user_id)
+    except Exception:
+        logger.exception(
+            "send_project_assigned_email load failed project_id=%s user_id=%s",
+            project_id,
+            user_id,
+        )
+        return
+
+    if not assigned_user.email:
         return
 
     context = {
@@ -98,82 +169,112 @@ def notify_project_assigned(project, assigned_user):
         recipient_list=[assigned_user.email]
     )
 
-    # Send WebSocket notification to the assigned user
-    ws_message = create_notification_message(
-        'project_assigned',
-        f'Project Assigned: {project.name}',
-        f'You have been assigned to the project "{project.name}".',
-        {'project_id': project.id, 'project_name': project.name}
-    )
-    send_websocket_notification(assigned_user.id, ws_message)
-
 
 def notify_site_engineer_assigned(project, assigned_user):
     """
-    Send notification to all site engineers when any site engineer is assigned to a project.
+    Notify all site engineers when any site engineer is assigned.
 
-    Args:
-        project (Project): The project instance
-        assigned_user (User): The site engineer who was assigned
+    WebSocket stays in-request; SMTP is queued after commit on the shared
+    email ThreadPoolExecutor.
     """
-    # Collect all site engineers for the project
     site_engineers = []
 
-    # Add specific site engineer types if assigned
     if project.billing_site_engineer and project.billing_site_engineer.email:
         site_engineers.append(project.billing_site_engineer)
     if project.qaqc_site_engineer and project.qaqc_site_engineer.email:
         site_engineers.append(project.qaqc_site_engineer)
 
-    # Add general site engineers (excluding the specific ones to avoid duplicates)
     specific_ids = {se.id for se in site_engineers}
     for se in project.site_engineers.all():
         if se.email and se.id not in specific_ids:
             site_engineers.append(se)
 
     if not site_engineers:
-        logger.warning(f"No site engineers with email addresses found for project '{project.name}'")
+        logger.warning(
+            "No site engineers with email addresses found for project '%s'",
+            project.name,
+        )
         return
 
-    recipient_emails = [se.email for se in site_engineers]
-
-    context = {
-        'assigned_user': {
-            'username': assigned_user.username,
-            'get_full_name': assigned_user.get_full_name(),
-        },
-        'project': {
-            'name': project.name,
-            'client_name': project.client_name,
-            'location': project.location,
-            'description': project.description,
-        },
-        'assignment_date': timezone.now().isoformat(),
-        'all_site_engineers': [{
-            'username': se.username,
-            'get_full_name': se.get_full_name(),
-        } for se in site_engineers]
-    }
-
-    send_html_email(
-        subject=f"Site Engineer Assigned: {project.name}",
-        template_name='site_engineer_assigned',
-        context=context,
-        recipient_list=recipient_emails
-    )
-
-    # Send WebSocket notifications to all site engineers
     for se in site_engineers:
         ws_message = create_notification_message(
-            'site_engineer_assigned',
-            f'Site Engineer Assigned: {project.name}',
-            f'{assigned_user.get_full_name()} has been assigned as a site engineer to project "{project.name}".',
-            {'project_id': project.id, 'project_name': project.name, 'assigned_user': assigned_user.username}
+            "site_engineer_assigned",
+            f"Site Engineer Assigned: {project.name}",
+            (
+                f'{assigned_user.get_full_name()} has been assigned as a site '
+                f'engineer to project "{project.name}".'
+            ),
+            {
+                "project_id": project.id,
+                "project_name": project.name,
+                "assigned_user": assigned_user.username,
+            },
         )
         send_websocket_notification(se.id, ws_message)
 
-    logger.info(f"Site engineer assignment notification sent to {len(site_engineers)} site engineers for project '{project.name}': {recipient_emails}")
+    recipient_ids = [se.id for se in site_engineers]
+    from dpr.tasks import queue_after_commit
 
+    queue_after_commit(
+        send_site_engineer_assigned_email,
+        project_id=project.id,
+        assigned_user_id=assigned_user.id,
+        recipient_ids=recipient_ids,
+    )
+    logger.info(
+        "Site engineer assignment WS sent; email queued project=%s recipients=%s",
+        project.name,
+        recipient_ids,
+    )
+
+
+def send_site_engineer_assigned_email(
+    *, project_id: int, assigned_user_id: int, recipient_ids: list[int]
+) -> None:
+    """Background SMTP worker for site-engineer assignment emails."""
+    from django.contrib.auth import get_user_model
+
+    from projects.models import Project
+
+    User = get_user_model()
+    project = Project.objects.filter(pk=project_id).first()
+    assigned_user = User.objects.filter(pk=assigned_user_id).first()
+    if not project or not assigned_user:
+        return
+
+    recipients = list(
+        User.objects.filter(id__in=recipient_ids or [], is_active=True).exclude(email="")
+    )
+    emails = [u.email for u in recipients if u.email]
+    if not emails:
+        return
+
+    context = {
+        "assigned_user": {
+            "username": assigned_user.username,
+            "get_full_name": assigned_user.get_full_name(),
+        },
+        "project": {
+            "name": project.name,
+            "client_name": project.client_name,
+            "location": project.location,
+            "description": project.description,
+        },
+        "assignment_date": timezone.now().isoformat(),
+        "all_site_engineers": [
+            {
+                "username": se.username,
+                "get_full_name": se.get_full_name(),
+            }
+            for se in recipients
+        ],
+    }
+    send_html_email(
+        subject=f"Site Engineer Assigned: {project.name}",
+        template_name="site_engineer_assigned",
+        context=context,
+        recipient_list=emails,
+    )
 
 def _get_project_approvers(project, approver_role):
     """

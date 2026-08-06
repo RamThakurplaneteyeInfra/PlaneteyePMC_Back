@@ -17,12 +17,16 @@ DEBUG = False
 _allowed_hosts_env = os.environ.get('ALLOWED_HOSTS', '')
 ALLOWED_HOSTS = [h.strip() for h in _allowed_hosts_env.split(',') if h.strip()]
 if not ALLOWED_HOSTS:
-    ALLOWED_HOSTS = ['*']
+    raise Exception(
+        'ALLOWED_HOSTS environment variable must be set in production '
+        '(comma-separated hostnames).'
+    )
 
-# Render / common PaaS hostnames (leading dot = all subdomains)
-for _host in ('.onrender.com', '.vercel.app'):
-    if _host not in ALLOWED_HOSTS:
-        ALLOWED_HOSTS.append(_host)
+# Optional PaaS hostnames when explicitly enabled
+if os.environ.get('ALLOW_RENDER_HOSTS', '').lower() in ('1', 'true', 'yes'):
+    for _host in ('.onrender.com', '.vercel.app'):
+        if _host not in ALLOWED_HOSTS:
+            ALLOWED_HOSTS.append(_host)
 
 # DATABASE (Render PostgreSQL / Neon)
 _database_url = os.environ.get('DATABASE_URL')
@@ -90,9 +94,20 @@ MIDDLEWARE = [
 ] + [m for m in MIDDLEWARE if m not in _EXCLUDED_MIDDLEWARE]
 
 # ================= SECURITY SETTINGS =================
-SECURE_SSL_REDIRECT = False
+# Behind Railway/Render reverse proxies, trust X-Forwarded-Proto for HTTPS.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+SECURE_SSL_REDIRECT = os.environ.get('SECURE_SSL_REDIRECT', 'true').lower() in (
+    '1',
+    'true',
+    'yes',
+)
+SECURE_HSTS_SECONDS = int(os.environ.get('SECURE_HSTS_SECONDS', '31536000'))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+SECURE_HSTS_PRELOAD = True
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
+CSRF_COOKIE_HTTPONLY = True
+SESSION_COOKIE_HTTPONLY = True
 
 # CSRF — full origins only (no wildcards). Add Render URL from env.
 _render_external = (os.environ.get('RENDER_EXTERNAL_URL') or '').rstrip('/')
@@ -109,11 +124,16 @@ SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = 'DENY'
 
-# ================= CORS — allow all origins =================
-CORS_ALLOW_ALL_ORIGINS = True
-CORS_ALLOWED_ORIGIN_REGEXES = [
-    r"^.+$",  # match any non-empty Origin (http/https, any host/port)
-]
+# ================= CORS — explicit origins only (no allow-all + credentials) =================
+_cors_env = os.environ.get('CORS_ALLOWED_ORIGINS', '')
+CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_env.split(',') if o.strip()]
+if not CORS_ALLOWED_ORIGINS:
+    raise Exception(
+        'CORS_ALLOWED_ORIGINS environment variable must be set in production '
+        '(comma-separated full origins, e.g. https://app.example.com).'
+    )
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOWED_ORIGIN_REGEXES = []
 CORS_ALLOW_CREDENTIALS = True
 
 # ================= CHANNELS =================
