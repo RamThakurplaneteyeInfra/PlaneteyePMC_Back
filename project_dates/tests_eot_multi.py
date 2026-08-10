@@ -303,3 +303,26 @@ class ProjectEOTMultiTests(TestCase):
         self.assertIsNotNone(data["current_eot"])
         self.assertEqual(data["current_eot"]["eot_date"], "2026-07-01")
         self.assertEqual(data["latest_completion_date"], "2026-07-01")
+
+    def test_status_submitted_pending_rejected_and_blank_approval_date(self):
+        """UI often sends Title Case status + empty approval_date for non-approved."""
+        for status_value in ("submitted", "Submitted", "pending", "Pending", "rejected", "Rejected"):
+            with self.subTest(status=status_value):
+                resp = self.client.post(
+                    "/api/project-eot/",
+                    {
+                        "project_name": self.project.name,
+                        "date_type": "SCL",
+                        "contract_finish": "2026-06-01",
+                        "eot_date": "2026-06-20",
+                        "extension_days": 19,
+                        "reason": f"Status {status_value}",
+                        "status": status_value,
+                        "approval_date": "",
+                    },
+                    format="multipart",
+                )
+                self.assertEqual(resp.status_code, 201, resp.content)
+                stored = resp.json()["data"]["status"]
+                self.assertEqual(stored, status_value.strip().lower())
+                self.assertIsNone(resp.json()["data"].get("approval_date"))

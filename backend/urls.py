@@ -162,6 +162,7 @@ urlpatterns = [
 
     # Project Feedback Management (issue workflow with optional S3 image attachment)
     path('api/', include('feedback_management.urls')),
+    path('api/', include('tutorial_videos.urls')),
 ]
 
 if settings.DEBUG:

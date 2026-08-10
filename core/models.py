@@ -19,6 +19,7 @@ class BusinessAuditLog(models.Model):
     ENTITY_CONTRACT_VALUE = "contract_value"
     ENTITY_SITE_IMAGE = "site_image"
     ENTITY_ASSIGNMENT = "assignment"
+    ENTITY_TUTORIAL_VIDEO = "tutorial_video"
 
     ENTITY_CHOICES = [
         (ENTITY_PROJECT, "Project"),
@@ -27,6 +28,7 @@ class BusinessAuditLog(models.Model):
         (ENTITY_CONTRACT_VALUE, "Contract Value"),
         (ENTITY_SITE_IMAGE, "Site Image"),
         (ENTITY_ASSIGNMENT, "Assignment"),
+        (ENTITY_TUTORIAL_VIDEO, "Tutorial Video"),
     ]
 
     ACTION_CREATED = "created"
@@ -39,6 +41,7 @@ class BusinessAuditLog(models.Model):
     ACTION_BILLING_COMPLETED = "billing_completed"
     ACTION_UPLOADED = "uploaded"
     ACTION_ASSIGNED = "assigned"
+    ACTION_FAILED = "failed"
 
     ACTION_CHOICES = [
         (ACTION_CREATED, "Created"),
@@ -51,6 +54,7 @@ class BusinessAuditLog(models.Model):
         (ACTION_BILLING_COMPLETED, "Billing Completed"),
         (ACTION_UPLOADED, "Uploaded"),
         (ACTION_ASSIGNED, "Assigned"),
+        (ACTION_FAILED, "Failed"),
     ]
 
     entity_type = models.CharField(max_length=40, choices=ENTITY_CHOICES, db_index=True)

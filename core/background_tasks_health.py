@@ -27,9 +27,11 @@ class BackgroundTasksHealthAPIView(APIView):
             )
 
         from dpr.email_executor import get_email_pool_snapshot
+        from tutorial_videos.video_executor import get_video_pool_snapshot
 
         data = get_email_pool_snapshot()
         pool = data.get("thread_pool") or {}
+        video_pool = (get_video_pool_snapshot() or {}).get("thread_pool") or {}
         # Shape matches the deliverable contract (plus extra metrics)
         return Response(
             {
@@ -50,7 +52,8 @@ class BackgroundTasksHealthAPIView(APIView):
                         "avg_send_ms": pool.get("avg_send_ms"),
                         "avg_total_processing_ms": pool.get("avg_total_processing_ms"),
                         "avg_queue_wait_ms": pool.get("avg_queue_wait_ms"),
-                    }
+                    },
+                    "tutorial_video_pool": video_pool,
                 },
             }
         )

@@ -20,10 +20,12 @@ class ProjectEOT(models.Model):
     """A single Extension of Time claim/approval for a project."""
 
     STATUS_PENDING = "pending"
+    STATUS_SUBMITTED = "submitted"
     STATUS_APPROVED = "approved"
     STATUS_REJECTED = "rejected"
     STATUS_CHOICES = [
         (STATUS_PENDING, "Pending"),
+        (STATUS_SUBMITTED, "Submitted"),
         (STATUS_APPROVED, "Approved"),
         (STATUS_REJECTED, "Rejected"),
     ]

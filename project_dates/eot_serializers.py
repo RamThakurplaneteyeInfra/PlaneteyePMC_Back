@@ -31,6 +31,36 @@ from project_dates.eot_services import (
 from project_dates.models import ProjectDates
 
 
+class EmptyAsNullDateField(serializers.DateField):
+    """Treat '', null, and missing as None — multipart forms often send blank dates."""
+
+    def to_internal_value(self, data):
+        if data in ("", None):
+            return None
+        return super().to_internal_value(data)
+
+
+class EOTStatusField(serializers.ChoiceField):
+    """Accept case-insensitive status labels from the UI (Pending, Submitted, …)."""
+
+    ALIASES = {
+        "pending": ProjectEOT.STATUS_PENDING,
+        "submitted": ProjectEOT.STATUS_SUBMITTED,
+        "approved": ProjectEOT.STATUS_APPROVED,
+        "rejected": ProjectEOT.STATUS_REJECTED,
+    }
+
+    def to_internal_value(self, data):
+        if data in ("", None):
+            default = getattr(self, "default", serializers.empty)
+            if default is not serializers.empty:
+                return default() if callable(default) else default
+            return ProjectEOT.STATUS_PENDING
+        key = str(data).strip().lower()
+        normalized = self.ALIASES.get(key, key)
+        return super().to_internal_value(normalized)
+
+
 class ProjectEOTSerializer(serializers.Serializer):
     """
     Hybrid serializer: writes ProjectEOT, speaks Project Dates field names.
@@ -62,10 +92,10 @@ class ProjectEOTSerializer(serializers.Serializer):
     )
     contractor = serializers.SerializerMethodField(read_only=True)
 
-    project_start = serializers.DateField(required=False, allow_null=True)
-    contract_finish = serializers.DateField(required=False, allow_null=True)
-    forecast_finish = serializers.DateField(required=False, allow_null=True)
-    eot_date = serializers.DateField(required=False, allow_null=True)
+    project_start = EmptyAsNullDateField(required=False, allow_null=True)
+    contract_finish = EmptyAsNullDateField(required=False, allow_null=True)
+    forecast_finish = EmptyAsNullDateField(required=False, allow_null=True)
+    eot_date = EmptyAsNullDateField(required=False, allow_null=True)
 
     # ---- Legacy computed durations (read-only) ----
     elapsed_duration = serializers.SerializerMethodField()
@@ -81,12 +111,12 @@ class ProjectEOTSerializer(serializers.Serializer):
     extension_days = serializers.IntegerField(required=False)
     reason = serializers.CharField(required=False, allow_blank=True, default="")
     remarks = serializers.CharField(required=False, allow_blank=True, default="")
-    status = serializers.ChoiceField(
+    status = EOTStatusField(
         choices=[c[0] for c in ProjectEOT.STATUS_CHOICES],
         required=False,
         default=ProjectEOT.STATUS_PENDING,
     )
-    approval_date = serializers.DateField(required=False, allow_null=True)
+    approval_date = EmptyAsNullDateField(required=False, allow_null=True)
     supporting_document = serializers.FileField(
         required=False, allow_null=True, write_only=True
     )

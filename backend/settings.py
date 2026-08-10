@@ -86,6 +86,7 @@ INSTALLED_APPS = [
     'meeting_documents',
     'testing_documents',
     'feedback_management',
+    'tutorial_videos.apps.TutorialVideosConfig',
     'core.apps.CoreConfig',
 ]
 
@@ -516,6 +517,31 @@ MEETING_DOCUMENTS_S3_PREFIX = os.environ.get('MEETING_DOCUMENTS_S3_PREFIX', 'pmc
 EOT_DOCUMENTS_S3_PREFIX = os.environ.get('EOT_DOCUMENTS_S3_PREFIX', 'eot')
 # Project Feedback attachments — configurable S3 folder (bucket URL configured later).
 FEEDBACK_ATTACHMENTS_S3_PREFIX = os.environ.get('FEEDBACK_ATTACHMENTS_S3_PREFIX', 'feedback')
+# Tutorial videos → s3://{bucket}/tutorial/temporary|optimized/…
+TUTORIAL_VIDEOS_S3_PREFIX = os.environ.get('TUTORIAL_VIDEOS_S3_PREFIX', 'tutorial')
+TUTORIAL_VIDEO_MAX_UPLOAD_MB = int(os.environ.get('TUTORIAL_VIDEO_MAX_UPLOAD_MB', '500'))
+TUTORIAL_VIDEO_MAX_WORKERS = int(os.environ.get('TUTORIAL_VIDEO_MAX_WORKERS', '1'))
+TUTORIAL_VIDEO_MAX_PENDING = int(os.environ.get('TUTORIAL_VIDEO_MAX_PENDING', '20'))
+# Set True in tests to run FFmpeg jobs inline after on_commit (no real threads).
+TUTORIAL_VIDEO_INLINE = os.environ.get('TUTORIAL_VIDEO_INLINE', 'false').lower() == 'true'
+TUTORIAL_VIDEO_USE_PRESIGNED = (
+    os.environ.get('TUTORIAL_VIDEO_USE_PRESIGNED', 'false').lower() == 'true'
+)
+TUTORIAL_VIDEO_FFMPEG_PATH = os.environ.get('TUTORIAL_VIDEO_FFMPEG_PATH', 'ffmpeg')
+TUTORIAL_VIDEO_FFPROBE_PATH = os.environ.get('TUTORIAL_VIDEO_FFPROBE_PATH', 'ffprobe')
+TUTORIAL_VIDEO_FFMPEG_TIMEOUT_SEC = int(
+    os.environ.get('TUTORIAL_VIDEO_FFMPEG_TIMEOUT_SEC', '1800')
+)
+TUTORIAL_VIDEO_FFPROBE_TIMEOUT_SEC = int(
+    os.environ.get('TUTORIAL_VIDEO_FFPROBE_TIMEOUT_SEC', '60')
+)
+VIDEO_MAX_WIDTH = int(os.environ.get('VIDEO_MAX_WIDTH', '1920'))
+VIDEO_MAX_HEIGHT = int(os.environ.get('VIDEO_MAX_HEIGHT', '1080'))
+# Target max video bitrate in kbps (0 = auto from resolution). Never exceeds source.
+VIDEO_TARGET_BITRATE = int(os.environ.get('VIDEO_TARGET_BITRATE', '0'))
+VIDEO_AUDIO_BITRATE = int(os.environ.get('VIDEO_AUDIO_BITRATE', '128'))
+VIDEO_CRF = int(os.environ.get('VIDEO_CRF', '23'))
+VIDEO_PRESET = os.environ.get('VIDEO_PRESET', 'medium')
 
 # DPR email SMTP is async via ThreadPoolExecutor (dpr.email_executor.EMAIL_EXECUTOR).
 # Set True in tests to run email jobs inline after on_commit (no real threads).
