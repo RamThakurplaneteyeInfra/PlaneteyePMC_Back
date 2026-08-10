@@ -1,7 +1,7 @@
 """
-Tutorial / training videos — global (not project-scoped).
+Tutorial / training videos — global (not project-scoped), section-tagged.
 
-Upload accepts only title, description, upload.
+Upload accepts only title, description, section, upload.
 Compression runs asynchronously; playback streams from S3/CloudFront.
 """
 
@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from django.conf import settings
 from django.db import models
+
+from tutorial_videos.sections import TUTORIAL_SECTION_CHOICES
 
 
 class TutorialVideo(models.Model):
@@ -25,6 +27,12 @@ class TutorialVideo(models.Model):
 
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True, default="")
+    section = models.CharField(
+        max_length=64,
+        choices=TUTORIAL_SECTION_CHOICES,
+        db_index=True,
+        help_text="Stable sidebar section key (e.g. meeting_documents)",
+    )
 
     status = models.CharField(
         max_length=20,
@@ -78,7 +86,12 @@ class TutorialVideo(models.Model):
                 fields=["is_active", "status", "-created_at"],
                 name="tutorial_active_status_idx",
             ),
+            # Primary frontend query: ?section=…&is_active + order by -created_at
+            models.Index(
+                fields=["section", "is_active", "-created_at"],
+                name="tutorial_section_active_idx",
+            ),
         ]
 
     def __str__(self) -> str:
-        return f"{self.title} [{self.status}]"
+        return f"{self.title} [{self.section}/{self.status}]"

@@ -128,6 +128,7 @@ def process_tutorial_video(*, video_id: int) -> None:
             entity_id=video.pk,
             detail=(
                 f"Tutorial video processed title={video.title!r} "
+                f"section={video.section} "
                 f"original={original_size} optimized={opt_size} "
                 f"ratio={ratio} ffmpeg_ms={result.processing_ms} s3_ms={s3_ms}"
             ),
@@ -156,24 +157,27 @@ def process_tutorial_video(*, video_id: int) -> None:
 
 
 def _mark_failed(video: TutorialVideo, message: str, *, temp_key: str = "") -> None:
-    from services import s3_tutorial_videos as s3
+    """
+    Mark processing failed.
 
+    Keep the temporary S3 object so an admin can reprocess after fixing
+    infrastructure (e.g. FFmpeg install). Temp is removed on success or soft-delete.
+    """
     safe = (message or "Video processing failed.")[:500]
     try:
         video.refresh_from_db()
     except TutorialVideo.DoesNotExist:
         return
 
+    # Preserve temp key for retry when still present.
+    if temp_key and not (video.temp_s3_key or "").strip():
+        video.temp_s3_key = temp_key
+
     video.status = TutorialVideo.STATUS_FAILED
     video.processing_error = safe
-    # Drop temp object on failure to avoid storage leaks.
-    key = temp_key or video.temp_s3_key
-    video.temp_s3_key = ""
     video.save(
         update_fields=["status", "processing_error", "temp_s3_key", "updated_at"]
     )
-    if key:
-        s3.delete_object(key)
 
     invalidate_tutorial_caches()
     write_business_audit(
@@ -181,7 +185,7 @@ def _mark_failed(video: TutorialVideo, message: str, *, temp_key: str = "") -> N
         action=BusinessAuditLog.ACTION_FAILED,
         actor=video.created_by,
         entity_id=video.pk,
-        detail=f"Tutorial video processing failed title={video.title!r}",
+        detail=f"Tutorial video processing failed title={video.title!r} section={video.section}",
     )
 
 

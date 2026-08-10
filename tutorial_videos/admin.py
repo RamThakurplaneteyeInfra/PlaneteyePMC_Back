@@ -8,6 +8,7 @@ class TutorialVideoAdmin(admin.ModelAdmin):
     list_display = [
         "id",
         "title",
+        "section",
         "status",
         "is_active",
         "file_size",
@@ -15,8 +16,14 @@ class TutorialVideoAdmin(admin.ModelAdmin):
         "created_by",
         "created_at",
     ]
-    list_filter = ["status", "is_active", "created_at"]
-    search_fields = ["title", "description", "optimized_s3_key", "original_filename"]
+    list_filter = ["section", "status", "is_active", "created_at"]
+    search_fields = [
+        "title",
+        "description",
+        "section",
+        "optimized_s3_key",
+        "original_filename",
+    ]
     readonly_fields = [
         "status",
         "processing_error",

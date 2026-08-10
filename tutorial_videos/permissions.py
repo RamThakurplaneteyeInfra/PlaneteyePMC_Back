@@ -5,25 +5,39 @@ from rest_framework.permissions import SAFE_METHODS, BasePermission
 from accounts.rbac import (
     ADMIN_ROLES,
     ROLE_PMC_HEAD,
+    ROLE_PMC_MANAGER,
+    ROLE_SITE_ENGINEER,
+    ROLE_TEAM_LEAD_ALIAS,
     ROLE_TEAM_LEADER,
+    SITE_ENGINEER_ROLES,
     is_admin_user,
 )
 
-# Any authenticated user may list/view ready tutorials.
-# Upload / update / delete: PMC Head, Team Leader, and other admin roles.
-MANAGE_ROLES = ADMIN_ROLES | {ROLE_TEAM_LEADER, ROLE_PMC_HEAD}
+# List / detail / playback: PMC Manager, Site Engineers (all types), Team Leader, admins.
+VIEW_ROLES = (
+    ADMIN_ROLES  # CEO, PMC Head, Head Office, PMC Manager, Coordinator, …
+    | SITE_ENGINEER_ROLES  # Site Engineer, Billing / QAQC / HSE Site Engineer
+    | {ROLE_TEAM_LEADER, ROLE_TEAM_LEAD_ALIAS, ROLE_PMC_MANAGER, ROLE_SITE_ENGINEER}
+)
+
+# Upload / update / delete: PMC Head, Team Leader, and other admin roles (not SE).
+MANAGE_ROLES = ADMIN_ROLES | {ROLE_TEAM_LEADER, ROLE_PMC_HEAD, ROLE_TEAM_LEAD_ALIAS}
 
 
 def role_names(user) -> set[str]:
     if not user or not user.is_authenticated:
         return set()
     if user.is_superuser:
-        return set(MANAGE_ROLES) | {"superuser"}
+        return set(VIEW_ROLES | MANAGE_ROLES) | {"superuser"}
     return set(user.groups.values_list("name", flat=True))
 
 
 def can_view_tutorial_videos(user) -> bool:
-    return bool(user and user.is_authenticated)
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser or user.is_staff or is_admin_user(user):
+        return True
+    return bool(role_names(user) & VIEW_ROLES)
 
 
 def can_manage_tutorial_videos(user) -> bool:
@@ -35,7 +49,7 @@ def can_manage_tutorial_videos(user) -> bool:
 
 
 class TutorialVideoPermission(BasePermission):
-    message = "You do not have permission to manage tutorial videos."
+    message = "You do not have permission to access tutorial videos."
 
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
