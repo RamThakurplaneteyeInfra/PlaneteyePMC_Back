@@ -8,7 +8,12 @@ from urllib.parse import quote
 
 from django.conf import settings
 
-from core.s3_config import get_s3_client, is_boto3_available, is_s3_configured
+from core.s3_config import (
+    DEFAULT_OBJECT_CACHE_CONTROL,
+    get_s3_client,
+    is_boto3_available,
+    is_s3_configured,
+)
 from services.s3_meeting_documents import (
     CompressedDocument,
     check_s3_ready,
@@ -113,6 +118,7 @@ def upload_correspondence_document(
         key,
         ExtraArgs={
             "ContentType": compressed.content_type,
+            "CacheControl": DEFAULT_OBJECT_CACHE_CONTROL,
             "Metadata": {"original-filename": compressed.file_name},
         },
     )
@@ -149,7 +155,11 @@ def generate_presigned_url(
         logger.info("Correspondence attachment presigned URL generated: key=%s", key)
         return get_s3_client().generate_presigned_url(
             "get_object",
-            Params={"Bucket": settings.AWS_STORAGE_BUCKET_NAME, "Key": key},
+            Params={
+                "Bucket": settings.AWS_STORAGE_BUCKET_NAME,
+                "Key": key,
+                "ResponseContentDisposition": "inline",
+            },
             ExpiresIn=expires_in,
         )
 

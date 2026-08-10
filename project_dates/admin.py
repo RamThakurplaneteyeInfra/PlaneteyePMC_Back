@@ -81,11 +81,25 @@ class ProjectEOTAdmin(admin.ModelAdmin):
         "status",
         "is_active",
         "approval_date",
+        "supporting_document_name",
         "created_at",
     ]
     list_filter = ["status", "is_active", "created_at"]
-    search_fields = ["project__name", "reason", "remarks"]
-    readonly_fields = ["created_at", "updated_at", "created_by", "updated_by"]
+    search_fields = [
+        "project__name",
+        "reason",
+        "remarks",
+        "supporting_document_name",
+        "supporting_document_key",
+    ]
+    readonly_fields = [
+        "created_at",
+        "updated_at",
+        "created_by",
+        "updated_by",
+        "supporting_document_key",
+        "supporting_document_url",
+    ]
     ordering = ["project__name", "eot_number"]
 
 

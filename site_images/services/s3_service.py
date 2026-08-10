@@ -11,7 +11,13 @@ import uuid
 from django.conf import settings
 from django.utils.text import slugify
 
-from core.s3_config import get_s3_client, is_boto3_available, is_s3_configured, s3_public_url
+from core.s3_config import (
+    DEFAULT_OBJECT_CACHE_CONTROL,
+    get_s3_client,
+    is_boto3_available,
+    is_s3_configured,
+    s3_public_url,
+)
 
 from .cloudinary_service import validate_image_file
 
@@ -101,7 +107,10 @@ def upload_image(uploaded_file, *, folder: str) -> dict:
             uploaded_file,
             bucket,
             object_key,
-            ExtraArgs={"ContentType": content_type},
+            ExtraArgs={
+                "ContentType": content_type,
+                "CacheControl": DEFAULT_OBJECT_CACHE_CONTROL,
+            },
         )
     except Exception as exc:
         logger.exception(

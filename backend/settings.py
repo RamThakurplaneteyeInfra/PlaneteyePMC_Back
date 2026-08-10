@@ -512,6 +512,8 @@ AWS_S3_CUSTOM_DOMAIN = os.environ.get('AWS_S3_CUSTOM_DOMAIN', '')
 # Primary: s3 | cloudinary (falls back to the other unless SITE_IMAGE_S3_ONLY=True)
 SITE_IMAGE_STORAGE_PRIMARY = os.environ.get('SITE_IMAGE_STORAGE_PRIMARY', 's3')
 MEETING_DOCUMENTS_S3_PREFIX = os.environ.get('MEETING_DOCUMENTS_S3_PREFIX', 'pmc')
+# EOT supporting docs → s3://{bucket}/eot/{project_id}/{year}/{month}/…
+EOT_DOCUMENTS_S3_PREFIX = os.environ.get('EOT_DOCUMENTS_S3_PREFIX', 'eot')
 # Project Feedback attachments — configurable S3 folder (bucket URL configured later).
 FEEDBACK_ATTACHMENTS_S3_PREFIX = os.environ.get('FEEDBACK_ATTACHMENTS_S3_PREFIX', 'feedback')
 

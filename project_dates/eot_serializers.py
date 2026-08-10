@@ -88,7 +88,7 @@ class ProjectEOTSerializer(serializers.Serializer):
     )
     approval_date = serializers.DateField(required=False, allow_null=True)
     supporting_document = serializers.FileField(
-        required=False, allow_null=True, write_only=False
+        required=False, allow_null=True, write_only=True
     )
     supporting_document_url = serializers.SerializerMethodField()
     is_active = serializers.BooleanField(required=False, default=True)
@@ -149,13 +149,15 @@ class ProjectEOTSerializer(serializers.Serializer):
         return None
 
     def get_supporting_document_url(self, obj) -> str | None:
-        if not obj.supporting_document:
+        url = (getattr(obj, "supporting_document_url", None) or "").strip()
+        if url:
+            return url
+        key = (getattr(obj, "supporting_document_key", None) or "").strip()
+        if not key:
             return None
-        request = self.context.get("request")
-        url = obj.supporting_document.url
-        if request:
-            return request.build_absolute_uri(url)
-        return url
+        from services.s3_eot_documents import s3_object_url
+
+        return s3_object_url(key)
 
     def get_created_by_name(self, obj) -> str | None:
         return self._user_name(obj.created_by)
@@ -252,9 +254,9 @@ class ProjectEOTSerializer(serializers.Serializer):
                 instance.approval_date.isoformat() if instance.approval_date else None
             ),
             "supporting_document": (
-                instance.supporting_document.name
-                if instance.supporting_document
-                else None
+                instance.supporting_document_name
+                or instance.supporting_document_key
+                or None
             ),
             "supporting_document_url": self.get_supporting_document_url(instance),
             "is_active": instance.is_active,
@@ -518,12 +520,30 @@ class ProjectEOTSerializer(serializers.Serializer):
             reason=validated_data.get("reason") or "",
             remarks=validated_data.get("remarks") or "",
             status=validated_data.get("status") or ProjectEOT.STATUS_PENDING,
-            supporting_document=validated_data.get("supporting_document"),
             is_active=validated_data.get("is_active", True),
             created_by=user if user and user.is_authenticated else None,
             updated_by=user if user and user.is_authenticated else None,
         )
-        instance.save()
+
+        uploaded = validated_data.pop("supporting_document", None)
+        upload_meta = None
+        if uploaded is not None:
+            from services.s3_eot_documents import delete_eot_document, upload_eot_document
+
+            upload_meta = upload_eot_document(
+                uploaded_file=uploaded,
+                project_id=project.id,
+            )
+            instance.supporting_document_key = upload_meta["s3_key"]
+            instance.supporting_document_name = upload_meta["document_name"]
+            instance.supporting_document_url = upload_meta["document_url"]
+
+        try:
+            instance.save()
+        except Exception:
+            if upload_meta:
+                delete_eot_document(upload_meta["s3_key"])
+            raise
         return instance
 
     def update(self, instance, validated_data):
@@ -557,6 +577,20 @@ class ProjectEOTSerializer(serializers.Serializer):
         instance.original_completion_date = original
         instance.revised_completion_date = revised
 
+        uploaded = validated_data.pop("supporting_document", None)
+        old_key = instance.supporting_document_key or ""
+        upload_meta = None
+        if uploaded is not None:
+            from services.s3_eot_documents import delete_eot_document, upload_eot_document
+
+            upload_meta = upload_eot_document(
+                uploaded_file=uploaded,
+                project_id=instance.project_id,
+            )
+            instance.supporting_document_key = upload_meta["s3_key"]
+            instance.supporting_document_name = upload_meta["document_name"]
+            instance.supporting_document_url = upload_meta["document_url"]
+
         for field in (
             "eot_number",
             "extension_days",
@@ -564,7 +598,6 @@ class ProjectEOTSerializer(serializers.Serializer):
             "reason",
             "remarks",
             "status",
-            "supporting_document",
             "is_active",
         ):
             if field in validated_data and validated_data[field] is not None:
@@ -572,5 +605,18 @@ class ProjectEOTSerializer(serializers.Serializer):
 
         if user and user.is_authenticated:
             instance.updated_by = user
-        instance.save()
+        try:
+            instance.save()
+        except Exception:
+            if upload_meta:
+                from services.s3_eot_documents import delete_eot_document
+
+                delete_eot_document(upload_meta["s3_key"])
+            raise
+
+        # Replace succeeded — remove previous object to avoid orphans.
+        if upload_meta and old_key and old_key != upload_meta["s3_key"]:
+            from services.s3_eot_documents import delete_eot_document
+
+            delete_eot_document(old_key)
         return instance

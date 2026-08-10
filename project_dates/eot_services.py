@@ -226,18 +226,31 @@ def project_eot_summary(project) -> dict[str, Any]:
 
 @transaction.atomic
 def soft_delete_eot(eot, *, user=None) -> None:
-    # Remove supporting document from storage when soft-deleting to avoid orphans.
-    if eot.supporting_document:
+    # Remove supporting document from S3 when soft-deleting to avoid orphans.
+    s3_key = (getattr(eot, "supporting_document_key", None) or "").strip()
+    if s3_key:
         try:
-            eot.supporting_document.delete(save=False)
+            from services.s3_eot_documents import delete_eot_document
+
+            delete_eot_document(s3_key)
         except Exception:
             logger.exception(
-                "Failed to delete EOT supporting document eot_id=%s", eot.pk
+                "Failed to delete EOT supporting document eot_id=%s key=%s",
+                eot.pk,
+                s3_key,
             )
-        eot.supporting_document = None
+        eot.supporting_document_key = ""
+        eot.supporting_document_name = ""
+        eot.supporting_document_url = ""
 
     eot.is_active = False
-    update_fields = ["is_active", "supporting_document", "updated_at"]
+    update_fields = [
+        "is_active",
+        "supporting_document_key",
+        "supporting_document_name",
+        "supporting_document_url",
+        "updated_at",
+    ]
     if user:
         eot.updated_by = user
         update_fields.append("updated_by")

@@ -245,7 +245,11 @@ class S3MeetingDocumentsServiceTest(TestCase):
         self.assertEqual(url, "https://signed.example.com/file")
         mock_client.generate_presigned_url.assert_called_once_with(
             "get_object",
-            Params={"Bucket": "pmcproject", "Key": key},
+            Params={
+                "Bucket": "pmcproject",
+                "Key": key,
+                "ResponseContentDisposition": "inline",
+            },
             ExpiresIn=s3_service.PRESIGNED_EXPIRY_SECONDS,
         )
 

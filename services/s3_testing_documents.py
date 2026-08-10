@@ -21,7 +21,12 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.utils.text import get_valid_filename
 
-from core.s3_config import get_s3_client, is_boto3_available, is_s3_configured
+from core.s3_config import (
+    DEFAULT_OBJECT_CACHE_CONTROL,
+    get_s3_client,
+    is_boto3_available,
+    is_s3_configured,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +211,7 @@ def upload_testing_document(
             s3_key,
             ExtraArgs={
                 "ContentType": content_type,
+                "CacheControl": DEFAULT_OBJECT_CACHE_CONTROL,
                 "Metadata": {
                     "original-filename": filename[:200],
                     "document-type": doc_type,
@@ -252,6 +258,8 @@ def generate_presigned_url(s3_key: str, *, expires_in: int = PRESIGNED_EXPIRY_SE
             Params={
                 "Bucket": settings.AWS_STORAGE_BUCKET_NAME,
                 "Key": key,
+                # Prefer inline so View / preview opens in-browser.
+                "ResponseContentDisposition": "inline",
             },
             ExpiresIn=expires_in,
         )

@@ -19,6 +19,7 @@ from drf_yasg.utils import swagger_auto_schema
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 
 from accounts.permissions import IsAuthenticatedProjectRBAC
@@ -70,6 +71,7 @@ class ProjectEOTViewSet(viewsets.ModelViewSet):
     serializer_class = ProjectEOTSerializer
     permission_classes = [IsAuthenticatedProjectRBAC]
     rbac_domain = RBACDomain.GENERAL
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     pagination_class = ProjectEOTPagination
     filter_backends = [
         DjangoFilterBackend,
@@ -254,6 +256,46 @@ class ProjectEOTViewSet(viewsets.ModelViewSet):
         return self._success(
             f"EOT #{eot_number} for '{project.name}' deleted successfully",
             {},
+        )
+
+    @swagger_auto_schema(
+        operation_summary="Get pre-signed download / preview URL for EOT supporting document",
+        tags=["Project EOT"],
+    )
+    @action(detail=True, methods=["get"], url_path="download")
+    def download(self, request, pk=None):
+        try:
+            instance = self._get_eot_or_404(pk)
+        except ProjectEOT.DoesNotExist:
+            return self._error(
+                "EOT record not found", http_status=status.HTTP_404_NOT_FOUND
+            )
+        key = (instance.supporting_document_key or "").strip()
+        if not key:
+            return self._error(
+                "No supporting document attached to this EOT.",
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+        try:
+            from services.s3_eot_documents import generate_presigned_url
+
+            url = generate_presigned_url(key)
+        except Exception as exc:
+            logger.warning("EOT presign failed; falling back to stored URL: %s", exc)
+            url = (instance.supporting_document_url or "").strip() or None
+            if not url:
+                return self._error(
+                    "Unable to generate download URL.",
+                    http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+        return self._success(
+            "Download URL generated successfully",
+            {
+                "id": instance.id,
+                "file_name": instance.supporting_document_name or None,
+                "download_url": url,
+                "document_url": instance.supporting_document_url or url,
+            },
         )
 
     @swagger_auto_schema(

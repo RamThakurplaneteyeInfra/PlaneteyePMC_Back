@@ -68,11 +68,24 @@ class ProjectEOT(models.Model):
         default=STATUS_PENDING,
         db_index=True,
     )
-    supporting_document = models.FileField(
-        upload_to="eot_documents/%Y/%m/",
-        null=True,
+    supporting_document_key = models.CharField(
+        max_length=512,
         blank=True,
-        help_text="Optional supporting document",
+        default="",
+        db_index=True,
+        help_text="S3 object key under eot/… (empty if no document)",
+    )
+    supporting_document_name = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Original uploaded filename",
+    )
+    supporting_document_url = models.URLField(
+        max_length=1024,
+        blank=True,
+        default="",
+        help_text="Public HTTPS URL for the supporting document on S3",
     )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
