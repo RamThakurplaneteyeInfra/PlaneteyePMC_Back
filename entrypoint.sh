@@ -87,8 +87,18 @@ elif [ "$cloud_ready" -eq 0 ]; then
   echo "WARNING: Cloudinary not configured — S3 is primary with no fallback."
 fi
 
+echo "Checking ffmpeg for tutorial videos..."
+if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
+  echo "ffmpeg OK: $(ffmpeg -version | head -n 1)"
+else
+  echo "WARNING: ffmpeg/ffprobe not found — tutorial video processing will fail."
+fi
+
 echo "Running migrations..."
 python manage.py migrate --noinput
+
+# Fail any orphaned processing rows left by crashed workers (safe, idempotent).
+python manage.py tutorial_videos_process --sweep || true
 
 echo "Collecting static files..."
 python manage.py collectstatic --noinput

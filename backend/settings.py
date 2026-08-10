@@ -524,6 +524,15 @@ TUTORIAL_VIDEO_MAX_WORKERS = int(os.environ.get('TUTORIAL_VIDEO_MAX_WORKERS', '1
 TUTORIAL_VIDEO_MAX_PENDING = int(os.environ.get('TUTORIAL_VIDEO_MAX_PENDING', '20'))
 # Set True in tests to run FFmpeg jobs inline after on_commit (no real threads).
 TUTORIAL_VIDEO_INLINE = os.environ.get('TUTORIAL_VIDEO_INLINE', 'false').lower() == 'true'
+# Prefer Celery worker when true (requires Railway worker service). Default false =
+# in-process ThreadPool on the web dyno (same pattern as DPR email).
+TUTORIAL_VIDEO_USE_CELERY = os.environ.get('TUTORIAL_VIDEO_USE_CELERY', 'false').lower() in (
+    '1', 'true', 'yes',
+)
+# Mark status=failed if still processing after this many seconds (worker crash / OOM).
+TUTORIAL_VIDEO_MAX_PROCESSING_SEC = int(
+    os.environ.get('TUTORIAL_VIDEO_MAX_PROCESSING_SEC', '900')
+)
 TUTORIAL_VIDEO_USE_PRESIGNED = (
     os.environ.get('TUTORIAL_VIDEO_USE_PRESIGNED', 'false').lower() == 'true'
 )

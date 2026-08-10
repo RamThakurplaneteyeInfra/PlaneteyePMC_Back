@@ -163,8 +163,9 @@ def mark_finished(*, success: bool) -> None:
 def submit_video_job(fn: Callable, *, video_id: int) -> Future | None:
     """
     Queue background processing for a TutorialVideo pk.
-    Returns None when running inline (tests) or when submit fails.
-    Raises QueueFullError when pending queue is at capacity (caller should reject upload).
+    Returns Future when using the pool; None when running inline (tests)
+    or when submit fails.
+    Raises QueueFullError when pending queue is at capacity.
     """
     if queue_is_full():
         from tutorial_videos.exceptions import TutorialVideoQueueFull
@@ -177,6 +178,9 @@ def submit_video_job(fn: Callable, *, video_id: int) -> Future | None:
     inline = getattr(settings, "TUTORIAL_VIDEO_INLINE", False)
 
     def _runner():
+        from django.db import close_old_connections
+
+        close_old_connections()
         started_at = mark_started(enqueued_at)
         success = False
         try:
@@ -189,8 +193,19 @@ def submit_video_job(fn: Callable, *, video_id: int) -> Future | None:
                 _LOG_PREFIX,
                 video_id,
             )
+            try:
+                from tutorial_videos.processing import mark_failed_by_id
+
+                mark_failed_by_id(int(video_id), "Video processing failed.")
+            except Exception:
+                logger.exception(
+                    "%s Failed to mark video failed video_id=%s",
+                    _LOG_PREFIX,
+                    video_id,
+                )
         finally:
             mark_finished(success=success)
+            close_old_connections()
             _ = started_at
 
     try:

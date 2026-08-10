@@ -447,16 +447,42 @@ class TutorialVideoAPITests(APITestCase):
         self.assertEqual(r2.status_code, status.HTTP_202_ACCEPTED)
         self.assertNotEqual(r1.data["data"]["id"], r2.data["data"]["id"])
 
-    def test_queue_full_rejects_upload(self):
-        with self._mock_s3_ready(), patch(
-            "tutorial_videos.video_executor.queue_is_full", return_value=True
-        ):
+    def test_ignore_extra_multipart_fields(self):
+        with self._mock_s3_ready(), self._mock_s3_upload(), self._mock_process_noop():
             resp = self.client.post(
                 self.url,
-                self._upload_payload(title="Q", section="overview"),
+                {
+                    **self._upload_payload(title="Extras"),
+                    "created_by_name": "should-ignore",
+                    "sender_role": "Site Engineer",
+                    "project_id": "99",
+                },
                 format="multipart",
             )
-        self.assertEqual(resp.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        self.assertEqual(resp.status_code, status.HTTP_202_ACCEPTED)
+
+    def test_stuck_processing_marked_failed_on_detail(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        video = _make_video(
+            title="Stuck",
+            section="projects",
+            status=TutorialVideo.STATUS_PROCESSING,
+            processing_error="",
+            temp_s3_key="tutorial/temporary/stuck.mp4",
+            optimized_s3_key="",
+            video_url="",
+            created_by=self.user,
+        )
+        TutorialVideo.objects.filter(pk=video.pk).update(
+            updated_at=timezone.now() - timedelta(minutes=30)
+        )
+        resp = self.client.get(f"{self.url}{video.pk}/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["data"]["status"], "failed")
+        self.assertTrue(resp.data["data"]["processing_error"])
 
 
 @override_settings(**S3_SETTINGS)
@@ -480,6 +506,7 @@ class TutorialVideoProcessingTests(TestCase):
             Path(dest).write_bytes(_minimal_mp4_bytes())
 
         with (
+            patch("tutorial_videos.processing.ffmpeg_available", return_value=True),
             patch("services.s3_tutorial_videos.download_to_path", side_effect=fake_download),
             patch("tutorial_videos.processing.optimize_video") as opt_mock,
             patch("services.s3_tutorial_videos.upload_local_file", return_value=400),
@@ -536,6 +563,7 @@ class TutorialVideoProcessingTests(TestCase):
             Path(dest).write_bytes(_minimal_mp4_bytes())
 
         with (
+            patch("tutorial_videos.processing.ffmpeg_available", return_value=True),
             patch("services.s3_tutorial_videos.download_to_path", side_effect=fake_download),
             patch(
                 "tutorial_videos.processing.optimize_video",

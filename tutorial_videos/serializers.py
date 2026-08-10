@@ -81,6 +81,7 @@ class TutorialVideoListSerializer(serializers.ModelSerializer):
             "section_name",
             "status",
             "created_at",
+            "processing_error",
         ]
 
     def get_section_name(self, obj) -> str:

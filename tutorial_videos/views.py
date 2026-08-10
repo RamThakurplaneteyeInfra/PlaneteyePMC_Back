@@ -33,7 +33,9 @@ from tutorial_videos.models import TutorialVideo
 from tutorial_videos.permissions import TutorialVideoPermission
 from tutorial_videos.processing import (
     CACHE_PREFIX,
+    fail_stuck_processing,
     invalidate_tutorial_caches,
+    maybe_fail_if_stuck,
     queue_processing_after_commit,
     soft_delete_tutorial_video,
 )
@@ -144,6 +146,9 @@ class TutorialVideoViewSet(viewsets.ModelViewSet):
         return key, None
 
     def list(self, request, *args, **kwargs):
+        # Cheap sweep: never leave forever-processing with empty error.
+        fail_stuck_processing()
+
         section, err = self._resolve_list_section()
         if err is not None:
             return err
@@ -183,6 +188,7 @@ class TutorialVideoViewSet(viewsets.ModelViewSet):
                 "Tutorial video not found.",
                 http_status=status.HTTP_404_NOT_FOUND,
             )
+        instance = maybe_fail_if_stuck(instance)
         return self._success(
             "Tutorial video retrieved successfully.",
             TutorialVideoDetailSerializer(instance).data,
@@ -224,7 +230,16 @@ class TutorialVideoViewSet(viewsets.ModelViewSet):
                 http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        serializer = TutorialVideoUploadSerializer(data=request.data)
+        # Accept ONLY title/description/section/upload — ignore actor stamps & extras.
+        payload = {}
+        for key in ("title", "description", "section"):
+            if key in request.data:
+                payload[key] = request.data.get(key)
+        upload = request.FILES.get("upload") or request.data.get("upload")
+        if upload is not None:
+            payload["upload"] = upload
+
+        serializer = TutorialVideoUploadSerializer(data=payload)
         if not serializer.is_valid():
             return self._error("Validation failed.", errors=serializer.errors)
 
@@ -480,7 +495,9 @@ class TutorialVideoViewSet(viewsets.ModelViewSet):
         instance.status = TutorialVideo.STATUS_PROCESSING
         instance.processing_error = ""
         instance.save(update_fields=["status", "processing_error", "updated_at"])
-        queue_processing_after_commit(instance.pk)
+        from tutorial_videos.processing import enqueue_tutorial_processing
+
+        enqueue_tutorial_processing(instance.pk)
         invalidate_tutorial_caches()
         write_business_audit(
             entity_type=BusinessAuditLog.ENTITY_TUTORIAL_VIDEO,

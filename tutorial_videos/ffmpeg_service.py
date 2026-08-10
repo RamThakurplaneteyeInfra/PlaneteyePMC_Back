@@ -86,23 +86,23 @@ def probe_source(path: Path) -> SourceProbe:
             check=False,
         )
     except FileNotFoundError as exc:
-        raise VideoProcessingError("Video processing tools are not available.") from exc
+        raise VideoProcessingError("ffmpeg not available on worker") from exc
     except subprocess.TimeoutExpired as exc:
         raise VideoProcessingError("Video analysis timed out.") from exc
 
     if proc.returncode != 0:
-        raise VideoProcessingError("Unable to analyze uploaded video.")
+        raise VideoProcessingError("Invalid or corrupt video file")
 
     try:
         data = json.loads(proc.stdout or "{}")
     except json.JSONDecodeError as exc:
-        raise VideoProcessingError("Unable to analyze uploaded video.") from exc
+        raise VideoProcessingError("Invalid or corrupt video file") from exc
 
     streams = data.get("streams") or []
     video = next((s for s in streams if s.get("codec_type") == "video"), None)
     audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
     if not video:
-        raise VideoProcessingError("No video stream found in uploaded file.")
+        raise VideoProcessingError("Invalid or corrupt video file")
 
     try:
         width = int(video.get("width") or 0)
@@ -110,7 +110,7 @@ def probe_source(path: Path) -> SourceProbe:
     except (TypeError, ValueError):
         width = height = 0
     if width <= 0 or height <= 0:
-        raise VideoProcessingError("Invalid video resolution.")
+        raise VideoProcessingError("Invalid or corrupt video file")
 
     duration = 0.0
     try:
@@ -209,6 +209,8 @@ def optimize_video(source_path: Path, output_path: Path) -> OptimizeResult:
         f"{v_bitrate * 2}k",
         "-pix_fmt",
         "yuv420p",
+        "-threads",
+        "1",
         "-movflags",
         "+faststart",
     ]
@@ -238,16 +240,16 @@ def optimize_video(source_path: Path, output_path: Path) -> OptimizeResult:
             check=False,
         )
     except FileNotFoundError as exc:
-        raise VideoProcessingError("Video processing tools are not available.") from exc
+        raise VideoProcessingError("ffmpeg not available on worker") from exc
     except subprocess.TimeoutExpired as exc:
-        raise VideoProcessingError("Video processing timed out.") from exc
+        raise VideoProcessingError("Processing timed out after 10 minutes.") from exc
 
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     if proc.returncode != 0 or not output_path.is_file() or output_path.stat().st_size <= 0:
         # Log truncated stderr for ops; never return it to clients.
         err_tail = (proc.stderr or "")[-800:]
         logger.error("FFmpeg failed code=%s stderr_tail=%s", proc.returncode, err_tail)
-        raise VideoProcessingError("Video processing failed.")
+        raise VideoProcessingError("Invalid or corrupt video file")
 
     out_size = output_path.stat().st_size
     logger.info(
