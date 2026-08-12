@@ -15,6 +15,35 @@ from .models import Reminder
 User = get_user_model()
 
 
+class AssignedToIdField(serializers.Field):
+    """
+    Write: accepts Django auth User pk.
+    Read: returns that pk.
+    Clear errors for missing vs inactive users.
+    """
+
+    def to_representation(self, value):
+        if value is None:
+            return None
+        return value.pk if hasattr(value, "pk") else int(value)
+
+    def to_internal_value(self, data):
+        if data is None or data == "":
+            raise serializers.ValidationError("assigned_to_id is required.")
+        try:
+            pk = int(data)
+        except (TypeError, ValueError):
+            raise serializers.ValidationError("assigned_to_id must be an integer.")
+        user = User.objects.filter(pk=pk).only("id", "username", "is_active").first()
+        if user is None:
+            raise serializers.ValidationError(f"User id {pk} not found.")
+        if not user.is_active:
+            raise serializers.ValidationError(
+                f"User id {pk} ({user.username}) is inactive."
+            )
+        return user
+
+
 class UserBriefSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     username = serializers.CharField()
@@ -38,10 +67,7 @@ class ReminderSerializer(serializers.ModelSerializer):
         queryset=Project.objects.all(),
     )
     project_name = serializers.CharField(source="project.name", read_only=True)
-    assigned_to_id = serializers.PrimaryKeyRelatedField(
-        source="assigned_to",
-        queryset=User.objects.filter(is_active=True),
-    )
+    assigned_to_id = AssignedToIdField(source="assigned_to")
     assigned_to = serializers.SerializerMethodField()
     created_by = serializers.SerializerMethodField()
     effective_due_at = serializers.SerializerMethodField()

@@ -1136,12 +1136,13 @@ class ProjectViewSet(viewsets.ModelViewSet):
         if group_name == 'Coordinator':
             group_name = 'PMC Manager'
 
-        # Get all users with the specified role
-        users = User.objects.filter(groups__name=group_name).distinct()
+        # Get all *active* users with the specified role
+        users = User.objects.filter(groups__name=group_name, is_active=True).distinct()
         if group_name == 'PMC Manager':
             # Include any users still on the legacy Coordinator group during migration
             users = User.objects.filter(
-                groups__name__in=['PMC Manager', 'Coordinator']
+                groups__name__in=['PMC Manager', 'Coordinator'],
+                is_active=True,
             ).distinct()
         
         # Get IDs of users who are already assigned to active projects

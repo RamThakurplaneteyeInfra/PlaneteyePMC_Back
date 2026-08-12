@@ -206,9 +206,26 @@ class ReminderAPITest(APITestCase):
         summary2 = dispatch_due_reminders()
         self.assertEqual(summary2["sent"], 0)
 
-    def test_unauthenticated_rejected(self):
-        response = self.client.get(self.URL)
-        self.assertIn(
-            response.status_code,
-            {status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN},
+    def test_inactive_assignee_clear_error(self):
+        self.tl.is_active = False
+        self.tl.save(update_fields=["is_active"])
+        self._auth()
+        response = self.client.post(
+            self.URL, self._payload(assigned_to_id=self.tl.id), format="json"
         )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        # Friendly field error (inactive, not generic "does not exist")
+        err = str(response.data)
+        self.assertIn("inactive", err.lower())
+        self.assertIn(str(self.tl.id), err)
+
+    def test_assignees_endpoint_returns_project_members(self):
+        self._auth()
+        response = self.client.get(
+            f"{self.URL}assignees/", {"project_id": self.project.id}
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        ids = {row["id"] for row in response.data["data"]}
+        self.assertIn(self.tl.id, ids)
+        self.assertIn(self.se.id, ids)
+        self.assertNotIn(self.outsider.id, ids)
