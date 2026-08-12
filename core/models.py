@@ -21,6 +21,7 @@ class BusinessAuditLog(models.Model):
     ENTITY_ASSIGNMENT = "assignment"
     ENTITY_TUTORIAL_VIDEO = "tutorial_video"
     ENTITY_MPR = "mpr"
+    ENTITY_DRAWING = "drawing"
 
     ENTITY_CHOICES = [
         (ENTITY_PROJECT, "Project"),
@@ -31,6 +32,7 @@ class BusinessAuditLog(models.Model):
         (ENTITY_ASSIGNMENT, "Assignment"),
         (ENTITY_TUTORIAL_VIDEO, "Tutorial Video"),
         (ENTITY_MPR, "MPR"),
+        (ENTITY_DRAWING, "Drawing"),
     ]
 
     ACTION_CREATED = "created"

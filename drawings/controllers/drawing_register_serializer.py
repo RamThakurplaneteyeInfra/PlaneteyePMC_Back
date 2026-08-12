@@ -1,11 +1,29 @@
-"""Serializers for drawing register items and workflow events."""
+"""Serializers for drawing register items, workflow events, and file attachments."""
 
 from rest_framework import serializers
 
 from projects.models import Project
 
+from ..models.drawing_file import DrawingFile
 from ..models.drawing_register import DrawingRegisterItem, DrawingWorkflowEvent
 from .drawing_report import build_client_row
+
+
+class DrawingFileSerializer(serializers.ModelSerializer):
+    file_url = serializers.URLField(read_only=True)
+
+    class Meta:
+        model = DrawingFile
+        fields = [
+            "id",
+            "original_filename",
+            "revision",
+            "file_size",
+            "content_type",
+            "file_url",
+            "created_at",
+        ]
+        read_only_fields = fields
 
 
 class DrawingWorkflowEventSerializer(serializers.ModelSerializer):
@@ -19,6 +37,7 @@ class DrawingRegisterItemSerializer(serializers.ModelSerializer):
     project_name = serializers.SerializerMethodField(read_only=True)
     workflow_events = DrawingWorkflowEventSerializer(many=True, required=False)
     client_row = serializers.SerializerMethodField(read_only=True)
+    drawings = DrawingFileSerializer(source="active_files", many=True, read_only=True)
 
     class Meta:
         model = DrawingRegisterItem
@@ -35,11 +54,20 @@ class DrawingRegisterItemSerializer(serializers.ModelSerializer):
             "resubmitted_date",
             "approved_date",
             "workflow_events",
+            "drawings",
             "client_row",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "project_name", "sr_no", "client_row", "created_at", "updated_at"]
+        read_only_fields = [
+            "id",
+            "project_name",
+            "sr_no",
+            "client_row",
+            "drawings",
+            "created_at",
+            "updated_at",
+        ]
 
     def get_project_name(self, obj) -> str:
         return obj.project_name

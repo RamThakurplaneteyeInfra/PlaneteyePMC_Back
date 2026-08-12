@@ -16,6 +16,7 @@ def connect_mpr_invalidation_signals():
     from contract_values.models import ContractValue
     from correspondence.models.correspondence import CorrespondenceDocument
     from cost_performance.models import ProjectCostPerformance
+    from drawings.models.drawing_file import DrawingFile
     from drawings.models.drawing_register import DrawingRegisterItem
     from dpr.models import DailyProgressReport
     from health_safety.models import HealthSafetyRecord
@@ -44,6 +45,7 @@ def connect_mpr_invalidation_signals():
         InvoicingInformation,
         CorrespondenceDocument,
         DrawingRegisterItem,
+        DrawingFile,
         Bottleneck,
         ProjectQualityStatus,
         HealthSafetyRecord,

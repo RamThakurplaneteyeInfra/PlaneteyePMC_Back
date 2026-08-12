@@ -15,12 +15,37 @@ from datetime import date
 
 from django.db.models import Prefetch, Q, QuerySet
 
+from ..models.drawing_file import DrawingFile
 from ..models.drawing_register import DrawingRegisterItem, DrawingWorkflowEvent
 from .drawing_metrics import metrics_from_counts
 
 VIEW_MONTHLY = "monthly"
 VIEW_CUMULATIVE = "cumulative"
 VALID_VIEWS = {VIEW_MONTHLY, VIEW_CUMULATIVE}
+
+WORKFLOW_EVENTS_PREFETCH = Prefetch(
+    "workflow_events",
+    queryset=DrawingWorkflowEvent.objects.order_by("event_date", "created_at", "id"),
+)
+
+ACTIVE_FILES_PREFETCH = Prefetch(
+    "files",
+    queryset=DrawingFile.objects.filter(is_active=True).order_by("created_at", "id"),
+    to_attr="active_files",
+)
+
+REGISTER_LIST_PREFETCHES = (ACTIVE_FILES_PREFETCH, WORKFLOW_EVENTS_PREFETCH)
+
+
+def _queryset_has_prefetch(queryset: QuerySet, lookup_name: str) -> bool:
+    for lookup in getattr(queryset, "_prefetch_related_lookups", ()):
+        if lookup == lookup_name:
+            return True
+        if isinstance(lookup, Prefetch) and (
+            lookup.prefetch_to == lookup_name or lookup.prefetch_through == lookup_name
+        ):
+            return True
+    return False
 
 CLIENT_FORMAT = "client"
 EXPORT_CSV = "csv"
@@ -187,8 +212,14 @@ def kpi_summary_for_period(
 
     submitted = base_qs.filter(_submitted_q(from_date, to_date)).distinct().count()
     approved = base_qs.filter(_approved_q(from_date, to_date)).distinct().count()
+    drawing_file_count = DrawingFile.objects.filter(
+        drawing_register__project__name__iexact=project_name.strip(),
+        is_active=True,
+    ).count()
 
-    return metrics_from_counts(submitted, approved)
+    metrics = metrics_from_counts(submitted, approved)
+    metrics["drawing_file_count"] = drawing_file_count
+    return metrics
 
 
 def build_client_report_payload(
@@ -220,14 +251,9 @@ def build_client_report_payload(
 
 def build_client_report(queryset: QuerySet) -> list[dict]:
     """Build ordered client report rows from a filtered register queryset."""
-    qs = queryset.select_related("project").prefetch_related(
-        Prefetch(
-            "workflow_events",
-            queryset=DrawingWorkflowEvent.objects.order_by(
-                "event_date", "created_at", "id"
-            ),
-        )
-    )
+    qs = queryset.select_related("project")
+    if not _queryset_has_prefetch(queryset, "workflow_events"):
+        qs = qs.prefetch_related(WORKFLOW_EVENTS_PREFETCH)
     return [build_client_row(item) for item in qs]
 
 

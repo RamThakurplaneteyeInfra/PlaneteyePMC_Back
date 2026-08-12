@@ -551,6 +551,17 @@ TUTORIAL_VIDEO_FFPROBE_TIMEOUT_SEC = int(
 MPR_PHOTO_LIMIT = int(os.environ.get('MPR_PHOTO_LIMIT', '20'))
 MPR_PREVIEW_CACHE_TTL = int(os.environ.get('MPR_PREVIEW_CACHE_TTL', '300'))
 MPR_S3_PREFIX = os.environ.get('MPR_S3_PREFIX', 'mpr')
+DRAWING_FILES_S3_PREFIX = os.environ.get('DRAWING_FILES_S3_PREFIX', 'Drawing')
+DRAWING_MAX_FILE_SIZE = int(os.environ.get('DRAWING_MAX_FILE_SIZE', str(100 * 1024 * 1024)))
+_draw_ext_raw = os.environ.get(
+    'DRAWING_ALLOWED_EXTENSIONS',
+    '.pdf,.dwg,.dxf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png',
+)
+DRAWING_ALLOWED_EXTENSIONS = [
+    ext.strip().lower() if ext.strip().startswith('.') else f'.{ext.strip().lower()}'
+    for ext in _draw_ext_raw.split(',')
+    if ext.strip()
+]
 MPR_MAX_WORKERS = int(os.environ.get('MPR_MAX_WORKERS', '1'))
 # Run PDF/Excel inline (tests / small deploys). Default false → ThreadPool.
 MPR_GENERATION_INLINE = os.environ.get('MPR_GENERATION_INLINE', 'false').lower() in (

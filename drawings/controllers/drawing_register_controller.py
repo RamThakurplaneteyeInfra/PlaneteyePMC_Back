@@ -4,9 +4,17 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status, viewsets
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 
 from ..models.drawing_register import DrawingRegisterItem
+from ..services.file_upload import (
+    collect_drawing_files,
+    delete_register_s3_files,
+    persist_drawing_files,
+    prepare_register_payload,
+    validate_all_uploads,
+)
 from services.billing_update_notifications import (
     BillingAction,
     BillingModule,
@@ -17,6 +25,7 @@ from .drawing_export import client_report_csv_response
 from .drawing_report import (
     CLIENT_FORMAT,
     EXPORT_CSV,
+    REGISTER_LIST_PREFETCHES,
     VIEW_CUMULATIVE,
     VIEW_MONTHLY,
     build_client_report_payload,
@@ -29,9 +38,12 @@ from .drawing_register_serializer import DrawingRegisterItemSerializer
 class DrawingRegisterViewSet(viewsets.ModelViewSet):
     """Individual drawing register rows + workflow history."""
 
-    queryset = DrawingRegisterItem.objects.select_related("project").all()
+    queryset = DrawingRegisterItem.objects.select_related("project").prefetch_related(
+        *REGISTER_LIST_PREFETCHES,
+    )
     serializer_class = DrawingRegisterItemSerializer
     pagination_class = DrawingPagination
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
     http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
     lookup_value_regex = r"\d+"
 
@@ -77,7 +89,7 @@ class DrawingRegisterViewSet(viewsets.ModelViewSet):
                 contractor=parsed["contractor"],
                 status=parsed["status"],
                 search=parsed["search"],
-            )
+            ).prefetch_related(*REGISTER_LIST_PREFETCHES)
 
         month = year = None
         if params.get("month"):
@@ -99,7 +111,7 @@ class DrawingRegisterViewSet(viewsets.ModelViewSet):
             contractor=params.get("contractor"),
             status=params.get("status"),
             search=params.get("search"),
-        )
+        ).prefetch_related(*REGISTER_LIST_PREFETCHES)
 
     def get_queryset(self):
         _, queryset = self._filtered_queryset()
@@ -175,7 +187,17 @@ class DrawingRegisterViewSet(viewsets.ModelViewSet):
         )
 
     def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
+        uploaded_files = collect_drawing_files(request)
+        try:
+            validate_all_uploads(uploaded_files)
+        except DjangoValidationError as exc:
+            return self._error(
+                "Validation failed",
+                errors=_flatten_errors(exc.message_dict),
+            )
+
+        payload = prepare_register_payload(request.data)
+        serializer = self.get_serializer(data=payload)
         if not serializer.is_valid():
             return self._error(
                 "Validation failed",
@@ -187,6 +209,32 @@ class DrawingRegisterViewSet(viewsets.ModelViewSet):
             return self._error(
                 "Validation failed", errors=_flatten_errors(exc.message_dict)
             )
+
+        try:
+            if uploaded_files:
+                persist_drawing_files(
+                    register_item=instance,
+                    uploaded_files=uploaded_files,
+                    actor=request.user,
+                )
+        except Exception as exc:
+            delete_register_s3_files(instance)
+            instance.delete()
+            if isinstance(exc, DjangoValidationError):
+                return self._error(
+                    "Validation failed",
+                    errors=_flatten_errors(exc.message_dict),
+                )
+            return self._error(
+                "Drawing file upload failed",
+                errors={"drawings": str(exc)},
+            )
+
+        instance = (
+            DrawingRegisterItem.objects.select_related("project")
+            .prefetch_related(*REGISTER_LIST_PREFETCHES)
+            .get(pk=instance.pk)
+        )
         schedule_billing_update_notification_for_instance(
             request.user,
             instance,
@@ -201,14 +249,27 @@ class DrawingRegisterViewSet(viewsets.ModelViewSet):
 
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", False)
+        uploaded_files = collect_drawing_files(request)
+        try:
+            validate_all_uploads(uploaded_files)
+        except DjangoValidationError as exc:
+            return self._error(
+                "Validation failed",
+                errors=_flatten_errors(exc.message_dict),
+            )
+
         try:
             instance = DrawingRegisterItem.objects.select_related("project").get(
                 pk=kwargs["pk"]
             )
         except DrawingRegisterItem.DoesNotExist:
-            return self._error("Drawing register row not found", http_status=status.HTTP_404_NOT_FOUND)
+            return self._error(
+                "Drawing register row not found",
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
 
-        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        payload = prepare_register_payload(request.data)
+        serializer = self.get_serializer(instance, data=payload, partial=partial)
         if not serializer.is_valid():
             return self._error(
                 "Validation failed",
@@ -220,6 +281,31 @@ class DrawingRegisterViewSet(viewsets.ModelViewSet):
             return self._error(
                 "Validation failed", errors=_flatten_errors(exc.message_dict)
             )
+
+        if uploaded_files:
+            try:
+                persist_drawing_files(
+                    register_item=updated,
+                    uploaded_files=uploaded_files,
+                    actor=request.user,
+                    revision=updated.revision,
+                )
+            except Exception as exc:
+                if isinstance(exc, DjangoValidationError):
+                    return self._error(
+                        "Validation failed",
+                        errors=_flatten_errors(exc.message_dict),
+                    )
+                return self._error(
+                    "Drawing file upload failed",
+                    errors={"drawings": str(exc)},
+                )
+
+        updated = (
+            DrawingRegisterItem.objects.select_related("project")
+            .prefetch_related(*REGISTER_LIST_PREFETCHES)
+            .get(pk=updated.pk)
+        )
         schedule_billing_update_notification_for_instance(
             request.user,
             updated,
@@ -239,7 +325,10 @@ class DrawingRegisterViewSet(viewsets.ModelViewSet):
         try:
             instance = DrawingRegisterItem.objects.get(pk=kwargs["pk"])
         except DrawingRegisterItem.DoesNotExist:
-            return self._error("Drawing register row not found", http_status=status.HTTP_404_NOT_FOUND)
+            return self._error(
+                "Drawing register row not found",
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
         label = f"{instance.drawing_name} (#{instance.sr_no})"
         schedule_billing_update_notification_for_instance(
             request.user,
@@ -247,5 +336,6 @@ class DrawingRegisterViewSet(viewsets.ModelViewSet):
             BillingModule.DRAWING_SUMMARY,
             BillingAction.DELETE,
         )
+        delete_register_s3_files(instance)
         instance.delete()
         return self._success(f"Drawing register row '{label}' deleted successfully", {})

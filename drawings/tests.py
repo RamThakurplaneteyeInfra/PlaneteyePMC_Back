@@ -6,6 +6,8 @@ KPI metrics are computed directly from register records — no DrawingSummary se
 """
 
 from datetime import date
+from unittest.mock import patch
+import uuid
 
 from django.test import TestCase
 from rest_framework import status
@@ -22,6 +24,24 @@ from .controllers.drawing_report import (
     kpi_summary_for_period,
 )
 from .models.drawing_register import DrawingRegisterItem, DrawingWorkflowEvent
+
+
+def _fake_drawing_upload(**kwargs):
+    uploaded_file = kwargs["uploaded_file"]
+    name = getattr(uploaded_file, "name", "drawing.pdf")
+    ext = name.rsplit(".", 1)[-1]
+    pid = kwargs["project_id"]
+    rid = kwargs["register_id"]
+    rev = kwargs["revision"]
+    unique = uuid.uuid4().hex
+    return {
+        "s3_key": f"Drawing/{pid}/{rid}/rev-{rev}/{unique}.{ext}",
+        "file_url": f"https://example.s3.amazonaws.com/Drawing/{pid}/{rid}/rev-{rev}/{unique}.{ext}",
+        "original_filename": name.split("/")[-1],
+        "file_size": int(getattr(uploaded_file, "size", 20) or 20),
+        "content_type": "application/pdf" if ext == "pdf" else "application/acad",
+        "file_extension": ext,
+    }
 
 
 class DrawingClientReportTest(TestCase):
@@ -310,3 +330,268 @@ class DrawingClientReportAPITest(APITestCase):
         self.assertEqual(monthly["approved_drawings"], 5)
         self.assertEqual(cumulative["submitted_drawings"], 10)
         self.assertEqual(cumulative["approved_drawings"], 7)
+
+
+class DrawingFileUploadAPITest(APITestCase):
+    REGISTER_URL = "/api/drawings/register/"
+
+    def setUp(self):
+        self.project = Project.objects.create(name="Thane Project")
+        authenticate_client(self.client)
+
+    @staticmethod
+    def _pdf(name="drawing.pdf"):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        return SimpleUploadedFile(
+            name,
+            b"%PDF-1.4\nfake pdf content\n",
+            content_type="application/pdf",
+        )
+
+    @staticmethod
+    def _dwg(name="drawing.dwg"):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        return SimpleUploadedFile(
+            name,
+            b"AC1015\nfake dwg content\n",
+            content_type="application/acad",
+        )
+
+    @patch("drawings.services.file_upload.upload_drawing_file", side_effect=_fake_drawing_upload)
+    @patch("services.s3_drawing_files.check_s3_ready", return_value=(True, None))
+    def test_create_without_files_json_only(self, _ready, _upload):
+        payload = {
+            "project_name": "Thane Project",
+            "drawing_name": "Column Layout",
+            "revision": 1,
+        }
+        response = self.client.post(self.REGISTER_URL, payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.data["data"]
+        self.assertEqual(data["drawing_name"], "Column Layout")
+        self.assertEqual(data["drawings"], [])
+
+    @patch("drawings.services.file_upload.upload_drawing_file", side_effect=_fake_drawing_upload)
+    @patch("services.s3_drawing_files.check_s3_ready", return_value=(True, None))
+    def test_create_with_one_file(self, _ready, _upload):
+        response = self.client.post(
+            self.REGISTER_URL,
+            {
+                "project_name": "Thane Project",
+                "drawing_name": "Column Layout",
+                "revision": 1,
+                "drawings": self._pdf("column.pdf"),
+            },
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        drawings = response.data["data"]["drawings"]
+        self.assertEqual(len(drawings), 1)
+        self.assertEqual(drawings[0]["original_filename"], "column.pdf")
+        self.assertEqual(drawings[0]["revision"], 1)
+
+    @patch("drawings.services.file_upload.upload_drawing_file", side_effect=_fake_drawing_upload)
+    @patch("services.s3_drawing_files.check_s3_ready", return_value=(True, None))
+    def test_create_with_multiple_files(self, _ready, _upload):
+        response = self.client.post(
+            self.REGISTER_URL,
+            {
+                "project_name": "Thane Project",
+                "drawing_name": "Column Layout",
+                "revision": 1,
+                "drawings": [self._pdf("a.pdf"), self._dwg("a.dwg"), self._pdf("b.pdf")],
+            },
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(len(response.data["data"]["drawings"]), 3)
+
+    @patch("services.s3_drawing_files.validate_upload_file")
+    @patch("drawings.services.file_upload.upload_drawing_file", side_effect=_fake_drawing_upload)
+    @patch("services.s3_drawing_files.check_s3_ready", return_value=(True, None))
+    def test_invalid_extension_rejected(self, _ready, _upload, mock_validate):
+        from django.core.exceptions import ValidationError
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        mock_validate.side_effect = ValidationError("Unsupported file type '.exe'.")
+        response = self.client.post(
+            self.REGISTER_URL,
+            {
+                "project_name": "Thane Project",
+                "drawing_name": "Bad File",
+                "revision": 1,
+                "drawings": SimpleUploadedFile(
+                    "virus.exe", b"MZ", content_type="application/octet-stream"
+                ),
+            },
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(DrawingRegisterItem.objects.count(), 0)
+
+    @patch("drawings.services.file_upload.upload_drawing_file", side_effect=_fake_drawing_upload)
+    @patch("services.s3_drawing_files.check_s3_ready", return_value=(True, None))
+    def test_patch_adds_files_at_current_revision(self, _ready, _upload):
+        from .models.drawing_file import DrawingFile
+
+        item = DrawingRegisterItem.objects.create(
+            project=self.project,
+            sr_no=1,
+            drawing_name="Roof Plan",
+            revision=1,
+        )
+        DrawingFile.objects.create(
+            drawing_register=item,
+            revision=1,
+            original_filename="rev1.pdf",
+            s3_key="Drawing/1/1/rev-1/old.pdf",
+            file_url="https://example.com/old.pdf",
+            file_size=100,
+            content_type="application/pdf",
+            file_extension="pdf",
+            is_active=True,
+        )
+        item.revision = 2
+        item.save(update_fields=["revision", "updated_at"])
+
+        url = f"{self.REGISTER_URL}{item.id}/"
+        response = self.client.patch(
+            url,
+            {"drawings": [self._pdf("rev2.pdf"), self._dwg("rev2.dwg")]},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        drawings = response.data["data"]["drawings"]
+        self.assertEqual(len(drawings), 3)
+        rev2 = [d for d in drawings if d["revision"] == 2]
+        self.assertEqual(len(rev2), 2)
+
+    @patch("services.s3_drawing_files.delete_drawing_file")
+    @patch("drawings.services.file_upload.upload_drawing_file", side_effect=_fake_drawing_upload)
+    @patch("services.s3_drawing_files.check_s3_ready", return_value=(True, None))
+    def test_delete_file_soft_deletes(self, _ready, _upload, mock_s3_del):
+        create = self.client.post(
+            self.REGISTER_URL,
+            {
+                "project_name": "Thane Project",
+                "drawing_name": "Deletable",
+                "revision": 1,
+                "drawings": self._pdf(),
+            },
+            format="multipart",
+        )
+        file_id = create.data["data"]["drawings"][0]["id"]
+        response = self.client.delete(f"/api/drawings/files/{file_id}/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        from .models.drawing_file import DrawingFile
+
+        self.assertFalse(DrawingFile.objects.get(pk=file_id).is_active)
+        mock_s3_del.assert_called_once()
+
+    @patch("drawings.controllers.drawing_register_controller.delete_register_s3_files")
+    @patch("drawings.services.file_upload.upload_drawing_file", side_effect=_fake_drawing_upload)
+    @patch("services.s3_drawing_files.check_s3_ready", return_value=(True, None))
+    def test_delete_register_cleans_s3(self, _ready, _upload, mock_cleanup):
+        create = self.client.post(
+            self.REGISTER_URL,
+            {
+                "project_name": "Thane Project",
+                "drawing_name": "Whole Register",
+                "revision": 1,
+                "drawings": self._pdf(),
+            },
+            format="multipart",
+        )
+        item_id = create.data["data"]["id"]
+        response = self.client.delete(f"{self.REGISTER_URL}{item_id}/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        mock_cleanup.assert_called_once()
+        self.assertEqual(DrawingRegisterItem.objects.count(), 0)
+
+    @patch("drawings.services.file_upload.upload_drawing_file", side_effect=_fake_drawing_upload)
+    @patch("services.s3_drawing_files.check_s3_ready", return_value=(True, None))
+    def test_workflow_events_unchanged_with_files(self, _ready, _upload):
+        response = self.client.post(
+            self.REGISTER_URL,
+            {
+                "project_name": "Thane Project",
+                "drawing_name": "Workflow Drawing",
+                "revision": 1,
+                "workflow_events": '[{"action":"SUBMITTED","event_date":"2026-03-01"}]',
+                "drawings": self._pdf(),
+            },
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        events = response.data["data"]["workflow_events"]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["action"], "SUBMITTED")
+
+    @patch("drawings.services.file_upload.upload_drawing_file", side_effect=_fake_drawing_upload)
+    @patch("services.s3_drawing_files.check_s3_ready", return_value=(True, None))
+    def test_audit_log_on_upload(self, _ready, _upload):
+        from core.models import BusinessAuditLog
+
+        self.client.post(
+            self.REGISTER_URL,
+            {
+                "project_name": "Thane Project",
+                "drawing_name": "Audited",
+                "revision": 1,
+                "drawings": self._pdf(),
+            },
+            format="multipart",
+        )
+        self.assertTrue(
+            BusinessAuditLog.objects.filter(
+                entity_type=BusinessAuditLog.ENTITY_DRAWING,
+                action=BusinessAuditLog.ACTION_UPLOADED,
+            ).exists()
+        )
+
+    @patch("drawings.services.file_upload.upload_drawing_file", side_effect=_fake_drawing_upload)
+    @patch("services.s3_drawing_files.check_s3_ready", return_value=(True, None))
+    def test_summary_includes_drawing_file_count(self, _ready, _upload):
+        self.client.post(
+            self.REGISTER_URL,
+            {
+                "project_name": "Thane Project",
+                "drawing_name": "Summary Drawing",
+                "revision": 1,
+                "submitted_date": "2026-06-01",
+                "drawings": [self._pdf("a.pdf"), self._pdf("b.pdf")],
+            },
+            format="multipart",
+        )
+        response = self.client.get(
+            "/api/drawings/project/Thane%20Project/summary/",
+            {"month": 6, "year": 2026},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["data"]["drawing_file_count"], 2)
+
+    @patch("drawings.services.file_upload.delete_drawing_files_batch")
+    @patch("drawings.services.file_upload.upload_drawing_file")
+    @patch("services.s3_drawing_files.check_s3_ready", return_value=(True, None))
+    def test_multiple_upload_failure_cleans_s3(self, _ready, mock_upload, mock_cleanup):
+        def _side_effect(**kwargs):
+            if getattr(kwargs["uploaded_file"], "name", "").endswith("b.pdf"):
+                raise Exception("S3 failed")
+            return _fake_drawing_upload(**kwargs)
+
+        mock_upload.side_effect = _side_effect
+        response = self.client.post(
+            self.REGISTER_URL,
+            {
+                "project_name": "Thane Project",
+                "drawing_name": "Fail Mid Upload",
+                "revision": 1,
+                "drawings": [self._pdf("a.pdf"), self._pdf("b.pdf")],
+            },
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(DrawingRegisterItem.objects.count(), 0)
+        mock_cleanup.assert_called()

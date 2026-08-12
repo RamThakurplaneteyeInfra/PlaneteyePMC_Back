@@ -13,7 +13,7 @@ from decimal import Decimal
 from typing import Any
 
 from django.conf import settings
-from django.db.models import Count, Sum
+from django.db.models import Count, Prefetch, Sum
 from django.utils import timezone
 
 from bottlenecks.metrics import compute_summary as bottleneck_summary
@@ -32,6 +32,7 @@ from correspondence.models.correspondence import CorrespondenceDocument
 from cost_performance.models import ProjectCostPerformance
 from cost_performance.serializers import month_year_sort_key
 from drawings.controllers.drawing_report import kpi_summary_for_period
+from drawings.models.drawing_file import DrawingFile
 from drawings.models.drawing_register import DrawingRegisterItem, DrawingWorkflowEvent
 from health_safety.models import HealthSafetyRecord
 from invoicing.controllers.invoicing_metrics import metrics_from_amounts as invoice_metrics
@@ -478,7 +479,15 @@ class MPRService:
         )
         drawing_register = list(
             DrawingRegisterItem.objects.filter(project_id=project.id)
-            .prefetch_related("workflow_events")
+            .prefetch_related(
+                "workflow_events",
+                Prefetch(
+                    "files",
+                    queryset=DrawingFile.objects.filter(is_active=True).order_by(
+                        "created_at", "id"
+                    ),
+                ),
+            )
             .order_by("sr_no", "revision")[:250]
         )
         month_scope_rows = list(
@@ -1413,6 +1422,20 @@ class MPRService:
                     "submission_by_contractor": contractor_dates,
                     "reply_by_scl": scl_dates,
                     "events": events,
+                    "drawing_file_count": sum(
+                        1 for f in d.files.all() if getattr(f, "is_active", True)
+                    ),
+                    "files": [
+                        {
+                            "id": f.id,
+                            "original_filename": f.original_filename,
+                            "revision": f.revision,
+                            "file_url": f.file_url,
+                            "content_type": f.content_type,
+                        }
+                        for f in d.files.all()
+                        if f.is_active
+                    ],
                 }
             )
 
