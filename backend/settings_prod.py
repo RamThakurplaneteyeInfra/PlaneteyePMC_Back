@@ -7,6 +7,17 @@ import dj_database_url
 
 from .settings import *  # noqa: F403, F401
 
+
+def _split_env_list(value: str) -> list[str]:
+    """Parse comma-separated env values and strip wrapping quotes."""
+    items = []
+    for part in (value or '').split(','):
+        item = part.strip().strip('"').strip("'").strip()
+        if item:
+            items.append(item)
+    return items
+
+
 # SECURITY
 SECRET_KEY = os.environ.get('SECRET_KEY')
 if not SECRET_KEY:
@@ -14,8 +25,7 @@ if not SECRET_KEY:
 
 DEBUG = False
 
-_allowed_hosts_env = os.environ.get('ALLOWED_HOSTS', '')
-ALLOWED_HOSTS = [h.strip() for h in _allowed_hosts_env.split(',') if h.strip()]
+ALLOWED_HOSTS = _split_env_list(os.environ.get('ALLOWED_HOSTS', ''))
 
 # Railway injects the public hostname — use it when ALLOWED_HOSTS is unset.
 _railway_domain = (
@@ -143,10 +153,8 @@ _render_external = (os.environ.get('RENDER_EXTERNAL_URL') or '').rstrip('/')
 if _render_external and _render_external not in CSRF_TRUSTED_ORIGINS:
     CSRF_TRUSTED_ORIGINS.append(_render_external)
 
-_csrf_env = os.environ.get('CSRF_TRUSTED_ORIGINS', '')
-for _origin in _csrf_env.split(','):
-    _origin = _origin.strip()
-    if _origin and _origin not in CSRF_TRUSTED_ORIGINS:
+for _origin in _split_env_list(os.environ.get('CSRF_TRUSTED_ORIGINS', '')):
+    if _origin not in CSRF_TRUSTED_ORIGINS:
         CSRF_TRUSTED_ORIGINS.append(_origin)
 
 SECURE_BROWSER_XSS_FILTER = True
@@ -154,15 +162,10 @@ SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = 'DENY'
 
 # ================= CORS — explicit origins (required for browser FE) =================
-_cors_env = os.environ.get('CORS_ALLOWED_ORIGINS', '')
-CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_env.split(',') if o.strip()]
+CORS_ALLOWED_ORIGINS = _split_env_list(os.environ.get('CORS_ALLOWED_ORIGINS', ''))
 # Reuse CSRF trusted origins if CORS list was not set (avoids boot crash / 502).
 if not CORS_ALLOWED_ORIGINS:
-    CORS_ALLOWED_ORIGINS = [
-        o.strip()
-        for o in os.environ.get('CSRF_TRUSTED_ORIGINS', '').split(',')
-        if o.strip()
-    ]
+    CORS_ALLOWED_ORIGINS = _split_env_list(os.environ.get('CSRF_TRUSTED_ORIGINS', ''))
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGIN_REGEXES = []
 CORS_ALLOW_CREDENTIALS = True
