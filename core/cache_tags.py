@@ -49,6 +49,7 @@ CACHE_TAG_PREFIXES: dict[str, tuple[str, ...]] = {
     "manpower": ("manpower_list", "manpower_dashboard"),
     "site_images": ("site_images_list",),
     "monthly_scope": ("monthly_scope_list",),
+    "mpr": ("mpr_preview_v1",),
 }
 
 _local = threading.local()

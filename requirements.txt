@@ -39,6 +39,8 @@ numpy==2.4.4
 packaging==26.2
 pandas==3.0.2
 Pillow>=10.0.0
+openpyxl>=3.1.0
+reportlab>=4.0.0
 prompt_toolkit==3.0.52
 psycopg2-binary==2.9.12
 py-ubjson==0.16.1

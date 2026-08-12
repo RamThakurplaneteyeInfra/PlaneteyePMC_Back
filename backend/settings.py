@@ -83,10 +83,12 @@ INSTALLED_APPS = [
     'contractors',
     'site_images.apps.SiteImagesConfig',
     'bottlenecks',
+    'reminders.apps.RemindersConfig',
     'meeting_documents',
     'testing_documents',
     'feedback_management',
     'tutorial_videos.apps.TutorialVideosConfig',
+    'mpr.apps.MprConfig',
     'core.apps.CoreConfig',
 ]
 
@@ -544,6 +546,42 @@ TUTORIAL_VIDEO_FFMPEG_TIMEOUT_SEC = int(
 TUTORIAL_VIDEO_FFPROBE_TIMEOUT_SEC = int(
     os.environ.get('TUTORIAL_VIDEO_FFPROBE_TIMEOUT_SEC', '60')
 )
+
+# Monthly Progress Report (MPR) preview + generation
+MPR_PHOTO_LIMIT = int(os.environ.get('MPR_PHOTO_LIMIT', '20'))
+MPR_PREVIEW_CACHE_TTL = int(os.environ.get('MPR_PREVIEW_CACHE_TTL', '300'))
+MPR_S3_PREFIX = os.environ.get('MPR_S3_PREFIX', 'mpr')
+MPR_MAX_WORKERS = int(os.environ.get('MPR_MAX_WORKERS', '1'))
+# Run PDF/Excel inline (tests / small deploys). Default false → ThreadPool.
+MPR_GENERATION_INLINE = os.environ.get('MPR_GENERATION_INLINE', 'false').lower() in (
+    '1',
+    'true',
+    'yes',
+)
+# MPR PDF presentation (SCL-branded engineering report)
+MPR_REPORT_CONFIG = {
+    "consultant_name": os.environ.get(
+        "MPR_CONSULTANT_NAME", "SHRIKHANDE CONSULTANTS LIMITED"
+    ),
+    "consultant_short_name": os.environ.get("MPR_CONSULTANT_SHORT", "SCL"),
+    "consultant_tagline": os.environ.get(
+        "MPR_CONSULTANT_TAGLINE", "Project Management Consultants"
+    ),
+    "primary_brand_color": os.environ.get("MPR_PRIMARY_COLOR", "#0072BC"),
+    "secondary_brand_color": os.environ.get("MPR_SECONDARY_COLOR", "#4DB87E"),
+    # Legacy keys retained for env compatibility (unused by current PDF cover)
+    "reference_prefix": os.environ.get("MPR_REFERENCE_PREFIX", "SCPL/SITE/"),
+    "recipient_designation": os.environ.get("MPR_RECIPIENT_DESIGNATION", ""),
+    "recipient_organization": os.environ.get("MPR_RECIPIENT_ORGANIZATION", ""),
+    "recipient_address": [
+        line.strip()
+        for line in os.environ.get("MPR_RECIPIENT_ADDRESS", "").splitlines()
+        if line.strip()
+    ],
+    "signatory_designation": os.environ.get("MPR_SIGNATORY_DESIGNATION", ""),
+    "signatory_title": os.environ.get("MPR_SIGNATORY_TITLE", ""),
+    "salutation": os.environ.get("MPR_SALUTATION", ""),
+}
 VIDEO_MAX_WIDTH = int(os.environ.get('VIDEO_MAX_WIDTH', '1920'))
 VIDEO_MAX_HEIGHT = int(os.environ.get('VIDEO_MAX_HEIGHT', '1080'))
 # Target max video bitrate in kbps (0 = auto from resolution). Never exceeds source.
@@ -583,5 +621,14 @@ CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_BROKER_CONNECTION_RETRY = True
 CELERY_BROKER_CONNECTION_MAX_RETRIES = 10
+
+# Optional Celery Beat schedule (requires a beat process).
+# Fallback without Beat: Railway cron → `python manage.py dispatch_due_reminders`
+CELERY_BEAT_SCHEDULE = {
+    "dispatch-due-reminders-every-minute": {
+        "task": "reminders.dispatch_due_reminders",
+        "schedule": 60.0,
+    },
+}
 
 

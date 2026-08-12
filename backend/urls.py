@@ -153,6 +153,7 @@ urlpatterns = [
 
     # Bottleneck register (Issue / Concern / Risk / Action)
     path('api/', include('bottlenecks.urls')),
+    path('api/', include('reminders.urls')),
 
     # Meeting Documents (MoM / EDL) stored in private S3
     path('api/', include('meeting_documents.urls')),
@@ -163,6 +164,9 @@ urlpatterns = [
     # Project Feedback Management (issue workflow with optional S3 image attachment)
     path('api/', include('feedback_management.urls')),
     path('api/', include('tutorial_videos.urls')),
+
+    # Monthly Progress Report (server-side aggregation preview)
+    path('api/', include('mpr.urls')),
 ]
 
 if settings.DEBUG:
