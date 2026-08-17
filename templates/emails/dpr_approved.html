@@ -1,81 +1,42 @@
-<!DOCTYPE html>
-<html>
-
-<head>
-    <meta charset="utf-8">
-    <title>DPR Approved Notification</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            line-height: 1.6;
-            color: #333;
-        }
-
-        .container {
-            max-width: 600px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-
-        .header {
-            background-color: #4CAF50;
-            color: white;
-            padding: 20px;
-            text-align: center;
-        }
-
-        .content {
-            padding: 20px;
-            background-color: #f9f9f9;
-        }
-
-        .footer {
-            background-color: #333;
-            color: white;
-            padding: 10px;
-            text-align: center;
-            font-size: 12px;
-        }
-    </style>
-</head>
-
-<body>
-    <div class="container">
-        <div class="header">
-            <!-- <img src="{{ base_url|default:'http://localhost:8000' }}/static/images/logo.png" alt="Company Logo" style="max-width: 200px; height: auto; margin-bottom: 10px;"> -->
-            <h1>DPR Approved</h1>
-        </div>
-        <div class="content">
-            <p>Dear User,</p>
-
-            <p>Your Daily Progress Report has been approved by the {{ approved_by_role }}:</p>
-
-            <ul>
-                <li><strong>Project Name:</strong> {{ dpr.project_name }}</li>
-                <li><strong>Report Date:</strong> {{ dpr.report_date|date:"F j, Y" }}</li>
-                <li><strong>Job No:</strong> {{ dpr.job_no }}</li>
-                <li><strong>Status:</strong> Approved by {{ approved_by_role }}</li>
-                <li><strong>Approved By:</strong> {% if dpr.approved_by %}{{
-                    dpr.approved_by.get_full_name|default:dpr.approved_by.username }}{% else %}Unknown User{% endif %}
-                </li>
-                <li><strong>Approved At:</strong> {{ dpr.approved_at|date:"F j, Y H:i" }}</li>
-            </ul>
-
-            {% if approved_by_role == 'Team Leader' %}
-            <p>Your DPR has been approved by the Team Lead and is now being reviewed by the PMC Manager.</p>
-            {% elif approved_by_role == 'PMC Manager' or approved_by_role == 'Coordinator' %}
-            <p>Your DPR has been approved by the PMC Manager and is now being reviewed by the PMC Head.</p>
-            {% elif approved_by_role == 'PMC Head' %}
-            <p>Your DPR has been finally approved by the PMC Head. The approval process is now complete.</p>
-            {% endif %}
-
-            <p>Best regards,<br>
-                PMC System</p>
-        </div>
-        <div class="footer">
-            <p>This is an automated notification from the PMC System.</p>
-        </div>
-    </div>
-</body>
-
-</html>
+{% extends "emails/base_email.html" %}
+{% block title %}DPR Approved{% endblock %}
+{% block preheader %}Your Daily Progress Report has been approved.{% endblock %}
+{% block accent %}#2e8b57{% endblock %}
+{% block eyebrow %}Approval Update{% endblock %}
+{% block heading %}DPR approved{% endblock %}
+{% block introduction %}
+Dear {% firstof submitter.get_full_name submitter.username "User" %}, your Daily Progress Report has been approved by {{
+approved_by_role|default:"the approver" }}.
+{% endblock %}
+{% block content %}
+<div
+    style="margin:4px 0 20px;padding:12px 16px;border-radius:8px;background:#eaf7f0;color:#246c48;font-size:14px;font-weight:700;">
+    Approved</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+    style="background:#f6f9fb;border:1px solid #e2e9ee;border-radius:8px;">
+    <tr>
+        <td style="padding:13px 18px;color:#647786;width:38%;font-size:13px;">Project</td>
+        <td style="padding:13px 18px;font-weight:700;">{{ dpr.project_name }}</td>
+    </tr>
+    <tr>
+        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;color:#647786;font-size:13px;">Report date</td>
+        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;">{{ dpr.report_date }}</td>
+    </tr>
+    <tr>
+        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;color:#647786;font-size:13px;">Job number</td>
+        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;">{{ dpr.job_no|default:"Not specified" }}</td>
+    </tr>
+    <tr>
+        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;color:#647786;font-size:13px;">Approved by</td>
+        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;">{% firstof dpr.approved_by.get_full_name
+            dpr.approved_by.username "Not specified" %}</td>
+    </tr>
+</table>
+<p style="margin:22px 0 0;font-size:15px;line-height:1.7;color:#334b5e;">
+    {% if approved_by_role == 'Team Leader' %}The report is now awaiting PMC Manager review.
+    {% elif approved_by_role == 'PMC Manager' or approved_by_role == 'Coordinator' %}The report is now awaiting PMC Head
+    review.
+    {% elif approved_by_role == 'PMC Head' %}The approval workflow is complete.
+    {% else %}The approval status has been updated in the PMC portal.{% endif %}
+</p>
+{% endblock %}

@@ -480,12 +480,36 @@ CHANNEL_LAYERS = {
 # EMAIL CONFIGURATION
 # ==============================
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.gmail.com')
-EMAIL_PORT = int(os.environ.get('EMAIL_PORT', 587))
-EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True').lower() == 'true'
-EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
-EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
-DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER)
+# Brevo SMTP variables take precedence while the legacy EMAIL_* variables
+# remain supported for backward-compatible local and existing deployments.
+EMAIL_HOST = os.environ.get(
+    'BREVO_SMTP_HOST',
+    os.environ.get('EMAIL_HOST', 'smtp-relay.brevo.com'),
+)
+EMAIL_PORT = int(
+    os.environ.get('BREVO_SMTP_PORT', os.environ.get('EMAIL_PORT', 587))
+)
+EMAIL_USE_TLS = os.environ.get(
+    'BREVO_SMTP_USE_TLS',
+    os.environ.get('EMAIL_USE_TLS', 'True'),
+).lower() == 'true'
+EMAIL_HOST_USER = os.environ.get(
+    'BREVO_SMTP_USERNAME',
+    os.environ.get('EMAIL_HOST_USER', ''),
+)
+EMAIL_HOST_PASSWORD = os.environ.get(
+    'BREVO_SMTP_PASSWORD',
+    os.environ.get('EMAIL_HOST_PASSWORD', ''),
+)
+DEFAULT_FROM_EMAIL = os.environ.get(
+    'BREVO_FROM_EMAIL',
+    os.environ.get('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER),
+)
+EMAIL_TIMEOUT = float(os.environ.get('EMAIL_TIMEOUT', '30'))
+EMAIL_LOGO_PATH = os.environ.get(
+    'EMAIL_LOGO_PATH',
+    str(BASE_DIR / 'mpr' / 'assets' / 'scl_logo.jpeg'),
+)
 
 # ==============================
 # CLOUDINARY (Site Progress Images — fallback; disabled when SITE_IMAGE_S3_ONLY=True)

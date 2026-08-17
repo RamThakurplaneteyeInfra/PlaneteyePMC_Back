@@ -1,4 +1,5 @@
 from .attachment import CorrespondenceDocumentAttachment
+from .comment import CorrespondenceComment
 from .correspondence import (
     Correspondence,
     CorrespondenceDocument,
@@ -9,6 +10,7 @@ from .scl_delivered_summary import SCLDeliveredCorrespondenceSummary
 
 __all__ = [
     "Correspondence",
+    "CorrespondenceComment",
     "CorrespondenceDocument",
     "CorrespondenceDocumentAttachment",
     "CorrespondenceStatus",

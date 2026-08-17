@@ -1,49 +1,37 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>Site Engineer Assignment Notification</title>
-    <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-        .header { background-color: #2196F3; color: white; padding: 20px; text-align: center; }
-        .content { padding: 20px; background-color: #f9f9f9; }
-        .footer { background-color: #333; color: white; padding: 10px; text-align: center; font-size: 12px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>Site Engineer Assignment Notification</h1>
-        </div>
-        <div class="content">
-            <p>Dear Site Engineer,</p>
-
-            <p>A new site engineer has been assigned to the following project:</p>
-
-            <ul>
-                <li><strong>Project Name:</strong> {{ project.name }}</li>
-                <li><strong>Client:</strong> {{ project.client_name|default:"N/A" }}</li>
-                <li><strong>Location:</strong> {{ project.location|default:"N/A" }}</li>
-                <li><strong>Assigned Engineer:</strong> {{ assigned_user.get_full_name|default:assigned_user.username }}</li>
-                <li><strong>Assignment Date:</strong> {{ assignment_date|date:"F j, Y" }}</li>
-            </ul>
-
-            <p>Please coordinate with the assigned engineer and ensure smooth project execution.</p>
-
-            <h3>All Site Engineers on this Project:</h3>
-            <ul>
-                {% for se in all_site_engineers %}
-                <li>{{ se.get_full_name|default:se.username }}</li>
-                {% endfor %}
-            </ul>
-
-            <p>Best regards,<br>
-            PMC System</p>
-        </div>
-        <div class="footer">
-            <p>This is an automated notification from the PMC System.</p>
-        </div>
-    </div>
-</body>
-</html>
+{% extends "emails/base_email.html" %}
+{% block title %}Site Engineer Assignment{% endblock %}
+{% block preheader %}A site engineer has been added to the project team.{% endblock %}
+{% block accent %}#1177b8{% endblock %}
+{% block eyebrow %}Team Update{% endblock %}
+{% block heading %}Site engineer assigned{% endblock %}
+{% block introduction %}A site engineer has been assigned to the project team. Please coordinate on upcoming site
+activities.{% endblock %}
+{% block content %}
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+    style="background:#f6f9fb;border:1px solid #e2e9ee;border-radius:8px;">
+    <tr>
+        <td style="padding:13px 18px;color:#647786;width:38%;font-size:13px;">Project</td>
+        <td style="padding:13px 18px;font-weight:700;">{{ project.name }}</td>
+    </tr>
+    <tr>
+        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;color:#647786;font-size:13px;">Client</td>
+        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;">{{ project.client_name|default:"Not specified" }}
+        </td>
+    </tr>
+    <tr>
+        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;color:#647786;font-size:13px;">Location</td>
+        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;">{{ project.location|default:"Not specified" }}</td>
+    </tr>
+    <tr>
+        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;color:#647786;font-size:13px;">Assigned engineer</td>
+        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;">{% firstof assigned_user.get_full_name
+            assigned_user.username "Not specified" %}</td>
+    </tr>
+</table>
+{% if all_site_engineers %}
+<div style="margin-top:20px;color:#17344d;font-size:14px;font-weight:700;">Current site engineering team</div>
+<ul style="margin:10px 0 0;padding-left:20px;color:#536777;font-size:14px;line-height:1.8;">
+    {% for se in all_site_engineers %}<li>{% firstof se.get_full_name se.username "Unnamed engineer" %}</li>{% endfor %}
+</ul>
+{% endif %}
+{% endblock %}

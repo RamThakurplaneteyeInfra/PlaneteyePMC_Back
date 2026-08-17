@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from urllib.parse import unquote
 
-from django.db.models import Q, QuerySet
+from django.db.models import QuerySet
 
 from projects.models import Project
 
@@ -115,8 +115,13 @@ READ_ROLES_BY_DOMAIN: dict[str, set[str]] = {
 def _user_role_names(user) -> set[str]:
     if not user or not user.is_authenticated:
         return set()
+    cached = getattr(user, "_rbac_role_names", None)
+    if cached is not None:
+        return cached
     if user.is_superuser:
-        return ALL_PROJECT_ROLES | {"superuser"}
+        roles = ALL_PROJECT_ROLES | {"superuser"}
+        user._rbac_role_names = roles
+        return roles
     roles = set(user.groups.values_list("name", flat=True))
     if ROLE_TEAM_LEAD_ALIAS in roles:
         roles.add(ROLE_TEAM_LEADER)
@@ -136,6 +141,7 @@ def _user_role_names(user) -> set[str]:
             roles.add(ROLE_HO_ALIAS)
     except Exception:
         pass
+    user._rbac_role_names = roles
     return roles
 
 
@@ -207,32 +213,76 @@ def is_manageable_project_role(role_name: str | None) -> bool:
     return name in MANAGEABLE_PROJECT_ROLES
 
 
+def _load_assigned_projects(user) -> None:
+    """
+    Load assigned project id/name sets once per request (non-admin only).
+
+    Uses separate index lookups instead of one OR+DISTINCT across M2M joins,
+    which explodes on large project tables.
+    """
+    if getattr(user, "_rbac_assigned_loaded", False):
+        return
+    id_querysets = (
+        Project.objects.filter(team_lead=user).values_list("id", flat=True),
+        Project.objects.filter(site_engineer=user).values_list("id", flat=True),
+        Project.objects.filter(billing_site_engineer=user).values_list("id", flat=True),
+        Project.objects.filter(qaqc_site_engineer=user).values_list("id", flat=True),
+        Project.objects.filter(hse_site_engineer=user).values_list("id", flat=True),
+        Project.objects.filter(pmc_head=user).values_list("id", flat=True),
+        Project.objects.filter(site_engineers=user).values_list("id", flat=True),
+        Project.objects.filter(coordinators=user).values_list("id", flat=True),
+        Project.objects.filter(assigned_users=user).values_list("id", flat=True),
+    )
+    ids: set[int] = set()
+    for qs in id_querysets:
+        ids.update(qs)
+    if ids:
+        rows = list(
+            Project.objects.filter(pk__in=ids).values_list("id", "name")
+        )
+    else:
+        rows = []
+    user._rbac_assigned_project_ids = {row[0] for row in rows}
+    user._rbac_assigned_project_names = {row[1] for row in rows if row[1]}
+    user._rbac_assigned_loaded = True
+
+
 def get_user_assigned_projects_qs(user) -> QuerySet:
     """Projects the user may access."""
     if not user or not user.is_authenticated:
         return Project.objects.none()
     if is_admin_user(user):
         return Project.objects.all()
-
-    return Project.objects.filter(
-        Q(team_lead=user)
-        | Q(site_engineer=user)
-        | Q(site_engineers=user)
-        | Q(billing_site_engineer=user)
-        | Q(qaqc_site_engineer=user)
-        | Q(hse_site_engineer=user)
-        | Q(coordinators=user)
-        | Q(pmc_head=user)
-        | Q(assigned_users=user)
-    ).distinct()
+    _load_assigned_projects(user)
+    return Project.objects.filter(pk__in=user._rbac_assigned_project_ids)
 
 
 def get_user_assigned_project_ids(user) -> set[int]:
-    return set(get_user_assigned_projects_qs(user).values_list("id", flat=True))
+    if not user or not user.is_authenticated:
+        return set()
+    if is_admin_user(user):
+        cached = getattr(user, "_rbac_admin_project_ids", None)
+        if cached is None:
+            cached = set(Project.objects.values_list("id", flat=True))
+            user._rbac_admin_project_ids = cached
+        return cached
+    _load_assigned_projects(user)
+    return set(user._rbac_assigned_project_ids)
 
 
 def get_user_assigned_project_names(user) -> set[str]:
-    return set(get_user_assigned_projects_qs(user).values_list("name", flat=True))
+    if not user or not user.is_authenticated:
+        return set()
+    if is_admin_user(user):
+        cached = getattr(user, "_rbac_admin_project_names", None)
+        if cached is None:
+            cached = set(
+                Project.objects.exclude(name="").values_list("name", flat=True)
+            )
+            user._rbac_admin_project_names = cached
+        return cached
+    _load_assigned_projects(user)
+    return set(user._rbac_assigned_project_names)
 
 
 def resolve_project(name: str | None, user=None) -> Project | None:
@@ -283,7 +333,7 @@ def user_has_project_access(user, project: Project | None) -> bool:
         return False
     if is_admin_user(user):
         return True
-    return get_user_assigned_projects_qs(user).filter(pk=project.pk).exists()
+    return project.pk in get_user_assigned_project_ids(user)
 
 
 def user_has_project_name_access(user, project_name: str | None) -> bool:

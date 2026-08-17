@@ -129,12 +129,14 @@ class DprEmailHardeningTests(TestCase):
         self.assertEqual(pool["max_workers"], 4)
 
     @patch("services.email_utils.get_connection")
-    @patch("services.email_utils.send_mail", return_value=1)
+    @patch("services.email_utils.EmailMultiAlternatives")
     @patch("services.email_utils.render_to_string", return_value="<html/>")
-    def test_smtp_uses_timeout(self, mock_render, mock_send, mock_conn):
+    def test_smtp_uses_timeout(self, mock_render, mock_message_cls, mock_conn):
         from services.email_utils import send_html_email
 
         mock_conn.return_value = object()
+        mock_message = mock_message_cls.return_value
+        mock_message.send.return_value = 1
         ok = send_html_email(
             subject="t",
             template_name="dpr_submitted",
@@ -145,6 +147,8 @@ class DprEmailHardeningTests(TestCase):
         mock_conn.assert_called()
         kwargs = mock_conn.call_args.kwargs
         self.assertEqual(kwargs.get("timeout"), 15.0)
+        mock_message.attach_alternative.assert_called_once_with("<html/>", "text/html")
+        mock_message.send.assert_called_once_with(fail_silently=False)
 
 
 @override_settings(

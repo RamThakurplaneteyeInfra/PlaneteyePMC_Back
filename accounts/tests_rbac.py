@@ -12,6 +12,7 @@ from accounts.models import UserProfile
 from accounts.rbac import (
     RBACDomain,
     get_user_assigned_project_ids,
+    get_user_assigned_project_names,
     is_admin_user,
     user_can_write_domain,
     user_has_project_access,
@@ -84,6 +85,40 @@ class RBACHelperTest(TestCase):
     def test_enforce_raises_for_unauthorized_write(self):
         with self.assertRaises(PermissionDenied):
             enforce_project_write(self.se, self.project, RBACDomain.BILLING)
+
+    def test_assigned_project_lookups_are_request_cached(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        with CaptureQueriesContext(connection) as first:
+            ids = get_user_assigned_project_ids(self.se)
+            names = get_user_assigned_project_names(self.se)
+            self.assertTrue(user_has_project_access(self.se, self.project))
+        self.assertIn(self.project.id, ids)
+        self.assertIn(self.project.name, names)
+        self.assertGreaterEqual(len(first.captured_queries), 1)
+
+        with CaptureQueriesContext(connection) as second:
+            get_user_assigned_project_ids(self.se)
+            get_user_assigned_project_names(self.se)
+            user_has_project_access(self.se, self.project)
+            is_admin_user(self.se)
+        self.assertEqual(len(second.captured_queries), 0)
+
+    def test_get_primary_role_does_not_n_plus_one_groups(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        from accounts.models import UserProfile
+
+        UserProfile.objects.get_or_create(user=self.se)
+        profile = UserProfile.objects.select_related("user").prefetch_related(
+            "user__groups"
+        ).get(user=self.se)
+        with CaptureQueriesContext(connection) as ctx:
+            self.assertEqual(profile.get_primary_role(), "Site Engineer")
+            self.assertEqual(profile.get_role_display_name(), "Site Engineer")
+        self.assertEqual(len(ctx.captured_queries), 0)
 
 
 class FinancialRBACAPITest(TestCase):

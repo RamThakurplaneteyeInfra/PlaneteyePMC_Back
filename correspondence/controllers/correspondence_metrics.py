@@ -6,7 +6,7 @@ with correspondence_category=RECORD (never manual summary entry).
 import calendar
 from datetime import date
 
-from django.db.models import Count, Q, QuerySet
+from django.db.models import Case, CharField, Count, Q, QuerySet, Value, When
 
 from ..models.correspondence import CorrespondenceDocument
 from ..models.inbound_summary import InboundCorrespondenceSummary
@@ -117,6 +117,31 @@ def record_count_from_queryset(queryset: QuerySet) -> int:
     return queryset.filter(correspondence_category=CATEGORY_RECORD).count()
 
 
+def _kpi_aggregate(queryset: QuerySet) -> dict:
+    """Single-query received / record / on_time / late counts."""
+    delivered_q = Q(delivered_status=STATUS_DELIVERED_ON_TIME) | Q(
+        delivered_status=STATUS_DELIVERED_LATE
+    )
+    return queryset.aggregate(
+        received=Count("id"),
+        record=Count("id", filter=Q(correspondence_category=CATEGORY_RECORD)),
+        on_time=Count(
+            "id",
+            filter=Q(correspondence_category=CATEGORY_DELIVERY)
+            & Q(delivered_status=STATUS_DELIVERED_ON_TIME),
+        ),
+        late_deliveries=Count(
+            "id",
+            filter=Q(correspondence_category=CATEGORY_DELIVERY)
+            & Q(delivered_status=STATUS_DELIVERED_LATE),
+        ),
+        delivered=Count(
+            "id",
+            filter=Q(correspondence_category=CATEGORY_DELIVERY) & delivered_q,
+        ),
+    )
+
+
 def metrics_from_queryset(queryset: QuerySet) -> dict:
     """
     Aggregate KPIs from documents.
@@ -129,31 +154,21 @@ def metrics_from_queryset(queryset: QuerySet) -> dict:
     if queryset is None:
         return metrics_from_counts(0, 0, 0, record=0)
 
-    received = queryset.count()
-    record = record_count_from_queryset(queryset)
-
-    delivery_qs = queryset.filter(correspondence_category=CATEGORY_DELIVERY)
-    agg = delivery_qs.aggregate(
-        on_time=Count("id", filter=Q(delivered_status=STATUS_DELIVERED_ON_TIME)),
-        late_deliveries=Count("id", filter=Q(delivered_status=STATUS_DELIVERED_LATE)),
-    )
+    agg = _kpi_aggregate(queryset)
     return metrics_from_counts(
-        received=received,
-        on_time=agg["on_time"],
-        late_deliveries=agg["late_deliveries"],
-        record=record,
+        received=agg["received"] or 0,
+        on_time=agg["on_time"] or 0,
+        late_deliveries=agg["late_deliveries"] or 0,
+        record=agg["record"] or 0,
     )
 
 
 def _scl_category_counts(queryset: QuerySet) -> dict:
     """Per-recipient received/delivered/record/pending from documents."""
-    delivered_q = Q(delivered_status=STATUS_DELIVERED_ON_TIME) | Q(
-        delivered_status=STATUS_DELIVERED_LATE
-    )
-    received = queryset.count()
-    record = record_count_from_queryset(queryset)
-    delivery_qs = queryset.filter(correspondence_category=CATEGORY_DELIVERY)
-    delivered = delivery_qs.filter(delivered_q).count()
+    agg = _kpi_aggregate(queryset)
+    received = agg["received"] or 0
+    record = agg["record"] or 0
+    delivered = agg["delivered"] or 0
     pending = compute_pending(received, delivered, record)
     return {
         "received": received,
@@ -161,6 +176,77 @@ def _scl_category_counts(queryset: QuerySet) -> dict:
         "record": record,
         "pending": pending,
     }
+
+
+def _scl_recipient_bucket_case():
+    return Case(
+        When(
+            Q(recipient_type=CorrespondenceDocument.RECIPIENT_CLIENT)
+            | Q(
+                correspondence_type=CorrespondenceDocument.RECIPIENT_CLIENT,
+                recipient_type__isnull=True,
+            ),
+            then=Value("client"),
+        ),
+        When(
+            Q(recipient_type=CorrespondenceDocument.RECIPIENT_CONTRACTOR)
+            | Q(
+                correspondence_type=CorrespondenceDocument.RECIPIENT_CONTRACTOR,
+                recipient_type__isnull=True,
+            ),
+            then=Value("contractor"),
+        ),
+        When(
+            Q(recipient_type=CorrespondenceDocument.RECIPIENT_OTHER_AGENCY)
+            | Q(
+                correspondence_type=CorrespondenceDocument.RECIPIENT_OTHER_AGENCY,
+                recipient_type__isnull=True,
+            ),
+            then=Value("other_agency"),
+        ),
+        default=Value(""),
+        output_field=CharField(),
+    )
+
+
+def _scl_counts_by_recipient(scl_qs: QuerySet) -> dict[str, dict]:
+    """One grouped query for client / contractor / other_agency SCL counts."""
+    empty = {"received": 0, "delivered": 0, "record": 0, "pending": 0}
+    delivered_q = Q(delivered_status=STATUS_DELIVERED_ON_TIME) | Q(
+        delivered_status=STATUS_DELIVERED_LATE
+    )
+    rows = (
+        scl_qs.annotate(bucket=_scl_recipient_bucket_case())
+        .exclude(bucket="")
+        .values("bucket")
+        .annotate(
+            received=Count("id"),
+            record=Count("id", filter=Q(correspondence_category=CATEGORY_RECORD)),
+            delivered=Count(
+                "id",
+                filter=Q(correspondence_category=CATEGORY_DELIVERY) & delivered_q,
+            ),
+        )
+    )
+    out = {
+        "client": dict(empty),
+        "contractor": dict(empty),
+        "other_agency": dict(empty),
+    }
+    for row in rows:
+        bucket = row["bucket"]
+        if bucket not in out:
+            continue
+        received = row["received"] or 0
+        record = row["record"] or 0
+        delivered = row["delivered"] or 0
+        out[bucket] = {
+            "received": received,
+            "delivered": delivered,
+            "record": record,
+            "pending": compute_pending(received, delivered, record),
+        }
+    return out
 
 
 def _scl_outbound_qs(queryset: QuerySet) -> QuerySet:
@@ -365,19 +451,13 @@ def scl_delivered_metrics(
     scl_qs = _scl_outbound_qs(queryset)
 
     empty = {"received": 0, "delivered": 0, "record": 0, "pending": 0}
+    buckets = _scl_counts_by_recipient(scl_qs)
+    client = buckets["client"]
+    contractor = buckets["contractor"]
+    other_agency = buckets["other_agency"]
+    total_received = client["received"] + contractor["received"] + other_agency["received"]
 
-    if scl_qs.exists():
-        client = _scl_category_counts(
-            _scl_recipient_qs(scl_qs, CorrespondenceDocument.RECIPIENT_CLIENT),
-        )
-        contractor = _scl_category_counts(
-            _scl_recipient_qs(scl_qs, CorrespondenceDocument.RECIPIENT_CONTRACTOR),
-        )
-        other_agency = _scl_category_counts(
-            _scl_recipient_qs(scl_qs, CorrespondenceDocument.RECIPIENT_OTHER_AGENCY),
-        )
-
-        total_received = client["received"] + contractor["received"] + other_agency["received"]
+    if total_received:
         total_delivered = (
             client["delivered"] + contractor["delivered"] + other_agency["delivered"]
         )

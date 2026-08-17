@@ -48,10 +48,10 @@ class UserProfile(models.Model):
         Get the primary role of the user based on their groups
         Returns the role name as a string
         """
-        groups = self.user.groups.all()
-        if not groups.exists():
+        group_names = {g.name for g in self.user.groups.all()}
+        if not group_names:
             return None
-        
+
         # Priority order: CEO > Head Office > PMC Head > Team Leader > PMC Manager > Site Engineers
         role_priority = [
             'CEO',
@@ -66,17 +66,16 @@ class UserProfile(models.Model):
             'HSE Site Engineer',
             'Site Engineer',
         ]
-        
+
         for role in role_priority:
-            if groups.filter(name=role).exists():
+            if role in group_names:
                 if role in ('HO',):
                     return 'Head Office'
                 if role == 'Coordinator':
                     return 'PMC Manager'
                 return role
-        
-        # Return first group if no priority match
-        return groups.first().name
+
+        return next(iter(group_names))
 
     def get_role_display_name(self):
         """

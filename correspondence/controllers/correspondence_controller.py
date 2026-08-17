@@ -27,6 +27,7 @@ from rest_framework.response import Response
 
 from ..models.correspondence import CorrespondenceDocument
 from ..models.attachment import CorrespondenceDocumentAttachment
+from ..models.comment import CorrespondenceComment
 from services.billing_update_notifications import (
     BillingAction,
     BillingModule,
@@ -53,6 +54,10 @@ from .attachment_serializer import (
     CorrespondenceAttachmentSerializer,
     CorrespondenceAttachmentUploadSerializer,
 )
+from .comment_serializer import (
+    EMPTY_COMMENT_MESSAGE,
+    CorrespondenceCommentSerializer,
+)
 from correspondence.permissions import (
     can_upload_correspondence_attachment,
     can_view_correspondence_attachment,
@@ -65,6 +70,16 @@ from ..models.inbound_summary import InboundCorrespondenceSummary
 from ..models.scl_delivered_summary import SCLDeliveredCorrespondenceSummary
 
 logger = logging.getLogger(__name__)
+
+
+class _ExactErrorResponse(Response):
+    """Preserve endpoint-specific exact error bodies through error middleware."""
+
+    def render(self):
+        if isinstance(self.data, dict):
+            self.data.pop("errors", None)
+        return super().render()
+
 
 _CACHE_KEY_LIST = "correspondence_documents_list"
 _CACHE_TIMEOUT = 300
@@ -484,6 +499,86 @@ class CorrespondenceDocumentViewSet(viewsets.ModelViewSet):
     def partial_update(self, request, *args, **kwargs):
         kwargs["partial"] = True
         return self.update(request, *args, **kwargs)
+
+    @swagger_auto_schema(
+        operation_summary="List or add correspondence comments",
+        methods=["get", "post"],
+        tags=["Correspondence Comments"],
+    )
+    @action(detail=True, methods=["get", "post"], url_path="comments")
+    def comments(self, request, pk=None):
+        try:
+            correspondence = CorrespondenceDocument.objects.get(pk=pk)
+        except CorrespondenceDocument.DoesNotExist:
+            return self._error(
+                "Correspondence document not found",
+                http_status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if correspondence.flow_direction == CorrespondenceDocument.FLOW_OUTBOUND_SCL:
+            return _ExactErrorResponse(
+                {
+                    "success": False,
+                    "message": (
+                        "Comments are not available for SCL Delivered correspondence."
+                    ),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if (
+            correspondence.flow_direction != CorrespondenceDocument.FLOW_INBOUND
+            or correspondence.correspondence_type
+            not in {
+                CorrespondenceDocument.TYPE_CLIENT,
+                CorrespondenceDocument.TYPE_CONTRACTOR,
+            }
+        ):
+            return self._error(
+                "Comments are only available for inbound CLIENT and CONTRACTOR correspondence."
+            )
+
+        if request.method == "GET":
+            comments = (
+                CorrespondenceComment.objects.filter(
+                    correspondence=correspondence,
+                    is_active=True,
+                )
+                .select_related("commented_by")
+                .order_by("created_at", "id")
+            )
+            return self._success(
+                "Comments retrieved successfully.",
+                CorrespondenceCommentSerializer(comments, many=True).data,
+            )
+
+        serializer = CorrespondenceCommentSerializer(data=request.data)
+        if not serializer.is_valid():
+            comment_errors = serializer.errors.get("comment", [])
+            if any(str(error) == EMPTY_COMMENT_MESSAGE for error in comment_errors):
+                return self._error(
+                    EMPTY_COMMENT_MESSAGE,
+                    errors=[
+                        {
+                            "field": "comment",
+                            "message": EMPTY_COMMENT_MESSAGE,
+                        }
+                    ],
+                )
+            return self._error(
+                "Validation failed",
+                errors=_flatten_errors(serializer.errors),
+            )
+
+        comment = serializer.save(
+            correspondence=correspondence,
+            commented_by=request.user,
+        )
+        return self._success(
+            "Comment added successfully.",
+            CorrespondenceCommentSerializer(comment).data,
+            http_status=status.HTTP_201_CREATED,
+        )
 
     @swagger_auto_schema(
         operation_summary="List or upload correspondence attachments",
