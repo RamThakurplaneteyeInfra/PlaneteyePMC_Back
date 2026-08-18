@@ -1,6 +1,6 @@
 # PMC Backend API Documentation
 
-A comprehensive REST API for Project Management & Construction (PMC) dashboard.
+A comprehensive REST API for Project Management & Construction (PMC) dashboard..
 
 ## Base URL
 
