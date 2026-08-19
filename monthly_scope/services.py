@@ -13,10 +13,11 @@ Never overwrite cumulative with today's executed alone.
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from decimal import Decimal, ROUND_HALF_UP
 
-from django.db import transaction
 from django.db.models import Sum
+from django.utils import timezone
 
 from .models import MonthlyScopeWork
 
@@ -72,11 +73,11 @@ def _compute_metrics(planned_quantity, total_executed) -> tuple[Decimal, Decimal
 
 
 def _invalidate_progress_caches() -> None:
-    """Bump only progress-related list/overview caches."""
+    """Bump only progress-related list/overview caches (once per batch)."""
     try:
         from core.cache_tags import invalidate_tags
 
-        invalidate_tags("overview", "reports", "dashboard", "monthly_scope")
+        invalidate_tags("overview", "reports", "dashboard", "monthly_scope", "mpr")
     except Exception:
         pass
 
@@ -102,6 +103,7 @@ class ScopeProgressService:
     def _breakdown_for_scope(scope) -> dict:
         """
         Build an audit breakdown of every activity contributing to cumulative.
+        Used for debug logging only — not on the write hot path.
         """
         from dpr.models import DPRActivity
 
@@ -142,55 +144,18 @@ class ScopeProgressService:
         }
 
     @staticmethod
-    @transaction.atomic
-    def update_scope_progress(scope_id, *, refresh_activities: bool = True) -> bool:
-        """
-        Recalculate denormalized progress for a Monthly Scope from ALL
-        non-rejected DPR activities linked to that Assigned Scope (SUM).
-        """
-        try:
-            scope = MonthlyScopeWork.objects.get(id=scope_id)
-        except MonthlyScopeWork.DoesNotExist:
-            return False
+    def _unique_scope_ids(scope_ids) -> list[int]:
+        seen: set[int] = set()
+        unique: list[int] = []
+        for scope_id in scope_ids or []:
+            if not scope_id or scope_id in seen:
+                continue
+            seen.add(scope_id)
+            unique.append(int(scope_id))
+        return unique
 
-        previous_cumulative = _as_decimal(scope.cumulative_quantity)
-        planned_quantity = scope.planned_quantity or _ZERO
-
-        breakdown = ScopeProgressService._breakdown_for_scope(scope)
-        total_executed = breakdown["aggregated_executed"]
-
-        # Prefer DB aggregate (same filter) to stay consistent / avoid drift
-        cumulative_data = ScopeProgressService._activity_qs_for_scope(scope).aggregate(
-            total_executed=Sum("executed_quantity")
-        )
-        total_executed = cumulative_data["total_executed"] or _ZERO
-
-        progress_percentage, remaining_quantity, total_executed = _compute_metrics(
-            planned_quantity, total_executed
-        )
-
-        # Today's contribution ≈ delta vs previous stored cumulative (debug aid)
-        today_delta = total_executed - previous_cumulative
-
-        logger.info(
-            "scope_progress_recalc scope_id=%s planned=%s previous_cumulative=%s "
-            "today_delta≈%s aggregated_executed=%s progress=%s%% remaining=%s "
-            "included=%s excluded=%s",
-            scope_id,
-            planned_quantity,
-            previous_cumulative,
-            today_delta,
-            total_executed,
-            progress_percentage,
-            remaining_quantity,
-            breakdown["included"],
-            breakdown["excluded"],
-        )
-
-        scope.cumulative_quantity = total_executed
-        scope.remaining_quantity = remaining_quantity
-        scope.progress_percentage = progress_percentage
-
+    @staticmethod
+    def _apply_scope_status(scope, progress_percentage: Decimal) -> None:
         if progress_percentage == 0:
             scope.status = "pending"
         elif progress_percentage >= 100:
@@ -198,24 +163,153 @@ class ScopeProgressService:
         else:
             scope.status = "in_progress"
 
-        scope.save(
-            update_fields=[
-                "cumulative_quantity",
-                "remaining_quantity",
-                "progress_percentage",
-                "status",
-                "updated_at",
-            ]
-        )
+    @staticmethod
+    def _recalculate_scopes_bulk(scope_ids: list[int], *, refresh_activities: bool = True) -> None:
+        """
+        Recalculate many scopes with the same formulas as update_scope_progress,
+        using one activity query and one scope query, then bulk_update.
+        """
+        from dpr.models import DPRActivity
 
-        if refresh_activities:
-            ScopeProgressService.refresh_activities_for_scope(scope_id)
+        if not scope_ids:
+            return
+
+        scopes = {
+            scope.id: scope
+            for scope in MonthlyScopeWork.objects.filter(id__in=scope_ids)
+        }
+        activities = list(
+            DPRActivity.objects.filter(scope_id__in=scope_ids)
+            .select_related("dpr")
+            .order_by("scope_id", "dpr__report_date", "id")
+        )
+        by_scope: dict[int, list] = defaultdict(list)
+        for activity in activities:
+            by_scope[activity.scope_id].append(activity)
+
+        now = timezone.now()
+        scopes_to_update: list = []
+        activities_to_update: list = []
+
+        for scope_id in scope_ids:
+            scope = scopes.get(scope_id)
+            if scope is None:
+                continue
+
+            planned_quantity = scope.planned_quantity or _ZERO
+            previous_cumulative = _as_decimal(scope.cumulative_quantity)
+            rows = by_scope.get(scope_id, [])
+
+            running = _ZERO
+            total_executed = _ZERO
+            running_by_activity_id: dict[int, Decimal] = {}
+            included_count = 0
+            excluded_count = 0
+            for activity in rows:
+                status = getattr(activity.dpr, "status", None)
+                qty = _as_decimal(activity.executed_quantity)
+                if status not in EXCLUDED_DPR_STATUSES:
+                    running += qty
+                    total_executed += qty
+                    included_count += 1
+                else:
+                    excluded_count += 1
+                running_by_activity_id[activity.id] = running
+
+            progress_percentage, remaining_quantity, total_executed = _compute_metrics(
+                planned_quantity, total_executed
+            )
+            today_delta = total_executed - previous_cumulative
+
+            logger.info(
+                "scope_progress_recalc scope_id=%s planned=%s previous_cumulative=%s "
+                "today_delta≈%s aggregated_executed=%s progress=%s%% remaining=%s "
+                "included_count=%s excluded_count=%s",
+                scope_id,
+                planned_quantity,
+                previous_cumulative,
+                today_delta,
+                total_executed,
+                progress_percentage,
+                remaining_quantity,
+                included_count,
+                excluded_count,
+            )
+
+            ScopeProgressService._apply_scope_status(scope, progress_percentage)
+            # Always persist so status/updated_at stay in sync with the prior save() path.
+            scope.cumulative_quantity = total_executed
+            scope.remaining_quantity = remaining_quantity
+            scope.progress_percentage = progress_percentage
+            scope.updated_at = now
+            scopes_to_update.append(scope)
+
+            if not refresh_activities:
+                continue
+
+            for activity in rows:
+                total = running_by_activity_id.get(activity.id, _ZERO)
+                progress, remaining, total = _compute_metrics(planned_quantity, total)
+                qty_today = _as_decimal(activity.executed_quantity)
+                logger.debug(
+                    "activity_progress_recalc activity_id=%s dpr_id=%s status=%s "
+                    "todays_executed=%s running_cumulative=%s planned=%s progress=%s%%",
+                    activity.id,
+                    activity.dpr_id,
+                    getattr(activity.dpr, "status", None),
+                    qty_today,
+                    total,
+                    planned_quantity,
+                    progress,
+                )
+                if (
+                    activity.cumulative_quantity != total
+                    or activity.remaining_quantity != remaining
+                    or activity.progress_percentage != progress
+                ):
+                    activity.cumulative_quantity = total
+                    activity.remaining_quantity = remaining
+                    activity.progress_percentage = progress
+                    activities_to_update.append(activity)
+
+        if scopes_to_update:
+            MonthlyScopeWork.objects.bulk_update(
+                scopes_to_update,
+                [
+                    "cumulative_quantity",
+                    "remaining_quantity",
+                    "progress_percentage",
+                    "status",
+                    "updated_at",
+                ],
+            )
+        if activities_to_update:
+            DPRActivity.objects.bulk_update(
+                activities_to_update,
+                ["cumulative_quantity", "remaining_quantity", "progress_percentage"],
+            )
 
         _invalidate_progress_caches()
-        return True
+        return bool(scopes)
 
     @staticmethod
-    @transaction.atomic
+    def update_scope_progress(scope_id, *, refresh_activities: bool = True) -> bool:
+        """
+        Recalculate denormalized progress for a Monthly Scope from ALL
+        non-rejected DPR activities linked to that Assigned Scope (SUM).
+        """
+        unique = ScopeProgressService._unique_scope_ids([scope_id])
+        if not unique:
+            return False
+        from core.cache_tags import batch_cache_invalidation
+
+        with batch_cache_invalidation():
+            return ScopeProgressService._recalculate_scopes_bulk(
+                unique,
+                refresh_activities=refresh_activities,
+            )
+
+    @staticmethod
     def refresh_activities_for_scope(scope_id) -> None:
         """
         Refresh denormalized cumulative/remaining/% on every activity for a scope.
@@ -224,64 +318,9 @@ class ScopeProgressService:
         report_date <= this activity's report_date). Rejected rows keep a
         snapshot of valid cumulative up to their date (excluding themselves).
         """
-        from dpr.models import DPRActivity
-
-        try:
-            scope = MonthlyScopeWork.objects.get(id=scope_id)
-        except MonthlyScopeWork.DoesNotExist:
-            return
-
-        planned = scope.planned_quantity or _ZERO
-        activities = list(
-            DPRActivity.objects.filter(scope_id=scope_id)
-            .select_related("dpr")
-            .order_by("dpr__report_date", "id")
-        )
-        if not activities:
-            return
-
-        running = _ZERO
-        running_by_activity_id: dict[int, Decimal] = {}
-        for activity in activities:
-            status = getattr(activity.dpr, "status", None)
-            if status not in EXCLUDED_DPR_STATUSES:
-                running += _as_decimal(activity.executed_quantity)
-            running_by_activity_id[activity.id] = running
-
-        to_update: list = []
-        for activity in activities:
-            total = running_by_activity_id.get(activity.id, _ZERO)
-            progress, remaining, total = _compute_metrics(planned, total)
-            qty_today = _as_decimal(activity.executed_quantity)
-            logger.info(
-                "activity_progress_recalc activity_id=%s dpr_id=%s status=%s "
-                "todays_executed=%s running_cumulative=%s planned=%s progress=%s%%",
-                activity.id,
-                activity.dpr_id,
-                getattr(activity.dpr, "status", None),
-                qty_today,
-                total,
-                planned,
-                progress,
-            )
-            if (
-                activity.cumulative_quantity != total
-                or activity.remaining_quantity != remaining
-                or activity.progress_percentage != progress
-            ):
-                activity.cumulative_quantity = total
-                activity.remaining_quantity = remaining
-                activity.progress_percentage = progress
-                to_update.append(activity)
-
-        if to_update:
-            DPRActivity.objects.bulk_update(
-                to_update,
-                ["cumulative_quantity", "remaining_quantity", "progress_percentage"],
-            )
+        ScopeProgressService.update_scope_progress(scope_id, refresh_activities=True)
 
     @staticmethod
-    @transaction.atomic
     def update_dpr_activity_progress(activity_id) -> bool:
         """
         Recalculate the parent scope (and all sibling activities) after an
@@ -312,12 +351,14 @@ class ScopeProgressService:
     @staticmethod
     def recalculate_scopes(scope_ids) -> None:
         """Recalculate each distinct scope id (skips None/duplicates)."""
-        seen: set[int] = set()
-        for scope_id in scope_ids or []:
-            if not scope_id or scope_id in seen:
-                continue
-            seen.add(scope_id)
-            ScopeProgressService.update_scope_progress(scope_id)
+        unique = ScopeProgressService._unique_scope_ids(scope_ids)
+        if not unique:
+            return
+        from core.cache_tags import batch_cache_invalidation
+
+        with batch_cache_invalidation():
+            ScopeProgressService._recalculate_scopes_bulk(unique)
+        return None
 
     @staticmethod
     def recalculate_for_dpr(dpr) -> None:

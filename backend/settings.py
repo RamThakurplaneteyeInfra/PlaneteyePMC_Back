@@ -630,6 +630,8 @@ VIDEO_PRESET = os.environ.get('VIDEO_PRESET', 'medium')
 DPR_EMAIL_INLINE = os.environ.get("DPR_EMAIL_INLINE", "false").lower() == "true"
 DPR_EMAIL_MAX_WORKERS = int(os.environ.get("DPR_EMAIL_MAX_WORKERS", "4"))
 DPR_EMAIL_SLOW_SEC = float(os.environ.get("DPR_EMAIL_SLOW_SEC", "10"))
+# Lightweight [DPR PERF] request logs (auth/RBAC/SQL/serialize timings).
+DPR_PERF_LOG = os.environ.get("DPR_PERF_LOG", "false").lower() == "true"
 # SMTP connect/read timeout (seconds) — prevents worker threads hanging forever
 EMAIL_TIMEOUT = float(os.environ.get("EMAIL_TIMEOUT", "30"))
 

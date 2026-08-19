@@ -54,9 +54,13 @@ class MonthlyScopeWorkViewSet(viewsets.ModelViewSet):
         ).prefetch_related('assignments')
 
         user = self.request.user
+        group_names = getattr(user, "_dpr_group_names", None)
+        if group_names is None:
+            group_names = set(user.groups.values_list("name", flat=True))
+            user._dpr_group_names = group_names
 
         # Team Leaders can see all scopes
-        if user.groups.filter(name='Team Leader').exists():
+        if "Team Leader" in group_names:
             # Filter by project if specified
             project_id = self.request.query_params.get('project')
             if project_id:
@@ -68,7 +72,11 @@ class MonthlyScopeWorkViewSet(viewsets.ModelViewSet):
                 queryset = queryset.filter(month=month)
 
         # Site Engineers can only see scopes assigned to them
-        elif user.groups.filter(name__in=['Site Engineer', 'Billing Site Engineer', 'QAQC Site Engineer']).exists():
+        elif group_names & {
+            "Site Engineer",
+            "Billing Site Engineer",
+            "QAQC Site Engineer",
+        }:
             queryset = queryset.filter(assignments__site_engineer=user)
 
         return queryset.distinct()
@@ -129,7 +137,9 @@ class MonthlyScopeWorkViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        queryset = MonthlyScopeWork.objects.filter(project_id=project_id)
+        queryset = MonthlyScopeWork.objects.filter(project_id=project_id).select_related(
+            "project", "category", "subcategory", "created_by", "updated_by"
+        ).prefetch_related("assignments")
 
         if month:
             queryset = queryset.filter(month=month)

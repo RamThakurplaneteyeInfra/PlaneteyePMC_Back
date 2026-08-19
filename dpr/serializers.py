@@ -1,10 +1,119 @@
-from django.db import transaction, IntegrityError
-from rest_framework import serializers
-from .models import DailyProgressReport, DPRActivity
-from django.contrib.auth import get_user_model
-from monthly_scope.services import ScopeProgressService
-from monthly_scope.models import MonthlyScopeWork
 from decimal import Decimal
+
+from django.db import IntegrityError, transaction
+from django.db.models import prefetch_related_objects
+from rest_framework import serializers
+
+from monthly_scope.models import MonthlyScopeWork
+from monthly_scope.services import ScopeProgressService
+
+from .models import DailyProgressReport, DPRActivity
+
+
+class CachedScopePrimaryKeyField(serializers.PrimaryKeyRelatedField):
+    """Resolve scope PKs from a request-level map to avoid per-activity lookups."""
+
+    def to_internal_value(self, data):
+        cache = self.context.get("_scope_by_id")
+        if cache is not None:
+            try:
+                pk = int(data)
+            except (TypeError, ValueError):
+                self.fail("incorrect_type", data_type=type(data).__name__)
+            obj = cache.get(pk)
+            if obj is None:
+                self.fail("does_not_exist", pk_value=data)
+            return obj
+        return super().to_internal_value(data)
+
+
+def _load_scope_map(raw_activities) -> dict:
+    if not isinstance(raw_activities, list):
+        return {}
+    ids = []
+    for row in raw_activities:
+        if not isinstance(row, dict) or row.get("scope") is None:
+            continue
+        try:
+            ids.append(int(row.get("scope")))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        return {}
+    return {
+        obj.pk: obj
+        for obj in MonthlyScopeWork.objects.filter(pk__in=ids).select_related(
+            "category", "subcategory"
+        )
+    }
+
+
+def prime_dpr_for_serialization(dpr):
+    """Prefetch nested activity/scope graph before serializer.data."""
+    if dpr is None or not getattr(dpr, "pk", None):
+        return dpr
+    prefetch_related_objects(
+        [dpr],
+        "activities__scope__category",
+        "activities__scope__subcategory",
+        "submitted_by",
+        "approved_by",
+        "rejected_by",
+    )
+    return dpr
+
+
+def upsert_dpr_activities(dpr, activities_data, *, accumulate: bool) -> int:
+    """
+    Create or update activities for a DPR in bulk.
+
+    accumulate=True matches POST /api/dpr/ append behavior (add quantities).
+    accumulate=False matches submit replace-quantity behavior.
+    """
+    if not activities_data:
+        return 0
+
+    scope_ids = [
+        activity_data["scope"].pk
+        for activity_data in activities_data
+        if activity_data.get("scope") is not None
+    ]
+    existing = {
+        activity.scope_id: activity
+        for activity in DPRActivity.objects.filter(dpr=dpr, scope_id__in=scope_ids)
+    }
+    to_create = []
+    to_update = []
+    added = 0
+    for activity_data in activities_data:
+        scope = activity_data.get("scope")
+        if scope is None:
+            continue
+        current = existing.get(scope.pk)
+        if current:
+            new_qty = activity_data.get("executed_quantity", current.executed_quantity)
+            if accumulate:
+                current.executed_quantity += activity_data.get("executed_quantity", 0)
+            else:
+                current.executed_quantity = new_qty
+            current.next_day_planned_work = activity_data.get(
+                "next_day_planned_work", current.next_day_planned_work
+            )
+            current.remarks = activity_data.get("remarks", current.remarks)
+            to_update.append(current)
+        else:
+            to_create.append(DPRActivity(dpr=dpr, **activity_data))
+            added += 1
+            existing[scope.pk] = to_create[-1]
+
+    if to_update:
+        DPRActivity.objects.bulk_update(
+            to_update,
+            ["executed_quantity", "next_day_planned_work", "remarks"],
+        )
+    if to_create:
+        DPRActivity.objects.bulk_create(to_create)
+    return added
 
 
 class DPRActivitySerializer(serializers.ModelSerializer):
@@ -12,7 +121,7 @@ class DPRActivitySerializer(serializers.ModelSerializer):
     Serializer for DPR Activity (nested) with Monthly Scope integration
     """
     # Writable scope field - accepts PK from frontend (e.g. "scope": 8)
-    scope = serializers.PrimaryKeyRelatedField(
+    scope = CachedScopePrimaryKeyField(
         queryset=MonthlyScopeWork.objects.all(),
         write_only=True,
         required=True
@@ -207,6 +316,9 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
             import json
             data["quality_status"] = json.dumps(quality)
 
+        if "_scope_by_id" not in self.context:
+            self.context["_scope_by_id"] = _load_scope_map(data.get("activities"))
+
         return super().to_internal_value(data)
 
     def _extract_activities_data(self, validated_data):
@@ -246,25 +358,9 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
                     activities_added = 0
 
                     if activities_data:
-                        for activity_data in activities_data:
-                            scope = activity_data.get('scope')
-                            if scope:
-                                # Check if activity for this scope already exists
-                                existing_activity = DPRActivity.objects.filter(
-                                    dpr=dpr, scope=scope
-                                ).first()
-
-                                if existing_activity:
-                                    # Update existing activity quantities
-                                    existing_activity.executed_quantity += activity_data.get('executed_quantity', 0)
-                                    existing_activity.next_day_planned_work = activity_data.get('next_day_planned_work', '')
-                                    existing_activity.remarks = activity_data.get('remarks', '')
-                                    existing_activity.save()
-                                else:
-                                    # Create new activity
-                                    activity = DPRActivity(dpr=dpr, **activity_data)
-                                    activity.save()
-                                    activities_added += 1
+                        activities_added = upsert_dpr_activities(
+                            dpr, activities_data, accumulate=True
+                        )
 
                     # One recalculation pass per distinct scope (same formulas).
                     from monthly_scope.services import ScopeProgressService
@@ -276,6 +372,7 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
                     # Ensure nested response reads fresh cumulative fields
                     if hasattr(dpr, "_prefetched_objects_cache"):
                         dpr._prefetched_objects_cache = {}
+                    prime_dpr_for_serialization(dpr)
 
                     # Add custom response data
                     dpr._activities_added = activities_added
@@ -287,9 +384,12 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
                     dpr = DailyProgressReport.objects.create(**validated_data)
 
                     if activities_data:
-                        for activity_data in activities_data:
-                            activity = DPRActivity(dpr=dpr, **activity_data)
-                            activity.save()
+                        DPRActivity.objects.bulk_create(
+                            [
+                                DPRActivity(dpr=dpr, **activity_data)
+                                for activity_data in activities_data
+                            ]
+                        )
 
                     # One recalculation pass per distinct scope (same formulas).
                     from monthly_scope.services import ScopeProgressService
@@ -297,6 +397,7 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
 
                     if hasattr(dpr, "_prefetched_objects_cache"):
                         dpr._prefetched_objects_cache = {}
+                    prime_dpr_for_serialization(dpr)
 
                     return dpr
 
@@ -350,12 +451,16 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
                         ]
                         DPRActivity.objects.bulk_create(activities)
 
-                    # Recalc scopes removed by delete + scopes on the new activities.
+                    # Recalc scopes removed by delete + scopes on the new activities once.
+                    for activity_data in activities_data or []:
+                        scope = activity_data.get("scope")
+                        if scope is not None:
+                            scopes_to_update.add(scope.id)
                     ScopeProgressService.recalculate_scopes(scopes_to_update)
-                    ScopeProgressService.recalculate_for_dpr(instance)
 
                 if hasattr(instance, "_prefetched_objects_cache"):
                     instance._prefetched_objects_cache = {}
+                prime_dpr_for_serialization(instance)
 
                 return instance
         except IntegrityError as e:
