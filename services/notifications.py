@@ -1,5 +1,4 @@
 from django.utils import timezone
-from .email_utils import send_html_email
 from notifications.utils import send_websocket_notification, create_notification_message
 from projects.models import Project
 from accounts.models import UserProfile
@@ -47,49 +46,60 @@ def notify_project_created(project):
     )
 
 
-def send_project_created_email(*, project_id: int, recipient_ids: list[int]) -> None:
+def send_project_created_email(*, project_id: int, recipient_ids: list[int]) -> dict:
     """Background SMTP worker for project-created emails."""
     from django.contrib.auth import get_user_model
 
+    from dpr.tasks import _dedup_key, run_background_smtp_job
     from projects.models import Project
 
     User = get_user_model()
-    project = Project.objects.filter(pk=project_id).select_related("created_by").first()
-    if not project:
-        return
 
-    recipients = list(
-        User.objects.filter(id__in=recipient_ids or [], is_active=True).exclude(email="")
-    )
-    emails = [u.email for u in recipients if u.email]
-    if not emails:
-        return
+    def _send():
+        from services.email_utils import send_html_email
 
-    created_by = project.created_by
-    context = {
-        "project": {
-            "name": project.name,
-            "client_name": project.client_name,
-            "location": project.location,
-            "description": project.description,
-            "budget": float(project.budget or 0),
-            "created_by": {
-                "username": created_by.username if created_by else "",
-                "get_full_name": created_by.get_full_name() if created_by else "",
-            },
-            "created_at": project.created_at.isoformat() if project.created_at else "",
+        project = Project.objects.filter(pk=project_id).select_related("created_by").first()
+        if not project:
+            return
+        recipients = list(
+            User.objects.filter(id__in=recipient_ids or [], is_active=True).exclude(email="")
+        )
+        emails = [u.email for u in recipients if u.email]
+        if not emails:
+            return
+        created_by = project.created_by
+        context = {
+            "project": {
+                "name": project.name,
+                "client_name": project.client_name,
+                "location": project.location,
+                "description": project.description,
+                "budget": float(project.budget or 0),
+                "created_by": {
+                    "username": created_by.username if created_by else "",
+                    "get_full_name": created_by.get_full_name() if created_by else "",
+                },
+                "created_at": project.created_at.isoformat() if project.created_at else "",
+            }
         }
-    }
-    send_html_email(
-        subject=f"New Project Created: {project.name}",
-        template_name="project_created",
-        context=context,
-        recipient_list=emails,
-    )
-    logger.info(
-        "Project creation email queued/sent project_id=%s recipients=%s",
-        project_id,
-        emails,
+        ok = send_html_email(
+            subject=f"New Project Created: {project.name}",
+            template_name="project_created",
+            context=context,
+            recipient_list=emails,
+        )
+        if not ok:
+            raise RuntimeError("SMTP send_html_email returned failure template=project_created")
+        logger.info(
+            "Project creation email sent project_id=%s recipient_count=%s",
+            project_id,
+            len(emails),
+        )
+
+    return run_background_smtp_job(
+        kind="project_created",
+        dedup_key=_dedup_key("project_created", project_id, list(recipient_ids or [])),
+        send_fn=_send,
     )
 
 
@@ -122,51 +132,63 @@ def notify_project_assigned(project, assigned_user):
     )
 
 
-def send_project_assigned_email(*, project_id: int, user_id: int) -> None:
+def send_project_assigned_email(*, project_id: int, user_id: int) -> dict:
     """Background SMTP worker for project assignment emails."""
     from django.contrib.auth import get_user_model
 
+    from dpr.tasks import _dedup_key, run_background_smtp_job
     from projects.models import Project
 
     User = get_user_model()
-    try:
-        project = Project.objects.only(
-            "id", "name", "client_name", "location", "description"
-        ).get(pk=project_id)
-        assigned_user = User.objects.only(
-            "id", "username", "email", "first_name", "last_name"
-        ).get(pk=user_id)
-    except Exception:
-        logger.exception(
-            "send_project_assigned_email load failed project_id=%s user_id=%s",
-            project_id,
-            user_id,
+
+    def _send():
+        from services.email_utils import send_html_email
+
+        try:
+            project = Project.objects.only(
+                "id", "name", "client_name", "location", "description"
+            ).get(pk=project_id)
+            assigned_user = User.objects.only(
+                "id", "username", "email", "first_name", "last_name"
+            ).get(pk=user_id)
+        except Exception:
+            logger.exception(
+                "send_project_assigned_email load failed project_id=%s user_id=%s",
+                project_id,
+                user_id,
+            )
+            return
+
+        if not assigned_user.email:
+            return
+
+        context = {
+            "user": {
+                "username": assigned_user.username,
+                "get_full_name": assigned_user.get_full_name(),
+                "email": assigned_user.email,
+            },
+            "project": {
+                "name": project.name,
+                "client_name": project.client_name,
+                "location": project.location,
+                "description": project.description,
+            },
+            "assignment_date": timezone.now().isoformat(),
+        }
+        ok = send_html_email(
+            subject=f"Project Assignment: {project.name}",
+            template_name="project_assigned",
+            context=context,
+            recipient_list=[assigned_user.email],
         )
-        return
+        if not ok:
+            raise RuntimeError("SMTP send_html_email returned failure template=project_assigned")
 
-    if not assigned_user.email:
-        return
-
-    context = {
-        'user': {
-            'username': assigned_user.username,
-            'get_full_name': assigned_user.get_full_name(),
-            'email': assigned_user.email,
-        },
-        'project': {
-            'name': project.name,
-            'client_name': project.client_name,
-            'location': project.location,
-            'description': project.description,
-        },
-        'assignment_date': timezone.now().isoformat(),
-    }
-
-    send_html_email(
-        subject=f"Project Assignment: {project.name}",
-        template_name='project_assigned',
-        context=context,
-        recipient_list=[assigned_user.email]
+    return run_background_smtp_job(
+        kind="project_assigned",
+        dedup_key=_dedup_key("project_assigned", project_id, [user_id]),
+        send_fn=_send,
     )
 
 
@@ -230,50 +252,65 @@ def notify_site_engineer_assigned(project, assigned_user):
 
 def send_site_engineer_assigned_email(
     *, project_id: int, assigned_user_id: int, recipient_ids: list[int]
-) -> None:
+) -> dict:
     """Background SMTP worker for site-engineer assignment emails."""
     from django.contrib.auth import get_user_model
 
+    from dpr.tasks import _dedup_key, run_background_smtp_job
     from projects.models import Project
 
     User = get_user_model()
-    project = Project.objects.filter(pk=project_id).first()
-    assigned_user = User.objects.filter(pk=assigned_user_id).first()
-    if not project or not assigned_user:
-        return
 
-    recipients = list(
-        User.objects.filter(id__in=recipient_ids or [], is_active=True).exclude(email="")
-    )
-    emails = [u.email for u in recipients if u.email]
-    if not emails:
-        return
+    def _send():
+        from services.email_utils import send_html_email
 
-    context = {
-        "assigned_user": {
-            "username": assigned_user.username,
-            "get_full_name": assigned_user.get_full_name(),
-        },
-        "project": {
-            "name": project.name,
-            "client_name": project.client_name,
-            "location": project.location,
-            "description": project.description,
-        },
-        "assignment_date": timezone.now().isoformat(),
-        "all_site_engineers": [
-            {
-                "username": se.username,
-                "get_full_name": se.get_full_name(),
-            }
-            for se in recipients
-        ],
-    }
-    send_html_email(
-        subject=f"Site Engineer Assigned: {project.name}",
-        template_name="site_engineer_assigned",
-        context=context,
-        recipient_list=emails,
+        project = Project.objects.filter(pk=project_id).first()
+        assigned_user = User.objects.filter(pk=assigned_user_id).first()
+        if not project or not assigned_user:
+            return
+        recipients = list(
+            User.objects.filter(id__in=recipient_ids or [], is_active=True).exclude(email="")
+        )
+        emails = [u.email for u in recipients if u.email]
+        if not emails:
+            return
+        context = {
+            "assigned_user": {
+                "username": assigned_user.username,
+                "get_full_name": assigned_user.get_full_name(),
+            },
+            "project": {
+                "name": project.name,
+                "client_name": project.client_name,
+                "location": project.location,
+                "description": project.description,
+            },
+            "assignment_date": timezone.now().isoformat(),
+            "all_site_engineers": [
+                {
+                    "username": se.username,
+                    "get_full_name": se.get_full_name(),
+                }
+                for se in recipients
+            ],
+        }
+        ok = send_html_email(
+            subject=f"Site Engineer Assigned: {project.name}",
+            template_name="site_engineer_assigned",
+            context=context,
+            recipient_list=emails,
+        )
+        if not ok:
+            raise RuntimeError(
+                "SMTP send_html_email returned failure template=site_engineer_assigned"
+            )
+
+    return run_background_smtp_job(
+        kind="site_engineer_assigned",
+        dedup_key=_dedup_key(
+            "site_engineer_assigned", project_id, list(recipient_ids or []), str(assigned_user_id)
+        ),
+        send_fn=_send,
     )
 
 def _get_project_approvers(project, approver_role):

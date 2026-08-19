@@ -12,6 +12,7 @@ from rest_framework.views import APIView
 
 from accounts.rbac import is_admin_user
 from core.cache_metrics import get_metrics_snapshot
+from core.perf_network import run_network_benchmark
 
 
 class CacheHealthAPIView(APIView):
@@ -107,5 +108,35 @@ class CacheHealthAPIView(APIView):
                         "default": getattr(settings, "CACHE_TTL_DEFAULT", 300),
                     },
                 },
+            }
+        )
+
+
+class PerfNetworkAPIView(APIView):
+    """
+    GET /api/system/perf-network/
+
+    Admin-only in-runtime Postgres/Redis RTT from this web process.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not (request.user.is_superuser or is_admin_user(request.user)):
+            return Response(
+                {"success": False, "message": "Admin access required."},
+                status=403,
+            )
+        n = request.query_params.get("n", "20")
+        try:
+            n_int = int(n)
+        except (TypeError, ValueError):
+            n_int = 20
+        payload = run_network_benchmark(n=n_int)
+        return Response(
+            {
+                "success": True,
+                "message": "Network probe completed.",
+                "data": payload,
             }
         )

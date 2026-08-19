@@ -83,14 +83,13 @@ class TagBatchInvalidationTest(TestCase):
         cache.clear()
 
     def test_batch_coalesces_invalidations(self):
-        with patch("core.cache_tags.invalidate_list_cache") as mocked:
+        with patch("core.cache_tags.bump_many_list_cache_versions") as mocked:
             with batch_cache_invalidation():
                 invalidate_tags("overview")
                 invalidate_tags("dropdown")
                 invalidate_tags("overview")
-            # One flush with unique prefixes
-            self.assertGreaterEqual(mocked.call_count, 1)
-            prefixes = [c.args[0] for c in mocked.call_args_list]
+            mocked.assert_called()
+            prefixes = mocked.call_args[0][0]
             self.assertIn("project_overview_v4", prefixes)
             self.assertIn("projects_dropdown", prefixes)
 
@@ -118,6 +117,18 @@ class CacheHealthAPITest(APITestCase):
     def test_tl_forbidden(self):
         authenticate_client(self.client, username="cache_health_tl", password="Project@123")
         response = self.client.get("/api/system/cache-health/")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_admin_perf_network(self):
+        authenticate_client(self.client, username="cache_health_ho", password="Project@123")
+        response = self.client.get("/api/system/perf-network/?n=5")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("benchmarks", response.data["data"])
+        self.assertIn("redis", response.data["data"])
+
+    def test_tl_perf_network_forbidden(self):
+        authenticate_client(self.client, username="cache_health_tl", password="Project@123")
+        response = self.client.get("/api/system/perf-network/")
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
 

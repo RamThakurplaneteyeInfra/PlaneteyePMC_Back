@@ -203,10 +203,84 @@ class PMCScopedRateThrottle(ScopedRateThrottle):
         return None
 
 
+class FastUserRateThrottle(UserRateThrottle):
+    """
+    Same sliding-window user limit as DRF UserRateThrottle, but one Redis RTT.
+
+    Uses a ZSET of request timestamps (Lua) instead of pickle GET + SET.
+    Falls back to SimpleRateThrottle on LocMem or Redis errors.
+    """
+
+    _LUA_SLIDING_WINDOW = """
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local cutoff = tonumber(ARGV[2])
+local limit = tonumber(ARGV[3])
+local ttl = tonumber(ARGV[4])
+local member = ARGV[5]
+redis.call('ZREMRANGEBYSCORE', key, '-inf', cutoff)
+local n = redis.call('ZCARD', key)
+if n >= limit then
+  return 0
+end
+redis.call('ZADD', key, now, member)
+redis.call('EXPIRE', key, ttl)
+return 1
+"""
+
+    def get_rate(self):
+        from rest_framework.settings import api_settings
+
+        return api_settings.DEFAULT_THROTTLE_RATES[self.scope]
+
+    def allow_request(self, request, view):
+        redis_allowed = self._allow_via_redis(request, view)
+        if redis_allowed is not None:
+            return redis_allowed
+        return super().allow_request(request, view)
+
+    def _allow_via_redis(self, request, view):
+        if self.rate is None:
+            return True
+        self.key = self.get_cache_key(request, view)
+        if self.key is None:
+            return True
+
+        client_getter = getattr(getattr(self.cache, "client", None), "get_client", None)
+        if not callable(client_getter):
+            return None
+        try:
+            self.rate = self.get_rate()
+            self.num_requests, self.duration = self.parse_rate(self.rate)
+            self.now = self.timer()
+            redis_client = client_getter(write=True)
+            make_key = getattr(self.cache, "make_key", None)
+            redis_key = make_key(self.key) if callable(make_key) else self.key
+            allowed = redis_client.eval(
+                self._LUA_SLIDING_WINDOW,
+                1,
+                redis_key,
+                str(self.now),
+                str(self.now - self.duration),
+                str(self.num_requests),
+                str(int(self.duration) + 1),
+                f"{self.now}:{id(request)}",
+            )
+            if not allowed:
+                self.history = [self.now] * self.num_requests
+                return False
+            self.history = []
+            return True
+        except Exception:
+            logger.debug("FastUserRateThrottle redis path failed; using cache backend", exc_info=True)
+            return None
+
+
 # Re-export DRF global throttles (configured via scope names in settings)
 __all__ = [
     "AnonRateThrottle",
     "UserRateThrottle",
+    "FastUserRateThrottle",
     "LoginRateThrottle",
     "RefreshRateThrottle",
     "CreateRateThrottle",

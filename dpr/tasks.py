@@ -21,6 +21,7 @@ from dpr.email_executor import (
     get_email_pool_snapshot,  # noqa: F401
     submit_email_job,
 )
+from services.email_utils import is_retryable_smtp_error
 
 logger = logging.getLogger("pmc.dpr.email")
 User = get_user_model()
@@ -85,7 +86,7 @@ def _user_payload(user) -> dict[str, str] | None:
 def _send_smtp(*, subject: str, template_name: str, context: dict, recipient_emails: list[str]) -> None:
     from services.email_utils import send_html_email
 
-    logger.info("%s SMTP Connected / sending template=%s", _LOG, template_name)
+    logger.info("%s SMTP template=%s recipient_count=%s", _LOG, template_name, len(recipient_emails))
     ok = send_html_email(
         subject=subject,
         template_name=template_name,
@@ -131,7 +132,15 @@ def _run_email_job(
             return {"status": "dpr_not_found", "dpr_id": dpr_id, "kind": kind}
 
         recipients = _users_with_email(recipient_ids)
-        recipient_emails = [u.email for u in recipients if u.email]
+        recipient_emails = []
+        seen_emails: set[str] = set()
+        for user in recipients:
+            email = (user.email or "").strip()
+            key = email.lower()
+            if not email or key in seen_emails:
+                continue
+            seen_emails.add(key)
+            recipient_emails.append(email)
         if not recipient_emails:
             logger.warning(
                 "%s Email Failed no recipients kind=%s dpr_id=%s",
@@ -150,25 +159,25 @@ def _run_email_job(
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             try:
                 logger.info(
-                    "%s Sending email kind=%s dpr_id=%s attempt=%s/%s recipients=%s",
+                    "%s Sending email kind=%s dpr_id=%s attempt=%s/%s recipient_count=%s",
                     _LOG,
                     kind,
                     dpr_id,
                     attempt,
                     _MAX_ATTEMPTS,
-                    recipient_emails,
+                    len(recipient_emails),
                 )
-                t0 = time.perf_counter()
+                smtp_started_at = time.perf_counter()
                 _send_smtp(
                     subject=subject,
                     template_name=template_name,
                     context=context,
                     recipient_emails=recipient_emails,
                 )
-                elapsed_ms = (time.perf_counter() - t0) * 1000.0
+                elapsed_ms = (time.perf_counter() - smtp_started_at) * 1000.0
                 send_ms_total += elapsed_ms
                 logger.info(
-                    "%s Email Sent kind=%s dpr_id=%s attempt=%s execution_ms=%.1f",
+                    "%s Sent kind=%s dpr_id=%s attempt=%s smtp_time_ms=%.1f",
                     _LOG,
                     kind,
                     dpr_id,
@@ -179,39 +188,52 @@ def _run_email_job(
                     "status": "sent",
                     "dpr_id": dpr_id,
                     "kind": kind,
-                    "recipients": recipient_emails,
+                    "recipient_count": len(recipient_emails),
                     "attempts": attempt,
                     "send_ms": round(send_ms_total, 2),
+                    "smtp_time_ms": round(elapsed_ms, 2),
                 }
             except Exception as exc:
                 last_exc = exc
-                if attempt < _MAX_ATTEMPTS:
+                retryable = is_retryable_smtp_error(exc)
+                if retryable and attempt < _MAX_ATTEMPTS:
                     delay = _RETRY_DELAYS_SEC[attempt - 1]
                     logger.warning(
-                        "%s Retry %s kind=%s dpr_id=%s delay_sec=%s err=%s",
+                        "%s Retry %s kind=%s dpr_id=%s delay_sec=%s err_type=%s",
                         _LOG,
                         attempt,
                         kind,
                         dpr_id,
                         delay,
-                        exc,
+                        type(exc).__name__,
                     )
                     time.sleep(delay)
-                else:
-                    logger.exception(
-                        "%s Email Failed final kind=%s dpr_id=%s attempts=%s",
-                        _LOG,
-                        kind,
-                        dpr_id,
-                        _MAX_ATTEMPTS,
-                    )
-                    _release_dedup(dedup)
+                    continue
+                logger.exception(
+                    "%s Failed kind=%s dpr_id=%s attempts=%s retryable=%s err_type=%s",
+                    _LOG,
+                    kind,
+                    dpr_id,
+                    attempt,
+                    retryable,
+                    type(exc).__name__,
+                )
+                _release_dedup(dedup)
+                return {
+                    "status": "failed",
+                    "dpr_id": dpr_id,
+                    "kind": kind,
+                    "error": type(last_exc).__name__ if last_exc else "error",
+                    "send_ms": round(send_ms_total, 2),
+                    "attempts": attempt,
+                    "retryable": retryable,
+                }
 
         return {
             "status": "failed",
             "dpr_id": dpr_id,
             "kind": kind,
-            "error": str(last_exc),
+            "error": type(last_exc).__name__ if last_exc else "error",
             "send_ms": round(send_ms_total, 2),
         }
     finally:
@@ -232,14 +254,99 @@ def queue_after_commit(fn: Callable, **kwargs) -> None:
 
     def _enqueue():
         logger.info(
-            "%s Queued fn=%s kwargs=%s",
+            "%s Queued fn=%s kwargs_keys=%s",
             _LOG,
             getattr(fn, "__name__", str(fn)),
-            {k: v for k, v in kwargs.items()},
+            sorted(kwargs.keys()),
         )
         submit_email_job(fn, kwargs)
 
     transaction.on_commit(_enqueue)
+
+
+def run_background_smtp_job(*, kind: str, dedup_key: str, send_fn: Callable) -> dict[str, Any]:
+    """
+    Retry/dedup wrapper for non-DPR SMTP workers (project created/assigned).
+    send_fn must raise on SMTP failure; return value is ignored.
+    """
+    send_ms_total = 0.0
+    if not _acquire_dedup(dedup_key):
+        logger.info("%s Skipped duplicate kind=%s", _LOG, kind)
+        return {"status": "skipped_duplicate", "kind": kind}
+
+    thread_db = not getattr(settings, "DPR_EMAIL_INLINE", False)
+    if thread_db:
+        close_old_connections()
+    last_exc: Exception | None = None
+    try:
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                logger.info(
+                    "%s Sending email kind=%s attempt=%s/%s",
+                    _LOG,
+                    kind,
+                    attempt,
+                    _MAX_ATTEMPTS,
+                )
+                smtp_started_at = time.perf_counter()
+                send_fn()
+                elapsed_ms = (time.perf_counter() - smtp_started_at) * 1000.0
+                send_ms_total += elapsed_ms
+                logger.info(
+                    "%s Sent kind=%s attempt=%s smtp_time_ms=%.1f",
+                    _LOG,
+                    kind,
+                    attempt,
+                    elapsed_ms,
+                )
+                return {
+                    "status": "sent",
+                    "kind": kind,
+                    "attempts": attempt,
+                    "send_ms": round(send_ms_total, 2),
+                    "smtp_time_ms": round(elapsed_ms, 2),
+                }
+            except Exception as exc:
+                last_exc = exc
+                retryable = is_retryable_smtp_error(exc)
+                if retryable and attempt < _MAX_ATTEMPTS:
+                    delay = _RETRY_DELAYS_SEC[attempt - 1]
+                    logger.warning(
+                        "%s Retry %s kind=%s delay_sec=%s err_type=%s",
+                        _LOG,
+                        attempt,
+                        kind,
+                        delay,
+                        type(exc).__name__,
+                    )
+                    time.sleep(delay)
+                    continue
+                logger.exception(
+                    "%s Failed kind=%s attempts=%s retryable=%s err_type=%s",
+                    _LOG,
+                    kind,
+                    attempt,
+                    retryable,
+                    type(exc).__name__,
+                )
+                _release_dedup(dedup_key)
+                return {
+                    "status": "failed",
+                    "kind": kind,
+                    "error": type(last_exc).__name__,
+                    "send_ms": round(send_ms_total, 2),
+                    "attempts": attempt,
+                    "retryable": retryable,
+                }
+        return {
+            "status": "failed",
+            "kind": kind,
+            "error": type(last_exc).__name__ if last_exc else "error",
+            "send_ms": round(send_ms_total, 2),
+        }
+    finally:
+        if thread_db:
+            close_old_connections()
 
 
 # ---------------------------------------------------------------------------

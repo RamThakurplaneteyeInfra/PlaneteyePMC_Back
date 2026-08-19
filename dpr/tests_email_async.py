@@ -30,6 +30,9 @@ from services.notifications import (
     notify_dpr_rejected,
     notify_dpr_rejected_by_role,
     notify_dpr_submitted,
+    notify_project_assigned,
+    notify_project_created,
+    send_project_created_email,
 )
 
 
@@ -298,3 +301,45 @@ class DprEmailThreadAsyncTests(TestCase):
         self.assertEqual(mock_sleep.call_count, 2)
         mock_sleep.assert_any_call(1)
         mock_sleep.assert_any_call(2)
+
+    @patch("services.email_utils.send_html_email", return_value=True)
+    @patch("services.notifications.send_websocket_notification")
+    def test_project_created_email_after_commit(self, mock_ws, mock_email):
+        self.project.coordinators.add(self.coord)
+        with self.captureOnCommitCallbacks(execute=True):
+            notify_project_created(self.project)
+        mock_email.assert_called_once()
+        self.assertEqual(mock_email.call_args.kwargs.get("template_name"), "project_created")
+
+    @patch("dpr.email_executor.submit_email_job")
+    @patch("services.notifications.send_websocket_notification")
+    def test_project_created_rollback_does_not_queue(self, mock_ws, mock_submit):
+        self.project.coordinators.add(self.coord)
+        try:
+            with transaction.atomic():
+                notify_project_created(self.project)
+                raise RuntimeError("force rollback")
+        except RuntimeError:
+            pass
+        mock_submit.assert_not_called()
+
+    @patch("services.email_utils.send_html_email", return_value=True)
+    @patch("services.notifications.send_websocket_notification")
+    def test_project_assigned_email_after_commit(self, mock_ws, mock_email):
+        with self.captureOnCommitCallbacks(execute=True):
+            notify_project_assigned(self.project, self.tl)
+        mock_email.assert_called_once()
+        self.assertEqual(mock_email.call_args.kwargs.get("template_name"), "project_assigned")
+
+    def test_project_created_dedupes(self):
+        self.project.coordinators.add(self.coord)
+        with patch("services.email_utils.send_html_email", return_value=True) as mock_email:
+            r1 = send_project_created_email(
+                project_id=self.project.id, recipient_ids=[self.coord.id]
+            )
+            r2 = send_project_created_email(
+                project_id=self.project.id, recipient_ids=[self.coord.id]
+            )
+        self.assertEqual(r1["status"], "sent")
+        self.assertEqual(r2["status"], "skipped_duplicate")
+        self.assertEqual(mock_email.call_count, 1)

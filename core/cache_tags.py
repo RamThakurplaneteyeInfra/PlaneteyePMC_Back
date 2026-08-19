@@ -13,7 +13,7 @@ from collections.abc import Iterable
 from contextlib import contextmanager
 from typing import Iterator
 
-from core.cache_keys import invalidate_list_cache
+from core.cache_keys import bump_many_list_cache_versions
 from core.cache_metrics import record_invalidation
 
 logger = logging.getLogger("pmc.cache.tags")
@@ -84,9 +84,8 @@ def invalidate_tags(*tags: str) -> list[str]:
         return []
 
     prefixes = prefixes_for_tags(tags)
-    for prefix in prefixes:
-        invalidate_list_cache(prefix)
     if prefixes:
+        bump_many_list_cache_versions(prefixes)
         record_invalidation(len(prefixes))
         logger.info("cache_tag_invalidate tags=%s prefixes=%s", tags, prefixes)
     return prefixes

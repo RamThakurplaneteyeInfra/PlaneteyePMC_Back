@@ -5,7 +5,7 @@ from __future__ import annotations
 from django.conf import settings
 from django.core.cache import cache
 
-from core.cache_keys import build_rbac_list_cache_key, invalidate_list_cache
+from core.cache_keys import build_rbac_list_cache_key
 
 CACHE_PREFIX = "mpr_preview_v1"
 DEFAULT_TTL = 300  # 5 minutes
@@ -39,4 +39,6 @@ def set_cached_mpr(key: str, payload: dict) -> None:
 
 
 def invalidate_mpr_cache() -> None:
-    invalidate_list_cache(CACHE_PREFIX)
+    from core.cache_tags import invalidate_tags
+
+    invalidate_tags("mpr")

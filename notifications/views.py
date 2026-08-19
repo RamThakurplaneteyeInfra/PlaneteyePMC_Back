@@ -142,7 +142,7 @@ def test_sync_email(request):
     Test email sending synchronously (without Celery)
     """
     try:
-        from backend.tasks import send_html_email
+        from services.email_utils import send_html_email
 
         context = {
             'test_message': 'This is a synchronous test email',
@@ -194,51 +194,9 @@ def notify_project_created_endpoint(request):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Temporarily make notification synchronous for testing
-        from backend.tasks import send_html_email
-        from django.conf import settings
-
-        coordinators = list(project.coordinators.all())
-        if coordinators:
-            recipient_emails = [coord.email for coord in coordinators if coord.email]
-            if recipient_emails:
-                context = {
-                    'project': {
-                        'name': project.name,
-                        'client_name': project.client_name,
-                        'location': project.location,
-                        'description': project.description,
-                        'budget': float(project.budget),
-                        'created_by': {
-                            'username': project.created_by.username,
-                            'get_full_name': project.created_by.get_full_name(),
-                        },
-                        'created_at': project.created_at.isoformat(),
-                    },
-                    'base_url': settings.BASE_URL
-                }
-
-                success = send_html_email(
-                    subject=f"New Project Created: {project.name}",
-                    template_name='project_created',
-                    context=context,
-                    recipient_list=recipient_emails,
-                    from_email=settings.DEFAULT_FROM_EMAIL
-                )
-
-                if success:
-                    return Response(
-                        {'status': 'Project creation notification sent successfully'},
-                        status=status.HTTP_200_OK
-                    )
-                else:
-                    return Response(
-                        {'error': 'Failed to send project creation notification'},
-                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                    )
-
+        notify_project_created(project)
         return Response(
-            {'status': 'Project creation notification sent successfully (no coordinators with email)'},
+            {'status': 'Project creation notification sent successfully'},
             status=status.HTTP_200_OK
         )
 

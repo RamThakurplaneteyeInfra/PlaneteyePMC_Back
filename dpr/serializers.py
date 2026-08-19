@@ -63,6 +63,24 @@ def prime_dpr_for_serialization(dpr):
     return dpr
 
 
+def _attach_recalculated_activities(dpr, activities, scope_map=None) -> None:
+    """Reuse recalc rows for the response instead of a second activity prefetch."""
+    if dpr is None or not getattr(dpr, "pk", None):
+        return
+    dpr_id = dpr.pk
+    attached = [row for row in (activities or []) if getattr(row, "dpr_id", None) == dpr_id]
+    if scope_map:
+        for row in attached:
+            cached = scope_map.get(row.scope_id)
+            if cached is not None:
+                row.scope = cached
+    cache = getattr(dpr, "_prefetched_objects_cache", None)
+    if cache is None:
+        dpr._prefetched_objects_cache = {}
+        cache = dpr._prefetched_objects_cache
+    cache["activities"] = attached
+
+
 def upsert_dpr_activities(dpr, activities_data, *, accumulate: bool) -> int:
     """
     Create or update activities for a DPR in bulk.
@@ -362,17 +380,22 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
                             dpr, activities_data, accumulate=True
                         )
 
-                    # One recalculation pass per distinct scope (same formulas).
                     from monthly_scope.services import ScopeProgressService
-                    ScopeProgressService.recalculate_for_dpr(dpr)
-
-                    # Update DPR timestamp
+                    rows = ScopeProgressService.recalculate_for_dpr(
+                        dpr,
+                        scope_ids=[
+                            ad["scope"].pk
+                            for ad in activities_data
+                            if ad.get("scope") is not None
+                        ] or None,
+                        scopes_by_id=self.context.get("_scope_by_id") or None,
+                    )
                     dpr.save(update_fields=['updated_at'])
-
-                    # Ensure nested response reads fresh cumulative fields
                     if hasattr(dpr, "_prefetched_objects_cache"):
                         dpr._prefetched_objects_cache = {}
-                    prime_dpr_for_serialization(dpr)
+                    _attach_recalculated_activities(
+                        dpr, rows, self.context.get("_scope_by_id")
+                    )
 
                     # Add custom response data
                     dpr._activities_added = activities_added
@@ -391,13 +414,21 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
                             ]
                         )
 
-                    # One recalculation pass per distinct scope (same formulas).
                     from monthly_scope.services import ScopeProgressService
-                    ScopeProgressService.recalculate_for_dpr(dpr)
-
+                    rows = ScopeProgressService.recalculate_for_dpr(
+                        dpr,
+                        scope_ids=[
+                            ad["scope"].pk
+                            for ad in activities_data
+                            if ad.get("scope") is not None
+                        ] or None,
+                        scopes_by_id=self.context.get("_scope_by_id") or None,
+                    )
                     if hasattr(dpr, "_prefetched_objects_cache"):
                         dpr._prefetched_objects_cache = {}
-                    prime_dpr_for_serialization(dpr)
+                    _attach_recalculated_activities(
+                        dpr, rows, self.context.get("_scope_by_id")
+                    )
 
                     return dpr
 
@@ -456,11 +487,19 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
                         scope = activity_data.get("scope")
                         if scope is not None:
                             scopes_to_update.add(scope.id)
-                    ScopeProgressService.recalculate_scopes(scopes_to_update)
-
-                if hasattr(instance, "_prefetched_objects_cache"):
-                    instance._prefetched_objects_cache = {}
-                prime_dpr_for_serialization(instance)
+                    rows = ScopeProgressService.recalculate_scopes(
+                        scopes_to_update,
+                        scopes_by_id=self.context.get("_scope_by_id") or None,
+                    )
+                    if hasattr(instance, "_prefetched_objects_cache"):
+                        instance._prefetched_objects_cache = {}
+                    _attach_recalculated_activities(
+                        instance, rows, self.context.get("_scope_by_id")
+                    )
+                else:
+                    if hasattr(instance, "_prefetched_objects_cache"):
+                        instance._prefetched_objects_cache = {}
+                    prime_dpr_for_serialization(instance)
 
                 return instance
         except IntegrityError as e:

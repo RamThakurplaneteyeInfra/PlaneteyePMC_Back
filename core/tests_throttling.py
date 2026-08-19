@@ -15,6 +15,7 @@ from core.throttling import (
     CreateRateThrottle,
     DeleteRateThrottle,
     ExportRateThrottle,
+    FastUserRateThrottle,
     LoginRateThrottle,
     NotificationRateThrottle,
     RefreshRateThrottle,
@@ -138,6 +139,20 @@ class ThrottleClassUnitTest(TestCase):
     def test_cache_backend_used(self):
         throttle = LoginRateThrottle()
         self.assertEqual(throttle.cache, cache)
+
+    def test_fast_user_throttle_falls_back_to_cache_backend(self):
+        from unittest.mock import patch
+
+        throttle = FastUserRateThrottle()
+        throttle.rate = "2/min"
+        throttle.num_requests, throttle.duration = throttle.parse_rate("2/min")
+        request = self._request("get", "/api/dpr/")
+        request.user = User.objects.create_user("fast_throttle_user", password="x")
+        with ThrottleTestContext():
+            with patch.object(throttle, "_allow_via_redis", return_value=None):
+                self.assertTrue(throttle.allow_request(request, self.view))
+                self.assertTrue(throttle.allow_request(request, self.view))
+                self.assertFalse(throttle.allow_request(request, self.view))
 
     @patch("core.throttling.logger.warning")
     def test_throttled_request_is_logged(self, mock_log):

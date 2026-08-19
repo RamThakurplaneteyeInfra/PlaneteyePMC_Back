@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
 from collections.abc import Iterable
 from typing import Any
 
@@ -39,6 +40,44 @@ def bump_list_cache_version(prefix: str) -> int:
     except ValueError:
         cache.set(key, 1, timeout=None)
         return 1
+
+
+def bump_many_list_cache_versions(prefixes: Iterable[str]) -> list[str]:
+    """
+    Bump many list-cache versions in one Redis round trip when possible.
+
+    SCAN/delete_pattern is intentionally not used: versioned keys
+    (``prefix:vN:...``) become unreachable after the bump.
+    """
+    unique = [str(p) for p in dict.fromkeys(prefixes) if p]
+    if not unique:
+        return []
+
+    client_getter = getattr(getattr(cache, "client", None), "get_client", None)
+    if callable(client_getter):
+        try:
+            redis_client = client_getter(write=True)
+            pipe = redis_client.pipeline(transaction=False)
+            make_key = getattr(cache, "make_key", None)
+            started = time.perf_counter()
+            for prefix in unique:
+                raw = _version_key(prefix)
+                redis_key = make_key(raw) if callable(make_key) else raw
+                pipe.incr(redis_key)
+            pipe.execute()
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            logger.info(
+                "cache_invalidate_pipeline count=%s duration_ms=%.1f",
+                len(unique),
+                elapsed_ms,
+            )
+            return unique
+        except Exception as exc:
+            logger.debug("cache pipeline incr fallback: %s", exc)
+
+    for prefix in unique:
+        bump_list_cache_version(prefix)
+    return unique
 
 
 def rbac_dataset_scope(user) -> str:
@@ -121,25 +160,39 @@ def build_rbac_list_cache_key(
 
 def invalidate_list_cache(prefix: str, *legacy_keys: str) -> None:
     """
-    Invalidate all list cache entries for *prefix*.
+    Invalidate all list cache entries for *prefix* by bumping the version.
 
-    - Bumps the version counter (works on LocMem and Redis).
-    - Deletes ``prefix:*`` via delete_pattern when available.
-    - Deletes exact *legacy_keys* and the bare *prefix* key.
+    Versioned keys (``prefix:vN:...``) are unreachable after the bump, so this
+    does not SCAN/delete_pattern. Remote Redis SCAN was measured at ~1–2s per
+    prefix and dominated live DPR writes (42 scans ≈ 48s).
+
+    Exact *legacy_keys* are still deleted. Bare prefix delete is skipped unless
+    CACHE_INVALIDATE_SCAN is enabled (legacy SCAN path).
     """
+    from django.conf import settings
+
     try:
         bump_list_cache_version(prefix)
         logger.info("cache_invalidate prefix=%s", prefix)
     except Exception as exc:
         logger.warning("Failed to bump cache version for %s: %s", prefix, exc)
 
-    try:
-        if hasattr(cache, "delete_pattern"):
-            cache.delete_pattern(f"{prefix}:*")
-    except Exception as exc:
-        logger.debug("delete_pattern unavailable for %s: %s", prefix, exc)
+    if getattr(settings, "CACHE_INVALIDATE_SCAN", False):
+        try:
+            if hasattr(cache, "delete_pattern"):
+                cache.delete_pattern(f"{prefix}:*")
+        except Exception as exc:
+            logger.debug("delete_pattern unavailable for %s: %s", prefix, exc)
+        for key in (prefix, *legacy_keys):
+            if not key:
+                continue
+            try:
+                cache.delete(key)
+            except Exception:
+                pass
+        return
 
-    for key in (prefix, *legacy_keys):
+    for key in legacy_keys:
         if not key:
             continue
         try:

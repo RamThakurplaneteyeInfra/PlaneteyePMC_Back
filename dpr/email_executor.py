@@ -183,7 +183,7 @@ def mark_started(enqueued_at: float | None) -> float:
             METRICS.pending -= 1
         METRICS.running += 1
         METRICS.total_queue_wait_ms += wait_ms
-    logger.info("%s Thread Started wait_ms=%.1f", _LOG_PREFIX, wait_ms)
+    logger.info("%s Started wait_ms=%.1f", _LOG_PREFIX, wait_ms)
     return now
 
 

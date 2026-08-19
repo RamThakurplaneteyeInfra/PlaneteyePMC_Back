@@ -85,3 +85,22 @@ class RbacCacheKeyTests(TestCase):
         invalidate_list_cache("invoicing_list")
         after = build_rbac_list_cache_key("invoicing_list", req)
         self.assertNotEqual(before, after)
+
+    def test_invalidate_skips_scan_by_default(self):
+        from unittest.mock import MagicMock
+
+        cache.delete_pattern = MagicMock()
+        invalidate_list_cache("dpr_list")
+        cache.delete_pattern.assert_not_called()
+
+
+class RedisHostClassificationTests(TestCase):
+    def test_classifies_proxy_and_internal(self):
+        from core.perf_network import classify_neon_host, classify_redis_host
+
+        self.assertEqual(classify_redis_host("sakura.proxy.rlwy.net"), "PUBLIC / EXTERNAL")
+        self.assertEqual(classify_redis_host("redis.railway.internal"), "PRIVATE / INTERNAL")
+        self.assertEqual(classify_redis_host("127.0.0.1"), "LOCAL")
+        neon = classify_neon_host("ep-x-pooler.c-2.ap-southeast-1.aws.neon.tech")
+        self.assertEqual(neon["endpoint_type"], "pooler")
+        self.assertEqual(neon["region"], "ap-southeast-1")

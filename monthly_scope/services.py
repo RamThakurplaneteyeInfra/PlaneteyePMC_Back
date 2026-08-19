@@ -164,20 +164,35 @@ class ScopeProgressService:
             scope.status = "in_progress"
 
     @staticmethod
-    def _recalculate_scopes_bulk(scope_ids: list[int], *, refresh_activities: bool = True) -> None:
+    def _recalculate_scopes_bulk(
+        scope_ids: list[int],
+        *,
+        refresh_activities: bool = True,
+        scopes_by_id: dict | None = None,
+    ) -> list:
         """
         Recalculate many scopes with the same formulas as update_scope_progress,
         using one activity query and one scope query, then bulk_update.
+
+        Returns the activity rows loaded for those scopes (used to avoid a
+        second prefetch on DPR serialize).
         """
         from dpr.models import DPRActivity
 
         if not scope_ids:
-            return
+            return []
 
-        scopes = {
-            scope.id: scope
-            for scope in MonthlyScopeWork.objects.filter(id__in=scope_ids)
-        }
+        if scopes_by_id:
+            missing = [sid for sid in scope_ids if sid not in scopes_by_id]
+            scopes = {sid: scopes_by_id[sid] for sid in scope_ids if sid in scopes_by_id}
+            if missing:
+                for scope in MonthlyScopeWork.objects.filter(id__in=missing):
+                    scopes[scope.id] = scope
+        else:
+            scopes = {
+                scope.id: scope
+                for scope in MonthlyScopeWork.objects.filter(id__in=scope_ids)
+            }
         activities = list(
             DPRActivity.objects.filter(scope_id__in=scope_ids)
             .select_related("dpr")
@@ -290,7 +305,7 @@ class ScopeProgressService:
             )
 
         _invalidate_progress_caches()
-        return bool(scopes)
+        return activities
 
     @staticmethod
     def update_scope_progress(scope_id, *, refresh_activities: bool = True) -> bool:
@@ -304,9 +319,11 @@ class ScopeProgressService:
         from core.cache_tags import batch_cache_invalidation
 
         with batch_cache_invalidation():
-            return ScopeProgressService._recalculate_scopes_bulk(
-                unique,
-                refresh_activities=refresh_activities,
+            return bool(
+                ScopeProgressService._recalculate_scopes_bulk(
+                    unique,
+                    refresh_activities=refresh_activities,
+                )
             )
 
     @staticmethod
@@ -349,36 +366,40 @@ class ScopeProgressService:
         return ScopeProgressService.update_scope_progress(activity.scope_id)
 
     @staticmethod
-    def recalculate_scopes(scope_ids) -> None:
+    def recalculate_scopes(scope_ids, scopes_by_id: dict | None = None) -> list:
         """Recalculate each distinct scope id (skips None/duplicates)."""
         unique = ScopeProgressService._unique_scope_ids(scope_ids)
         if not unique:
-            return
+            return []
         from core.cache_tags import batch_cache_invalidation
 
         with batch_cache_invalidation():
-            ScopeProgressService._recalculate_scopes_bulk(unique)
-        return None
+            return ScopeProgressService._recalculate_scopes_bulk(
+                unique,
+                scopes_by_id=scopes_by_id,
+            )
 
     @staticmethod
-    def recalculate_for_dpr(dpr) -> None:
+    def recalculate_for_dpr(dpr, *, scope_ids=None, scopes_by_id: dict | None = None) -> list:
         """
         Recalculate every Assigned Scope linked to a DPR.
 
         Call after Create / Update / Delete / Submit / Approve / Reject.
+        Pass scope_ids when the caller already knows them to skip a values_list query.
         """
         if dpr is None:
-            return
-        scope_ids = list(
-            dpr.activities.exclude(scope_id=None).values_list("scope_id", flat=True)
-        )
+            return []
+        if scope_ids is None:
+            scope_ids = list(
+                dpr.activities.exclude(scope_id=None).values_list("scope_id", flat=True)
+            )
         logger.info(
             "recalculate_for_dpr dpr_id=%s status=%s scope_ids=%s",
             getattr(dpr, "id", None),
             getattr(dpr, "status", None),
             scope_ids,
         )
-        ScopeProgressService.recalculate_scopes(scope_ids)
+        return ScopeProgressService.recalculate_scopes(scope_ids, scopes_by_id=scopes_by_id)
 
     @staticmethod
     def validate_executed_quantity(activity, executed_quantity, dpr_report_date=None):

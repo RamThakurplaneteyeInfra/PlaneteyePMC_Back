@@ -31,6 +31,7 @@ from accounts.rbac_checks import (
     site_engineer_cannot_delete_approved_dpr,
 )
 from core.cache_keys import build_rbac_list_cache_key
+from core.cache_tags import batch_cache_invalidation
 from monthly_scope.services import ScopeProgressService
 
 import logging
@@ -51,12 +52,7 @@ def safe_cache_delete_pattern(pattern):
         # reports tag covers DPR prefixes; also bump exact prefix for safety.
         invalidate_tags("reports", prefix)
         return
-    try:
-        if isinstance(cache, LocMemCache):
-            return
-        cache.delete_pattern(pattern)
-    except AttributeError:
-        pass
+    # Versioned list keys do not need SCAN/delete_pattern on the write path.
 
 
 class DailyProgressReportViewSet(viewsets.ModelViewSet):
@@ -218,11 +214,11 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         responses={201: DailyProgressReportSerializer}
     )
     def perform_create(self, serializer):
-        super().perform_create(serializer)
-        # Cache invalidation
-        safe_cache_delete_pattern("dpr_list:*")
-        safe_cache_delete_pattern("dpr_pending_approval:*")
-        safe_cache_delete_pattern("dpr_rejected:*")
+        with batch_cache_invalidation():
+            super().perform_create(serializer)
+            safe_cache_delete_pattern("dpr_list:*")
+            safe_cache_delete_pattern("dpr_pending_approval:*")
+            safe_cache_delete_pattern("dpr_rejected:*")
 
     def create(self, request, *args, **kwargs):
         """
@@ -272,7 +268,25 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                         request.user, project_name, RBACDomain.ENGINEERING
                     )
                 with perf.span("save_ms"):
-                    instance = serializer.save()
+                    with batch_cache_invalidation():
+                        instance = serializer.save()
+                        from core.business_audit import write_business_audit
+                        from core.models import BusinessAuditLog
+
+                        write_business_audit(
+                            entity_type=BusinessAuditLog.ENTITY_DPR,
+                            action=BusinessAuditLog.ACTION_CREATED,
+                            actor=request.user,
+                            entity_id=instance.pk,
+                            project_name=instance.project_name or "",
+                            detail=(
+                                f"DPR created for {instance.project_name} "
+                                f"on {instance.report_date}"
+                            ),
+                        )
+                        safe_cache_delete_pattern("dpr_list:*")
+                        safe_cache_delete_pattern("dpr_pending_approval:*")
+                        safe_cache_delete_pattern("dpr_rejected:*")
             except (APIException, DRFValidationError):
                 # Let DRF / FriendlyAPIErrorMiddleware format these correctly
                 raise
@@ -297,22 +311,6 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                 dpr_id=instance.pk,
                 activity_count=len(request.data.get("activities") or []),
             )
-
-            from core.business_audit import write_business_audit
-            from core.models import BusinessAuditLog
-
-            write_business_audit(
-                entity_type=BusinessAuditLog.ENTITY_DPR,
-                action=BusinessAuditLog.ACTION_CREATED,
-                actor=request.user,
-                entity_id=instance.pk,
-                project_name=instance.project_name or "",
-                detail=f"DPR created for {instance.project_name} on {instance.report_date}",
-            )
-
-            safe_cache_delete_pattern("dpr_list:*")
-            safe_cache_delete_pattern("dpr_pending_approval:*")
-            safe_cache_delete_pattern("dpr_rejected:*")
 
             pending_statuses = [
                 DailyProgressReport.Status.PENDING_TEAM_LEAD,
@@ -356,11 +354,11 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         responses={200: DailyProgressReportSerializer}
     )
     def perform_update(self, serializer):
-        super().perform_update(serializer)
-        # Cache invalidation
-        safe_cache_delete_pattern("dpr_list:*")
-        safe_cache_delete_pattern("dpr_pending_approval:*")
-        safe_cache_delete_pattern("dpr_rejected:*")
+        with batch_cache_invalidation():
+            super().perform_update(serializer)
+            safe_cache_delete_pattern("dpr_list:*")
+            safe_cache_delete_pattern("dpr_pending_approval:*")
+            safe_cache_delete_pattern("dpr_rejected:*")
 
     def update(self, request, *args, **kwargs):
         """
@@ -391,16 +389,16 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         }
     )
     def perform_destroy(self, instance):
-        # Capture scopes before CASCADE deletes activities
-        scope_ids = list(
-            instance.activities.exclude(scope_id=None).values_list("scope_id", flat=True)
-        )
-        super().perform_destroy(instance)
-        ScopeProgressService.recalculate_scopes(scope_ids)
-        # Cache invalidation
-        safe_cache_delete_pattern("dpr_list:*")
-        safe_cache_delete_pattern("dpr_pending_approval:*")
-        safe_cache_delete_pattern("dpr_rejected:*")
+        with batch_cache_invalidation():
+            # Capture scopes before CASCADE deletes activities
+            scope_ids = list(
+                instance.activities.exclude(scope_id=None).values_list("scope_id", flat=True)
+            )
+            super().perform_destroy(instance)
+            ScopeProgressService.recalculate_scopes(scope_ids)
+            safe_cache_delete_pattern("dpr_list:*")
+            safe_cache_delete_pattern("dpr_pending_approval:*")
+            safe_cache_delete_pattern("dpr_rejected:*")
 
     def destroy(self, request, *args, **kwargs):
         """
@@ -515,7 +513,7 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         is_resubmit = dpr.status == DailyProgressReport.Status.REJECTED
 
         try:
-            with transaction.atomic():
+            with batch_cache_invalidation(), transaction.atomic():
                 # Handle activities if provided (scope-based model)
                 if activities_data:
                     if not isinstance(activities_data, list):
@@ -629,36 +627,32 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Update DPR status
-        dpr.status = DailyProgressReport.Status.PENDING_COORDINATOR
-        dpr.current_approver_role = 'PMC Manager'
-        dpr.save()
-        ScopeProgressService.recalculate_for_dpr(dpr)
+        with batch_cache_invalidation():
+            dpr.status = DailyProgressReport.Status.PENDING_COORDINATOR
+            dpr.current_approver_role = 'PMC Manager'
+            dpr.save()
+            ScopeProgressService.recalculate_for_dpr(dpr)
 
-        # Send approval notification to submitter (Site Engineer)
-        notify_dpr_approved_by_role(dpr, 'Team Leader')
+            notify_dpr_approved_by_role(dpr, 'Team Leader')
+            notify_dpr_submitted(dpr)
 
-        # Send submission notification to next approver (PMC Manager)
-        notify_dpr_submitted(dpr)
+            safe_cache_delete_pattern("dpr_list:*")
+            safe_cache_delete_pattern("dpr_pending_approval:*")
+            safe_cache_delete_pattern("dpr_rejected:*")
 
-        # Cache invalidation
-        safe_cache_delete_pattern("dpr_list:*")
-        safe_cache_delete_pattern("dpr_pending_approval:*")
-        safe_cache_delete_pattern("dpr_rejected:*")
+            from core.business_audit import write_business_audit
+            from core.models import BusinessAuditLog
 
-        from core.business_audit import write_business_audit
-        from core.models import BusinessAuditLog
+            write_business_audit(
+                entity_type=BusinessAuditLog.ENTITY_DPR,
+                action=BusinessAuditLog.ACTION_APPROVED,
+                actor=request.user,
+                entity_id=dpr.pk,
+                project_name=dpr.project_name or "",
+                detail="Approved by Team Leader",
+            )
 
-        write_business_audit(
-            entity_type=BusinessAuditLog.ENTITY_DPR,
-            action=BusinessAuditLog.ACTION_APPROVED,
-            actor=request.user,
-            entity_id=dpr.pk,
-            project_name=dpr.project_name or "",
-            detail="Approved by Team Leader",
-        )
-
-        serializer = self.get_serializer(dpr)
+            serializer = self.get_serializer(dpr)
         return Response(serializer.data)
 
     @swagger_auto_schema(
@@ -687,36 +681,32 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Update DPR status
-        dpr.status = DailyProgressReport.Status.PENDING_PMC_HEAD
-        dpr.current_approver_role = 'PMC Head'
-        dpr.save()
-        ScopeProgressService.recalculate_for_dpr(dpr)
+        with batch_cache_invalidation():
+            dpr.status = DailyProgressReport.Status.PENDING_PMC_HEAD
+            dpr.current_approver_role = 'PMC Head'
+            dpr.save()
+            ScopeProgressService.recalculate_for_dpr(dpr)
 
-        # Send approval notification to Team Lead and Site Engineer
-        notify_dpr_approved_by_role(dpr, 'PMC Manager')
+            notify_dpr_approved_by_role(dpr, 'PMC Manager')
+            notify_dpr_submitted(dpr)
 
-        # Send submission notification to next approver (PMC Head)
-        notify_dpr_submitted(dpr)
+            safe_cache_delete_pattern("dpr_list:*")
+            safe_cache_delete_pattern("dpr_pending_approval:*")
+            safe_cache_delete_pattern("dpr_rejected:*")
 
-        # Cache invalidation
-        safe_cache_delete_pattern("dpr_list:*")
-        safe_cache_delete_pattern("dpr_pending_approval:*")
-        safe_cache_delete_pattern("dpr_rejected:*")
+            from core.business_audit import write_business_audit
+            from core.models import BusinessAuditLog
 
-        from core.business_audit import write_business_audit
-        from core.models import BusinessAuditLog
+            write_business_audit(
+                entity_type=BusinessAuditLog.ENTITY_DPR,
+                action=BusinessAuditLog.ACTION_APPROVED,
+                actor=request.user,
+                entity_id=dpr.pk,
+                project_name=dpr.project_name or "",
+                detail="Approved by PMC Manager",
+            )
 
-        write_business_audit(
-            entity_type=BusinessAuditLog.ENTITY_DPR,
-            action=BusinessAuditLog.ACTION_APPROVED,
-            actor=request.user,
-            entity_id=dpr.pk,
-            project_name=dpr.project_name or "",
-            detail="Approved by PMC Manager",
-        )
-
-        serializer = self.get_serializer(dpr)
+            serializer = self.get_serializer(dpr)
         return Response(serializer.data)
 
     @swagger_auto_schema(
@@ -744,35 +734,33 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Update DPR status to approved
-        dpr.status = DailyProgressReport.Status.APPROVED
-        dpr.approved_by = request.user
-        dpr.approved_at = timezone.now()
-        dpr.current_approver_role = ''
-        dpr.save()
-        ScopeProgressService.recalculate_for_dpr(dpr)
+        with batch_cache_invalidation():
+            dpr.status = DailyProgressReport.Status.APPROVED
+            dpr.approved_by = request.user
+            dpr.approved_at = timezone.now()
+            dpr.current_approver_role = ''
+            dpr.save()
+            ScopeProgressService.recalculate_for_dpr(dpr)
 
-        # Send final approval notification to Coordinator, Team Lead, and Site Engineer
-        notify_dpr_approved_by_role(dpr, 'PMC Head')
+            notify_dpr_approved_by_role(dpr, 'PMC Head')
 
-        # Cache invalidation
-        safe_cache_delete_pattern("dpr_list:*")
-        safe_cache_delete_pattern("dpr_pending_approval:*")
-        safe_cache_delete_pattern("dpr_rejected:*")
+            safe_cache_delete_pattern("dpr_list:*")
+            safe_cache_delete_pattern("dpr_pending_approval:*")
+            safe_cache_delete_pattern("dpr_rejected:*")
 
-        from core.business_audit import write_business_audit
-        from core.models import BusinessAuditLog
+            from core.business_audit import write_business_audit
+            from core.models import BusinessAuditLog
 
-        write_business_audit(
-            entity_type=BusinessAuditLog.ENTITY_DPR,
-            action=BusinessAuditLog.ACTION_APPROVED,
-            actor=request.user,
-            entity_id=dpr.pk,
-            project_name=dpr.project_name or "",
-            detail="Approved by PMC Head (final)",
-        )
+            write_business_audit(
+                entity_type=BusinessAuditLog.ENTITY_DPR,
+                action=BusinessAuditLog.ACTION_APPROVED,
+                actor=request.user,
+                entity_id=dpr.pk,
+                project_name=dpr.project_name or "",
+                detail="Approved by PMC Head (final)",
+            )
 
-        serializer = self.get_serializer(dpr)
+            serializer = self.get_serializer(dpr)
         return Response(serializer.data)
 
     @swagger_auto_schema(
@@ -829,34 +817,32 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Update rejection details
-        dpr.rejection_reason = rejection_reason
-        dpr.rejected_by = request.user
-        dpr.save()
-        ScopeProgressService.recalculate_for_dpr(dpr)
+        with batch_cache_invalidation():
+            dpr.rejection_reason = rejection_reason
+            dpr.rejected_by = request.user
+            dpr.save()
+            ScopeProgressService.recalculate_for_dpr(dpr)
 
-        # Send rejection notification to appropriate recipients
-        if rejected_by_role:
-            notify_dpr_rejected_by_role(dpr, rejected_by_role)
+            if rejected_by_role:
+                notify_dpr_rejected_by_role(dpr, rejected_by_role)
 
-        # Cache invalidation
-        safe_cache_delete_pattern("dpr_list:*")
-        safe_cache_delete_pattern("dpr_pending_approval:*")
-        safe_cache_delete_pattern("dpr_rejected:*")
+            safe_cache_delete_pattern("dpr_list:*")
+            safe_cache_delete_pattern("dpr_pending_approval:*")
+            safe_cache_delete_pattern("dpr_rejected:*")
 
-        from core.business_audit import write_business_audit
-        from core.models import BusinessAuditLog
+            from core.business_audit import write_business_audit
+            from core.models import BusinessAuditLog
 
-        write_business_audit(
-            entity_type=BusinessAuditLog.ENTITY_DPR,
-            action=BusinessAuditLog.ACTION_REJECTED,
-            actor=request.user,
-            entity_id=dpr.pk,
-            project_name=dpr.project_name or "",
-            detail=f"Rejected by {rejected_by_role or 'approver'}",
-        )
+            write_business_audit(
+                entity_type=BusinessAuditLog.ENTITY_DPR,
+                action=BusinessAuditLog.ACTION_REJECTED,
+                actor=request.user,
+                entity_id=dpr.pk,
+                project_name=dpr.project_name or "",
+                detail=f"Rejected by {rejected_by_role or 'approver'}",
+            )
 
-        serializer = self.get_serializer(dpr)
+            serializer = self.get_serializer(dpr)
         return Response(serializer.data)
 
     @swagger_auto_schema(

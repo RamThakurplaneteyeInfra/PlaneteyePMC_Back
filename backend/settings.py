@@ -315,7 +315,7 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.AnonRateThrottle',
-        'rest_framework.throttling.UserRateThrottle',
+        'core.throttling.FastUserRateThrottle',
         'core.throttling.LoginRateThrottle',
         'core.throttling.RefreshRateThrottle',
         'core.throttling.MethodScopedRateThrottle',
@@ -440,6 +440,10 @@ CACHES = _build_cache_settings()
 
 # Named TTLs (seconds) consumed by core.cache_ops
 CACHE_TTL_DEFAULT = int(os.environ.get("CACHE_TTL_DEFAULT", "300"))
+# SCAN/delete_pattern on write is O(keyspace) on shared Redis. Version bump is enough.
+CACHE_INVALIDATE_SCAN = os.environ.get("CACHE_INVALIDATE_SCAN", "false").lower() == "true"
+# Cache metrics Redis GET/SET is off the request path unless this is true.
+CACHE_METRICS_INLINE = os.environ.get("CACHE_METRICS_INLINE", "false").lower() == "true"
 CACHE_TTL_OVERVIEW = int(os.environ.get("CACHE_TTL_OVERVIEW", "300"))  # 5 min
 CACHE_TTL_DASHBOARD = int(os.environ.get("CACHE_TTL_DASHBOARD", "300"))
 CACHE_TTL_DROPDOWN = int(os.environ.get("CACHE_TTL_DROPDOWN", "1800"))  # 30 min
@@ -505,11 +509,18 @@ DEFAULT_FROM_EMAIL = os.environ.get(
     'BREVO_FROM_EMAIL',
     os.environ.get('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER),
 )
+SERVER_EMAIL = os.environ.get('SERVER_EMAIL', DEFAULT_FROM_EMAIL)
+EMAIL_USE_SSL = os.environ.get(
+    'BREVO_SMTP_USE_SSL',
+    os.environ.get('EMAIL_USE_SSL', 'False'),
+).lower() == 'true'
 EMAIL_TIMEOUT = float(os.environ.get('EMAIL_TIMEOUT', '30'))
 EMAIL_LOGO_PATH = os.environ.get(
     'EMAIL_LOGO_PATH',
     str(BASE_DIR / 'mpr' / 'assets' / 'scl_logo.jpeg'),
 )
+if "test" in sys.argv:
+    EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 
 # ==============================
 # CLOUDINARY (Site Progress Images — fallback; disabled when SITE_IMAGE_S3_ONLY=True)
@@ -629,6 +640,7 @@ VIDEO_PRESET = os.environ.get('VIDEO_PRESET', 'medium')
 # Set True in tests to run email jobs inline after on_commit (no real threads).
 DPR_EMAIL_INLINE = os.environ.get("DPR_EMAIL_INLINE", "false").lower() == "true"
 DPR_EMAIL_MAX_WORKERS = int(os.environ.get("DPR_EMAIL_MAX_WORKERS", "4"))
+DPR_EMAIL_MAX_PENDING = int(os.environ.get("DPR_EMAIL_MAX_PENDING", "200"))
 DPR_EMAIL_SLOW_SEC = float(os.environ.get("DPR_EMAIL_SLOW_SEC", "10"))
 # Lightweight [DPR PERF] request logs (auth/RBAC/SQL/serialize timings).
 DPR_PERF_LOG = os.environ.get("DPR_PERF_LOG", "false").lower() == "true"

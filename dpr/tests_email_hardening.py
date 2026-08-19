@@ -4,8 +4,11 @@ Hardening tests: metrics, health API, load bursts, SMTP timeout wiring.
 
 from __future__ import annotations
 
+import threading
+import time
 from concurrent.futures import wait
 from datetime import date
+from smtplib import SMTPAuthenticationError
 from unittest.mock import patch
 
 from django.contrib.auth.models import Group, User
@@ -149,6 +152,191 @@ class DprEmailHardeningTests(TestCase):
         self.assertEqual(kwargs.get("timeout"), 15.0)
         mock_message.attach_alternative.assert_called_once_with("<html/>", "text/html")
         mock_message.send.assert_called_once_with(fail_silently=False)
+
+    @patch("services.email_utils.get_connection")
+    @patch("services.email_utils.EmailMultiAlternatives")
+    @patch("services.email_utils.render_to_string", return_value="<html/>")
+    def test_send_html_email_dedupes_recipients(self, mock_render, mock_message_cls, mock_conn):
+        from services.email_utils import send_html_email
+
+        mock_conn.return_value = object()
+        mock_message = mock_message_cls.return_value
+        mock_message.send.return_value = 1
+        send_html_email(
+            subject="t",
+            template_name="dpr_submitted",
+            context={},
+            recipient_list=["A@example.com", "a@example.com", "b@example.com", ""],
+        )
+        kwargs = mock_message_cls.call_args.kwargs
+        self.assertEqual(kwargs.get("to"), ["A@example.com", "b@example.com"])
+
+    def test_test_email_backend_is_locmem(self):
+        from django.conf import settings as django_settings
+
+        self.assertEqual(
+            django_settings.EMAIL_BACKEND,
+            "django.core.mail.backends.locmem.EmailBackend",
+        )
+
+    def test_production_defaults_are_async_with_timeout(self):
+        from django.conf import settings as django_settings
+
+        self.assertEqual(django_settings.DPR_EMAIL_MAX_WORKERS, 4)
+        self.assertEqual(django_settings.DPR_EMAIL_MAX_PENDING, 200)
+        self.assertEqual(django_settings.EMAIL_TIMEOUT, 15)
+
+    @patch("dpr.tasks.time.sleep")
+    @patch(
+        "services.email_utils.send_html_email",
+        side_effect=SMTPAuthenticationError(535, b"auth failed"),
+    )
+    def test_permanent_smtp_failure_does_not_retry(self, mock_email, mock_sleep):
+        cache.clear()
+        result = send_dpr_submission_email(
+            dpr_id=self.dpr.id,
+            submitted_by_id=self.se.id,
+            recipient_ids=[self.tl.id],
+        )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result.get("retryable"), False)
+        self.assertEqual(mock_email.call_count, 1)
+        mock_sleep.assert_not_called()
+
+    @patch("dpr.tasks.close_old_connections")
+    @patch("services.email_utils.send_html_email", return_value=True)
+    def test_inline_false_closes_db_connections(self, mock_email, mock_close):
+        cache.clear()
+        with override_settings(DPR_EMAIL_INLINE=False):
+            result = send_dpr_submission_email(
+                dpr_id=self.dpr.id,
+                submitted_by_id=self.se.id,
+                recipient_ids=[self.tl.id],
+            )
+        self.assertEqual(result["status"], "sent")
+        self.assertGreaterEqual(mock_close.call_count, 2)
+
+    def test_queue_capacity_drops_without_raising(self):
+        reset_metrics_for_tests()
+        with patch("dpr.email_executor._max_pending", return_value=0):
+            future = submit_email_job(
+                send_dpr_submission_email,
+                {
+                    "dpr_id": self.dpr.id,
+                    "submitted_by_id": self.se.id,
+                    "recipient_ids": [self.tl.id],
+                },
+            )
+        self.assertIsNone(future)
+        snap = get_email_pool_snapshot()["thread_pool"]
+        self.assertEqual(snap["failed_tasks"], 1)
+
+    @patch("services.email_utils.send_html_email", return_value=True)
+    @patch("services.notifications.send_websocket_notification")
+    def test_project_created_endpoint_does_not_send_smtp_inline(
+        self, mock_ws, mock_email
+    ):
+        self.project.coordinators.add(self.tl)
+        authenticate_client(self.client, username="hard_admin", password="x")
+        response = self.client.post(
+            "/api/notifications/project-created/",
+            {"project_id": self.project.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        mock_email.assert_not_called()
+
+
+@override_settings(
+    DPR_EMAIL_INLINE=False,
+    CACHES={
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "dpr-email-latency",
+        }
+    },
+)
+class DprEmailApiLatencyTests(TransactionTestCase):
+    """Prove HTTP returns before SMTP finishes (real threads, real on_commit)."""
+
+    def setUp(self):
+        cache.clear()
+        reset_metrics_for_tests()
+        self.tl = User.objects.create_user(
+            username="lat_tl", email="lat_tl@example.com", password="x"
+        )
+        self.se = User.objects.create_user(
+            username="lat_se", email="lat_se@example.com", password="x"
+        )
+        self.admin = User.objects.create_superuser(
+            username="lat_admin", email="lat_admin@example.com", password="x"
+        )
+        self.project = Project.objects.create(
+            name="Latency Email Project",
+            status="active",
+            team_lead=self.tl,
+        )
+        self.dpr = DailyProgressReport.objects.create(
+            project_name=self.project.name,
+            job_no="LAT1",
+            report_date=date(2026, 8, 5),
+            issued_by="SE",
+            designation="Site Engineer",
+            status=DailyProgressReport.Status.DRAFT,
+            submitted_by=self.se,
+            created_by=self.se,
+            current_approver_role="Team Leader",
+        )
+        self.client = APIClient()
+        authenticate_client(self.client, username="lat_admin", password="x")
+
+    @patch("services.notifications.send_websocket_notification")
+    def test_submit_api_does_not_wait_for_slow_smtp(self, mock_ws):
+        smtp_started = threading.Event()
+        smtp_release = threading.Event()
+        send_times: list[float] = []
+
+        def slow_send(*args, **kwargs):
+            smtp_started.set()
+            send_times.append(time.perf_counter())
+            smtp_release.wait(timeout=5)
+            return True
+
+        with patch("services.email_utils.send_html_email", side_effect=slow_send) as mock_email:
+            try:
+                t0 = time.perf_counter()
+                response = self.client.post(
+                    f"/api/dpr/{self.dpr.id}/submit/", {}, format="json"
+                )
+                api_ms = (time.perf_counter() - t0) * 1000.0
+                self.assertEqual(response.status_code, 200, response.content)
+                # Request returned while the worker was still blocked in SMTP.
+                self.assertFalse(smtp_release.is_set())
+                self.assertLess(
+                    api_ms,
+                    4000,
+                    f"API waited on SMTP: {api_ms:.1f}ms",
+                )
+                self.assertTrue(smtp_started.wait(timeout=5), "SMTP job never started")
+            finally:
+                smtp_release.set()
+            deadline = time.time() + 8
+            while mock_email.call_count == 0 and time.time() < deadline:
+                time.sleep(0.05)
+            self.assertEqual(mock_email.call_count, 1)
+            self.assertGreater(api_ms, 0)
+
+    @patch("services.notifications.send_websocket_notification")
+    def test_submit_api_without_email_queue_is_similar_latency(self, mock_ws):
+        with patch("dpr.tasks.submit_email_job") as mock_submit:
+            t0 = time.perf_counter()
+            response = self.client.post(
+                f"/api/dpr/{self.dpr.id}/submit/", {}, format="json"
+            )
+            api_ms = (time.perf_counter() - t0) * 1000.0
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(mock_submit.called)
+        self.assertLess(api_ms, 4000)
 
 
 @override_settings(
