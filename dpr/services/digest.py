@@ -86,9 +86,8 @@ class ExecutiveDigest:
 
     def to_context(self) -> dict[str, Any]:
         """
-        Flat scalar aliases keep Django ``{{ }}`` tags on one line in HTML
-        templates (formatters often break dotted lookups across lines, which
-        Brevo then rejects as leftover markers).
+        Build digest_body_html in Python so email HTML formatters cannot split
+        Django ``{{ }}`` tags (which Brevo rejects as leftover markers).
         """
         from django.utils.html import escape
 
@@ -111,25 +110,82 @@ class ExecutiveDigest:
                 f'<td style="padding:10px 12px;border-top:1px solid #f0e0b8;font-size:12px;color:#4f6272;">{escape(row.submitted_by)}</td>'
                 "</tr>"
             )
+
+        if missing_rows_html:
+            missing_section = (
+                '<div style="margin:0 0 10px;font-size:13px;font-weight:700;color:#9a3434;">Projects with no DPR filled</div>'
+                '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#fff7f7;border:1px solid #f3d0d0;border-radius:10px;overflow:hidden;margin-bottom:20px;">'
+                "<tr>"
+                '<td style="padding:8px 12px;font-size:11px;font-weight:700;color:#9a3434;text-transform:uppercase;">Project</td>'
+                '<td style="padding:8px 12px;font-size:11px;font-weight:700;color:#9a3434;text-transform:uppercase;">Team Leader</td>'
+                '<td style="padding:8px 12px;font-size:11px;font-weight:700;color:#9a3434;text-transform:uppercase;">Site Engineers</td>'
+                "</tr>"
+                + "".join(missing_rows_html)
+                + "</table>"
+            )
+        else:
+            missing_section = (
+                '<div style="margin:0 0 18px;padding:10px 14px;border-radius:8px;background:#eaf7f0;'
+                'border:1px solid #cfe9da;color:#1f6b45;font-size:13px;font-weight:700;">'
+                "All active projects have a DPR for this date.</div>"
+            )
+
+        if pending_rows_html:
+            pending_section = (
+                '<div style="margin:0 0 10px;font-size:13px;font-weight:700;color:#9a6b12;">Pending approvals</div>'
+                '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#fffaf0;border:1px solid #f0e0b8;border-radius:10px;overflow:hidden;margin-bottom:12px;">'
+                "<tr>"
+                '<td style="padding:8px 12px;font-size:11px;font-weight:700;color:#9a6b12;text-transform:uppercase;">Project</td>'
+                '<td style="padding:8px 12px;font-size:11px;font-weight:700;color:#9a6b12;text-transform:uppercase;">Waiting on</td>'
+                '<td style="padding:8px 12px;font-size:11px;font-weight:700;color:#9a6b12;text-transform:uppercase;">Submitted by</td>'
+                "</tr>"
+                + "".join(pending_rows_html)
+                + "</table>"
+            )
+        else:
+            pending_section = ""
+
+        digest_body_html = f"""
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 18px;">
+<tr>
+<td style="width:33%;padding:10px 8px;background:#f0f6fb;border:1px solid #d7e6f3;border-radius:8px;text-align:center;">
+<div style="font-size:20px;font-weight:700;color:#0f4c81;">{counts["total_filled"]}</div>
+<div style="font-size:11px;color:#6b7c8c;text-transform:uppercase;letter-spacing:0.6px;">DPRs filled</div>
+</td>
+<td style="width:8px;"></td>
+<td style="width:33%;padding:10px 8px;background:#fff7e8;border:1px solid #f0e0b8;border-radius:8px;text-align:center;">
+<div style="font-size:20px;font-weight:700;color:#9a6b12;">{counts["pending_total"]}</div>
+<div style="font-size:11px;color:#6b7c8c;text-transform:uppercase;letter-spacing:0.6px;">Pending approval</div>
+</td>
+<td style="width:8px;"></td>
+<td style="width:33%;padding:10px 8px;background:#fdeeee;border:1px solid #f3d0d0;border-radius:8px;text-align:center;">
+<div style="font-size:20px;font-weight:700;color:#9a3434;">{counts["projects_missing"]}</div>
+<div style="font-size:11px;color:#6b7c8c;text-transform:uppercase;letter-spacing:0.6px;">No DPR filled</div>
+</td>
+</tr>
+</table>
+<div style="margin:0 0 10px;font-size:13px;font-weight:700;color:#123047;">Status breakdown</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f7fafc;border:1px solid #e2e9ef;border-radius:10px;overflow:hidden;margin-bottom:20px;">
+<tr><td style="padding:10px 14px;color:#6b7c8c;font-size:13px;">Active projects</td><td style="padding:10px 14px;text-align:right;font-weight:700;color:#123047;">{counts["projects_active"]}</td></tr>
+<tr><td style="padding:10px 14px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Pending Team Leader</td><td style="padding:10px 14px;border-top:1px solid #e8eef3;text-align:right;color:#123047;">{counts["pending_team_lead"]}</td></tr>
+<tr><td style="padding:10px 14px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Pending PMC Manager</td><td style="padding:10px 14px;border-top:1px solid #e8eef3;text-align:right;color:#123047;">{counts["pending_pmc_manager"]}</td></tr>
+<tr><td style="padding:10px 14px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Pending PMC Head</td><td style="padding:10px 14px;border-top:1px solid #e8eef3;text-align:right;color:#123047;">{counts["pending_pmc_head"]}</td></tr>
+<tr><td style="padding:10px 14px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Approved</td><td style="padding:10px 14px;border-top:1px solid #e8eef3;text-align:right;color:#1f6b45;font-weight:700;">{counts["approved"]}</td></tr>
+<tr><td style="padding:10px 14px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Rejected</td><td style="padding:10px 14px;border-top:1px solid #e8eef3;text-align:right;color:#9a3434;font-weight:700;">{counts["rejected"]}</td></tr>
+</table>
+{missing_section}
+{pending_section}
+<p style="margin:16px 0 0;font-size:12px;line-height:1.6;color:#7a8b99;">Generated {escape(self.generated_at)}. Sent daily at 15:30 IST to PMC Head and Head Office. These roles receive this digest only (no per-event DPR emails).</p>
+"""
+
         return {
             "report_date": self.report_date.isoformat(),
             "report_date_display": self.report_date.strftime("%d %b %Y"),
             "generated_at": self.generated_at,
             "counts": counts,
-            # Flat aliases for template safety
-            "c_filled": counts["total_filled"],
-            "c_pending": counts["pending_total"],
-            "c_missing": counts["projects_missing"],
-            "c_active": counts["projects_active"],
-            "c_tl": counts["pending_team_lead"],
-            "c_mgr": counts["pending_pmc_manager"],
-            "c_head": counts["pending_pmc_head"],
-            "c_approved": counts["approved"],
-            "c_rejected": counts["rejected"],
+            "digest_body_html": digest_body_html,
             "pending_items": [asdict(row) for row in self.pending_items],
             "missing_projects": [asdict(row) for row in self.missing_projects],
-            "missing_rows_html": "".join(missing_rows_html),
-            "pending_rows_html": "".join(pending_rows_html),
             "has_pending": bool(self.pending_items),
             "has_missing": bool(self.missing_projects),
         }
@@ -164,6 +220,10 @@ def resolve_digest_recipients() -> list:
     """
     PMC Head + Head Office users with an email address.
     Deduplicated by user id.
+
+    Uses Django Group membership only (not project.pmc_head FK).
+    Does NOT reuse per-event ``_filter_event_email_recipients`` —
+    digest-only roles are included here intentionally.
     """
     qs = (
         User.objects.filter(is_active=True)
@@ -175,8 +235,37 @@ def resolve_digest_recipients() -> list:
         )
         .distinct()
         .order_by("id")
+        .prefetch_related("groups")
     )
     return list(qs)
+
+
+def summarize_digest_recipients(users) -> dict[str, Any]:
+    """Safe diagnostics — no email addresses."""
+    pmc = 0
+    ho = 0
+    domains: set[str] = set()
+    user_ids: list[int] = []
+    for user in users or []:
+        user_ids.append(user.id)
+        names = {g.name for g in user.groups.all()}
+        if ROLE_PMC_HEAD in names:
+            pmc += 1
+        if names & {ROLE_HEAD_OFFICE, ROLE_HO_ALIAS}:
+            ho += 1
+        if user.email and "@" in user.email:
+            domains.add(user.email.rsplit("@", 1)[-1].lower())
+    return {
+        "recipient_count": len(user_ids),
+        "pmc_head_count": pmc,
+        "head_office_count": ho,
+        "email_domains": sorted(domains),
+        "user_ids": user_ids,
+        "roles": {
+            "pmc_head": pmc,
+            "head_office": ho,
+        },
+    }
 
 
 def build_executive_digest(*, report_date: date | None = None) -> ExecutiveDigest:

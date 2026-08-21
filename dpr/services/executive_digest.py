@@ -25,6 +25,7 @@ from core.models import BusinessAuditLog
 from dpr.services.digest import (
     build_executive_digest,
     resolve_digest_recipients,
+    summarize_digest_recipients,
 )
 
 logger = logging.getLogger("pmc.dpr.digest")
@@ -33,7 +34,8 @@ _IST = ZoneInfo("Asia/Kolkata")
 _LOG = "[DPR Digest]"
 
 # Idempotency TTLs (seconds)
-_RUNNING_TTL = 15 * 60  # stale lock recovery
+# Keep "running" until the background email job finishes SMTP/Brevo.
+_RUNNING_TTL = 45 * 60
 _COMPLETED_TTL = 36 * 60 * 60  # cover the business day + retries
 _FAILED_TTL = 60 * 60  # allow retry after failure
 
@@ -93,6 +95,21 @@ def _mark_completed(key: str) -> None:
 
 def _mark_failed(key: str) -> None:
     cache.set(key, "failed", timeout=_FAILED_TTL)
+
+
+def mark_digest_send_result(report_date: str | date, *, success: bool) -> None:
+    """Called by the email worker after SMTP/Brevo succeeds or fails."""
+    if isinstance(report_date, str):
+        parsed = date.fromisoformat(report_date)
+    else:
+        parsed = report_date
+    key = _idempotency_key(parsed)
+    if success:
+        _mark_completed(key)
+        logger.info("%s Completed after email send date=%s", _LOG, parsed.isoformat())
+    else:
+        _mark_failed(key)
+        logger.error("%s Failed after email send date=%s", _LOG, parsed.isoformat())
 
 
 def send_dpr_executive_digest(
@@ -169,12 +186,33 @@ def send_dpr_executive_digest(
         recipients = resolve_digest_recipients()
         recipient_ids = [u.id for u in recipients]
         recipient_count = len(recipient_ids)
+        role_summary = summarize_digest_recipients(recipients)
+
+        logger.info(
+            "%s Recipient resolution date=%s recipient_count=%s "
+            "pmc_head_count=%s head_office_count=%s domains=%s user_ids=%s",
+            _LOG,
+            date_str,
+            role_summary["recipient_count"],
+            role_summary["pmc_head_count"],
+            role_summary["head_office_count"],
+            role_summary["email_domains"],
+            role_summary["user_ids"],
+        )
+        if getattr(settings, "DPR_DIGEST_DIAGNOSTIC", False):
+            logger.info(
+                "%s Diagnostic roles=%s",
+                _LOG,
+                role_summary.get("roles"),
+            )
 
         summary: dict[str, Any] = {
             "status": "ready",
             "date": date_str,
             "report_date": date_str,
             "recipient_count": recipient_count,
+            "pmc_head_count": role_summary["pmc_head_count"],
+            "head_office_count": role_summary["head_office_count"],
             "filled": digest.counts.total_filled,
             "pending": digest.counts.pending_total,
             "missing": digest.counts.projects_missing,
@@ -230,6 +268,8 @@ def send_dpr_executive_digest(
                 )
                 logger.error("%s Failed inline send date=%s", _LOG, date_str)
                 return summary
+            if lock_key:
+                _mark_completed(lock_key)
         else:
             future = submit_email_job(
                 send_dpr_executive_digest_email,
@@ -252,9 +292,8 @@ def send_dpr_executive_digest(
                 logger.error("%s Queue full — not queued date=%s", _LOG, date_str)
                 return summary
             summary["status"] = "queued"
-
-        if lock_key:
-            _mark_completed(lock_key)
+            # Keep idempotency as "running" until the worker marks completed/failed
+            # after Brevo/SMTP. Do NOT mark completed on queue alone.
 
         duration_ms = int((time.monotonic() - started) * 1000)
         summary["duration_ms"] = duration_ms
@@ -267,6 +306,8 @@ def send_dpr_executive_digest(
                 f"DPR executive digest triggered. "
                 f"status={summary['status']} source={source} "
                 f"recipient_count={recipient_count} "
+                f"pmc_head_count={role_summary['pmc_head_count']} "
+                f"head_office_count={role_summary['head_office_count']} "
                 f"missing={digest.counts.projects_missing} "
                 f"pending={digest.counts.pending_total}"
             ),

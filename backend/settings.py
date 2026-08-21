@@ -497,6 +497,8 @@ DPR_EMAIL_ENABLED = os.environ.get('DPR_EMAIL_ENABLED', 'true').lower() == 'true
 # with header X-CRON-SECRET matching DPR_DIGEST_CRON_SECRET.
 DPR_DIGEST_ENABLED = os.environ.get('DPR_DIGEST_ENABLED', 'true').lower() == 'true'
 DPR_DIGEST_CRON_SECRET = os.environ.get('DPR_DIGEST_CRON_SECRET', '').strip()
+# Safe recipient/queue diagnostics (never logs addresses or secrets).
+DPR_DIGEST_DIAGNOSTIC = os.environ.get('DPR_DIGEST_DIAGNOSTIC', 'false').lower() == 'true'
 DPR_TEST_EMAIL = os.environ.get('DPR_TEST_EMAIL', '')
 # Explicit override: brevo_api | smtp | disabled. Empty = auto (API if xkeysib key).
 EMAIL_TRANSPORT = os.environ.get('EMAIL_TRANSPORT', '').strip().lower()

@@ -621,10 +621,12 @@ def send_dpr_executive_digest_email(
     Send the PMC Head / Head Office DPR summary for one report date.
 
     ``report_date`` is ISO YYYY-MM-DD. Safe to call from cron (no on_commit).
+    Marks digest idempotency completed/failed after SMTP/Brevo attempt.
     """
     from datetime import date as date_cls
 
     from dpr.services.digest import build_executive_digest
+    from dpr.services.executive_digest import mark_digest_send_result
     from services.email_utils import send_html_email
 
     recipient_ids = list(recipient_ids or [])
@@ -638,6 +640,7 @@ def send_dpr_executive_digest_email(
         recipients = _users_with_email(recipient_ids)
         if not recipients:
             logger.warning("%s Digest skipped — no recipients date=%s", _LOG, report_date)
+            mark_digest_send_result(report_date, success=False)
             return {"status": "skipped_no_recipients", "report_date": report_date}
 
         context = digest.to_context()
@@ -647,6 +650,13 @@ def send_dpr_executive_digest_email(
             f"{digest.counts.pending_total} pending)"
         )
         emails = [u.email for u in recipients]
+        logger.info(
+            "%s SMTP/Brevo attempt date=%s subject=%s recipient_count=%s",
+            _LOG,
+            report_date,
+            subject,
+            len(emails),
+        )
         # One mail to the leadership group (same summary for all).
         context["recipient_name"] = "PMC Leadership"
         send_html_email(
@@ -655,6 +665,7 @@ def send_dpr_executive_digest_email(
             context=context,
             recipient_list=emails,
         )
+        mark_digest_send_result(report_date, success=True)
         logger.info(
             "%s Digest sent date=%s recipients=%s missing=%s pending=%s",
             _LOG,
@@ -670,6 +681,17 @@ def send_dpr_executive_digest_email(
             "missing": digest.counts.projects_missing,
             "pending": digest.counts.pending_total,
             "filled": digest.counts.total_filled,
+        }
+    except Exception:
+        logger.exception("%s Digest email worker failed date=%s", _LOG, report_date)
+        try:
+            mark_digest_send_result(report_date, success=False)
+        except Exception:
+            logger.exception("%s Failed to mark digest failed date=%s", _LOG, report_date)
+        return {
+            "status": "failed",
+            "report_date": report_date,
+            "error": "send_failed",
         }
     finally:
         if thread_db:

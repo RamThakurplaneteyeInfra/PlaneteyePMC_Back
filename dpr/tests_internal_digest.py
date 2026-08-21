@@ -250,3 +250,30 @@ class DprExecutiveDigestServiceCompatTests(TestCase):
         )
         self.assertEqual(result["status"], "dry_run")
         self.assertEqual(len(mail.outbox), 0)
+
+    def test_pmc_head_included_in_digest_recipients(self):
+        from dpr.services.digest import resolve_digest_recipients, summarize_digest_recipients
+        from services.notifications import _filter_event_email_recipients
+
+        recipients = resolve_digest_recipients()
+        summary = summarize_digest_recipients(recipients)
+        self.assertGreaterEqual(summary["pmc_head_count"], 1)
+        # Event filter removes PMC Head; digest must NOT use that filter.
+        filtered = _filter_event_email_recipients(recipients)
+        self.assertLess(len(filtered), len(recipients))
+        self.assertTrue(any(u.groups.filter(name="PMC Head").exists() for u in recipients))
+
+    def test_async_queue_does_not_mark_completed_before_send(self):
+        from dpr.services.executive_digest import _idempotency_key
+
+        with override_settings(DPR_EMAIL_INLINE=False):
+            with patch("dpr.tasks.submit_email_job") as mock_submit:
+                mock_submit.return_value = object()  # pretend queued Future
+                result = send_dpr_executive_digest(
+                    report_date=date(2026, 8, 23),
+                    force=True,
+                    source="test_async",
+                )
+                self.assertEqual(result["status"], "queued")
+                self.assertEqual(cache.get(_idempotency_key(date(2026, 8, 23))), "running")
+                mock_submit.assert_called_once()
