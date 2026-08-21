@@ -31,10 +31,8 @@ has been approved by {{ approved_by_role|default:"the approver" }}.{% endblock %
             dpr.approved_by.get_full_name dpr.approved_by.username "Not specified" %}</td>
     </tr>
 </table>
-<p style="margin:20px 0 0;font-size:14px;line-height:1.7;color:#4f6272;">
-    {% if approved_by_role == 'Team Leader' %}The report is now awaiting PMC Manager review.{% elif approved_by_role ==
-    'PMC Manager' or approved_by_role == 'Coordinator' %}The report is now awaiting PMC Head review.{% elif
-    approved_by_role == 'PMC Head' %}The approval workflow is complete.{% else %}The approval status has been updated in
-    the PMC portal.{% endif %}
-</p>
+<p style="margin:20px 0 0;font-size:14px;line-height:1.7;color:#4f6272;">{% if approved_by_role == 'Team Leader' %}The
+    report is now awaiting PMC Manager review.{% elif approved_by_role == 'PMC Manager' or approved_by_role ==
+    'Coordinator' %}The report is now awaiting PMC Head review.{% elif approved_by_role == 'PMC Head' %}The approval
+    workflow is complete.{% else %}The approval status has been updated in the PMC portal.{% endif %}</p>
 {% endblock %}
