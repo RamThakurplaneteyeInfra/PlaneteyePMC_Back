@@ -374,11 +374,51 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
                     # Append activities to existing DPR
                     dpr = existing_dpr
                     activities_added = 0
+                    previous_status = dpr.status
 
                     if activities_data:
                         activities_added = upsert_dpr_activities(
                             dpr, activities_data, accumulate=True
                         )
+
+                    # Same-day FE "create" often hits this path. If the DPR is still
+                    # draft/rejected, promote it to pending so email can fire without
+                    # a separate /submit/ call (which is blocked once pending).
+                    if dpr.status in (
+                        DailyProgressReport.Status.DRAFT,
+                        DailyProgressReport.Status.REJECTED,
+                    ):
+                        dpr.status = DailyProgressReport.Status.PENDING_TEAM_LEAD
+                        dpr.submitted_by = current_user
+                        dpr.current_approver_role = "Team Leader"
+                        dpr.rejection_reason = ""
+                        dpr.rejected_by = None
+                        dpr.save(
+                            update_fields=[
+                                "status",
+                                "submitted_by",
+                                "current_approver_role",
+                                "rejection_reason",
+                                "rejected_by",
+                                "updated_at",
+                            ]
+                        )
+                        dpr._initial_submission = (
+                            previous_status == DailyProgressReport.Status.DRAFT
+                        )
+                        dpr._resubmission = (
+                            previous_status == DailyProgressReport.Status.REJECTED
+                        )
+                    elif dpr.status == DailyProgressReport.Status.PENDING_TEAM_LEAD:
+                        # FE re-posted create for an already-pending same-day DPR.
+                        # Re-queue submission email (dedupe prevents tight duplicates).
+                        if not dpr.submitted_by_id and current_user:
+                            dpr.submitted_by = current_user
+                        dpr.current_approver_role = dpr.current_approver_role or "Team Leader"
+                        dpr.save(update_fields=["submitted_by", "current_approver_role", "updated_at"])
+                        dpr._resubmission = True
+                    else:
+                        dpr.save(update_fields=["updated_at"])
 
                     from monthly_scope.services import ScopeProgressService
                     rows = ScopeProgressService.recalculate_for_dpr(
@@ -390,7 +430,6 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
                         ] or None,
                         scopes_by_id=self.context.get("_scope_by_id") or None,
                     )
-                    dpr.save(update_fields=['updated_at'])
                     if hasattr(dpr, "_prefetched_objects_cache"):
                         dpr._prefetched_objects_cache = {}
                     _attach_recalculated_activities(

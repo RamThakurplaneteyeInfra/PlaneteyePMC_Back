@@ -4,35 +4,17 @@
 {% block accent %}#c24747{% endblock %}
 {% block eyebrow %}Review Update{% endblock %}
 {% block heading %}DPR requires revision{% endblock %}
-{% block introduction %}Dear {% firstof submitter.get_full_name submitter.username "User" %}, the Daily Progress Report
-was returned by {{ rejected_by_role|default:"the reviewer" }} for correction.{% endblock %}
+{% block introduction %}Dear {% firstof submitter.get_full_name submitter.username "User" %}, the Daily Progress Report was returned by {{ rejected_by_role|default:"the reviewer" }} for correction.{% endblock %}
 {% block content %}
-<div
-    style="margin:4px 0 18px;padding:10px 14px;border-radius:8px;background:#fdeeee;border:1px solid #f3d0d0;color:#9a3434;font-size:13px;font-weight:700;">
-    Revision required</div>
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
-    style="background:#f7fafc;border:1px solid #e2e9ef;border-radius:10px;overflow:hidden;">
-    <tr>
-        <td style="padding:12px 16px;color:#6b7c8c;font-size:13px;width:36%;">Project</td>
-        <td style="padding:12px 16px;font-weight:700;color:#123047;">{{ dpr.project_name }}</td>
-    </tr>
-    <tr>
-        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Report date</td>
-        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ dpr.report_date }}</td>
-    </tr>
-    <tr>
-        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Job number</td>
-        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ dpr.job_no|default:"Not specified"
-            }}</td>
-    </tr>
+<div style="margin:4px 0 18px;padding:10px 14px;border-radius:8px;background:#fdeeee;border:1px solid #f3d0d0;color:#9a3434;font-size:13px;font-weight:700;">Revision required</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f7fafc;border:1px solid #e2e9ef;border-radius:10px;overflow:hidden;">
+<tr><td style="padding:12px 16px;color:#6b7c8c;font-size:13px;width:36%;">Project</td><td style="padding:12px 16px;font-weight:700;color:#123047;">{{ dpr.project_name }}</td></tr>
+<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Report date</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ dpr.report_date }}</td></tr>
+<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Job number</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ dpr.job_no|default:"Not specified" }}</td></tr>
 </table>
 <div style="margin:18px 0 0;padding:14px 16px;background:#fff7f7;border-left:4px solid #c24747;border-radius:6px;">
-    <div
-        style="margin-bottom:6px;color:#9a3434;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;">
-        Reviewer comments</div>
-    <div style="color:#4f3131;font-size:14px;line-height:1.65;">{{ dpr.rejection_reason|default:"No reason was
-        provided." }}</div>
+<div style="margin-bottom:6px;color:#9a3434;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;">Reviewer comments</div>
+<div style="color:#4f3131;font-size:14px;line-height:1.65;">{{ dpr.rejection_reason|default:"No reason was provided." }}</div>
 </div>
-<p style="margin:20px 0 0;font-size:14px;line-height:1.7;color:#4f6272;">Please review the feedback, make the required
-    corrections, and resubmit the DPR through the PMC portal.</p>
+<p style="margin:20px 0 0;font-size:14px;line-height:1.7;color:#4f6272;">Please review the feedback, make the required corrections, and resubmit the DPR through the PMC portal.</p>
 {% endblock %}

@@ -347,8 +347,8 @@ def _filter_event_email_recipients(users, *, project=None) -> list:
         kept.append(user)
     if skipped:
         logger.info(
-            "Skipped per-event DPR email for digest-only users: %s",
-            skipped,
+            "Skipped per-event DPR email for digest-only users count=%s",
+            len(skipped),
         )
     return kept
 

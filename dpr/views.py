@@ -301,15 +301,17 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                         safe_cache_delete_pattern("dpr_pending_approval:*")
                         safe_cache_delete_pattern("dpr_rejected:*")
 
-                        # Initial submission email belongs to CREATE when the new
-                        # DPR is already pending_team_lead (not activity-append).
-                        if (
-                            getattr(instance, "_initial_submission", False)
-                            and instance.status
-                            == DailyProgressReport.Status.PENDING_TEAM_LEAD
-                        ):
-                            with perf.span("notification_ms"):
-                                notify_dpr_submitted(instance, is_resubmit=False)
+                        # Submission email on CREATE:
+                        # - brand-new DPR → initial (is_resubmit=False)
+                        # - same-day append that promotes draft/rejected or
+                        #   re-notifies already-pending → matching flag
+                        if instance.status == DailyProgressReport.Status.PENDING_TEAM_LEAD:
+                            if getattr(instance, "_initial_submission", False):
+                                with perf.span("notification_ms"):
+                                    notify_dpr_submitted(instance, is_resubmit=False)
+                            elif getattr(instance, "_resubmission", False):
+                                with perf.span("notification_ms"):
+                                    notify_dpr_submitted(instance, is_resubmit=True)
             except (APIException, DRFValidationError):
                 # Let DRF / FriendlyAPIErrorMiddleware format these correctly
                 raise

@@ -4,35 +4,14 @@
 {% block accent %}#1f8a55{% endblock %}
 {% block eyebrow %}Approval Update{% endblock %}
 {% block heading %}DPR approved{% endblock %}
-{% block introduction %}Dear {% firstof submitter.get_full_name submitter.username "User" %}, your Daily Progress Report
-has been approved by {{ approved_by_role|default:"the approver" }}.{% endblock %}
+{% block introduction %}Dear {% firstof submitter.get_full_name submitter.username "User" %}, your Daily Progress Report has been approved by {{ approved_by_role|default:"the approver" }}.{% endblock %}
 {% block content %}
-<div
-    style="margin:4px 0 18px;padding:10px 14px;border-radius:8px;background:#eaf7f0;border:1px solid #cfe9da;color:#1f6b45;font-size:13px;font-weight:700;">
-    Approved</div>
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
-    style="background:#f7fafc;border:1px solid #e2e9ef;border-radius:10px;overflow:hidden;">
-    <tr>
-        <td style="padding:12px 16px;color:#6b7c8c;font-size:13px;width:36%;">Project</td>
-        <td style="padding:12px 16px;font-weight:700;color:#123047;">{{ dpr.project_name }}</td>
-    </tr>
-    <tr>
-        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Report date</td>
-        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ dpr.report_date }}</td>
-    </tr>
-    <tr>
-        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Job number</td>
-        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ dpr.job_no|default:"Not specified"
-            }}</td>
-    </tr>
-    <tr>
-        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Approved by</td>
-        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{% firstof
-            dpr.approved_by.get_full_name dpr.approved_by.username "Not specified" %}</td>
-    </tr>
+<div style="margin:4px 0 18px;padding:10px 14px;border-radius:8px;background:#eaf7f0;border:1px solid #cfe9da;color:#1f6b45;font-size:13px;font-weight:700;">Approved</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f7fafc;border:1px solid #e2e9ef;border-radius:10px;overflow:hidden;">
+<tr><td style="padding:12px 16px;color:#6b7c8c;font-size:13px;width:36%;">Project</td><td style="padding:12px 16px;font-weight:700;color:#123047;">{{ dpr.project_name }}</td></tr>
+<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Report date</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ dpr.report_date }}</td></tr>
+<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Job number</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ dpr.job_no|default:"Not specified" }}</td></tr>
+<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Approved by</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{% firstof dpr.approved_by.get_full_name dpr.approved_by.username "Not specified" %}</td></tr>
 </table>
-<p style="margin:20px 0 0;font-size:14px;line-height:1.7;color:#4f6272;">{% if approved_by_role == 'Team Leader' %}The
-    report is now awaiting PMC Manager review.{% elif approved_by_role == 'PMC Manager' or approved_by_role ==
-    'Coordinator' %}The report is now awaiting PMC Head review.{% elif approved_by_role == 'PMC Head' %}The approval
-    workflow is complete.{% else %}The approval status has been updated in the PMC portal.{% endif %}</p>
+<p style="margin:20px 0 0;font-size:14px;line-height:1.7;color:#4f6272;">{% if approved_by_role == 'Team Leader' %}The report is now awaiting PMC Manager review.{% elif approved_by_role == 'PMC Manager' or approved_by_role == 'Coordinator' %}The report is now awaiting PMC Head review.{% elif approved_by_role == 'PMC Head' %}The approval workflow is complete.{% else %}The approval status has been updated in the PMC portal.{% endif %}</p>
 {% endblock %}

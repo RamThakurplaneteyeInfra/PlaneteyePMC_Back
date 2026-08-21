@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import mimetypes
+import re
 import smtplib
 import urllib.error
 import urllib.request
@@ -10,13 +11,58 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives, get_connection
-from django.template.loader import render_to_string
+from django.template import engines
+from django.template.loader import get_template, render_to_string
 from django.utils.html import strip_tags
 
 logger = logging.getLogger(__name__)
 
 LOGO_CONTENT_ID = "pmc-brand-logo"
 _BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
+
+# Formatters sometimes wrap long Django tags across lines, which leaves raw
+# ``{{`` / ``{%`` in the rendered HTML and Brevo rejects / fails delivery.
+_DJANGO_TAG_RE = re.compile(r"(\{\{.*?\}\}|\{%.*?%\})", re.DOTALL)
+
+
+def _collapse_multiline_django_tags(source: str) -> str:
+    """Collapse whitespace inside Django tags so multiline tags still parse."""
+
+    def _one_line(match: re.Match) -> str:
+        return re.sub(r"\s+", " ", match.group(0))
+
+    return _DJANGO_TAG_RE.sub(_one_line, source or "")
+
+
+def _render_email_html(template_name: str, context: dict) -> str:
+    """
+    Render ``emails/<template_name>.html`` with a safety net for multiline tags.
+
+    Prefer the normal loader; if the on-disk source contains multiline tags,
+    re-render from a collapsed copy so delivery is not blocked by formatting.
+    """
+    template_path = f"emails/{template_name}.html"
+    try:
+        tpl = get_template(template_path)
+        origin = getattr(tpl, "origin", None)
+        source_path = getattr(origin, "name", None) if origin else None
+        if source_path:
+            raw = Path(source_path).read_text(encoding="utf-8")
+            repaired = _collapse_multiline_django_tags(raw)
+            if repaired != raw:
+                logger.warning(
+                    "Email template had multiline Django tags; auto-collapsed "
+                    "template=%s path=%s",
+                    template_name,
+                    source_path,
+                )
+                return engines["django"].from_string(repaired).render(context)
+    except Exception:
+        logger.exception(
+            "Email template repair path failed template=%s; falling back to loader",
+            template_name,
+        )
+    return render_to_string(template_path, context)
 
 _PERMANENT_SMTP_ERRORS = (
     smtplib.SMTPAuthenticationError,
@@ -328,7 +374,7 @@ def send_html_email(subject, template_name, context, recipient_list, from_email=
         logo_url, logo_cid = _resolve_logo_src()
         render_context.setdefault("email_logo_url", logo_url)
         render_context.setdefault("email_logo_cid", logo_cid or logo_url)
-        html_content = render_to_string(template_path, render_context)
+        html_content = _render_email_html(template_name, render_context)
         text_content = strip_tags(html_content)
 
         # Brevo re-parses htmlContent; leftover Django markers cause silent delivery errors.
