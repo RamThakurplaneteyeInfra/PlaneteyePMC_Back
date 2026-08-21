@@ -1,36 +1,37 @@
 {% extends "emails/base_email.html" %}
 {% block title %}Site Engineer Assignment{% endblock %}
 {% block preheader %}A site engineer has been added to the project team.{% endblock %}
-{% block accent %}#1177b8{% endblock %}
+{% block accent %}#0f4c81{% endblock %}
 {% block eyebrow %}Team Update{% endblock %}
 {% block heading %}Site engineer assigned{% endblock %}
 {% block introduction %}A site engineer has been assigned to the project team. Please coordinate on upcoming site
 activities.{% endblock %}
 {% block content %}
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-    style="background:#f6f9fb;border:1px solid #e2e9ee;border-radius:8px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+    style="background:#f7fafc;border:1px solid #e2e9ef;border-radius:10px;overflow:hidden;">
     <tr>
-        <td style="padding:13px 18px;color:#647786;width:38%;font-size:13px;">Project</td>
-        <td style="padding:13px 18px;font-weight:700;">{{ project.name }}</td>
+        <td style="padding:12px 16px;color:#6b7c8c;width:36%;font-size:13px;">Project</td>
+        <td style="padding:12px 16px;font-weight:700;color:#123047;">{{ project.name }}</td>
     </tr>
     <tr>
-        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;color:#647786;font-size:13px;">Client</td>
-        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;">{{ project.client_name|default:"Not specified" }}
-        </td>
+        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Client</td>
+        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ project.client_name|default:"Not
+            specified" }}</td>
     </tr>
     <tr>
-        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;color:#647786;font-size:13px;">Location</td>
-        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;">{{ project.location|default:"Not specified" }}</td>
+        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Location</td>
+        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ project.location|default:"Not
+            specified" }}</td>
     </tr>
     <tr>
-        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;color:#647786;font-size:13px;">Assigned engineer</td>
-        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;">{% firstof assigned_user.get_full_name
+        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Assigned engineer</td>
+        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{% firstof assigned_user.get_full_name
             assigned_user.username "Not specified" %}</td>
     </tr>
 </table>
 {% if all_site_engineers %}
-<div style="margin-top:20px;color:#17344d;font-size:14px;font-weight:700;">Current site engineering team</div>
-<ul style="margin:10px 0 0;padding-left:20px;color:#536777;font-size:14px;line-height:1.8;">
+<div style="margin-top:18px;color:#123047;font-size:13px;font-weight:700;">Current site engineering team</div>
+<ul style="margin:8px 0 0;padding-left:18px;color:#4f6272;font-size:14px;line-height:1.8;">
     {% for se in all_site_engineers %}<li>{% firstof se.get_full_name se.username "Unnamed engineer" %}</li>{% endfor %}
 </ul>
 {% endif %}

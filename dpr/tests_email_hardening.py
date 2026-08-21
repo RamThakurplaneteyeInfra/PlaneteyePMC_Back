@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import threading
 import time
+import io
+import json
+import urllib.error
 from concurrent.futures import wait
 from datetime import date
 from smtplib import SMTPAuthenticationError
@@ -31,6 +34,8 @@ from projects.models import Project
 @override_settings(
     DPR_EMAIL_INLINE=True,
     EMAIL_TIMEOUT=15,
+    EMAIL_TRANSPORT="smtp",
+    BREVO_API_KEY="",
     CACHES={
         "default": {
             "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
@@ -170,6 +175,63 @@ class DprEmailHardeningTests(TestCase):
         )
         kwargs = mock_message_cls.call_args.kwargs
         self.assertEqual(kwargs.get("to"), ["A@example.com", "b@example.com"])
+
+    @override_settings(
+        EMAIL_TRANSPORT="brevo_api",
+        BREVO_API_KEY="xkeysib-test-key",
+        BREVO_FROM_NAME="PMC Test",
+        DEFAULT_FROM_EMAIL="from@example.com",
+        EMAIL_TIMEOUT=12,
+    )
+    @patch("services.email_utils.render_to_string", return_value="<html>hi</html>")
+    @patch("services.email_utils.urllib.request.urlopen")
+    def test_brevo_api_transport_posts_payload(self, mock_urlopen, mock_render):
+        from services.email_utils import send_html_email
+
+        response = mock_urlopen.return_value.__enter__.return_value
+        response.status = 201
+        response.read.return_value = b'{"messageId":"<test-id>"}'
+        ok = send_html_email(
+            subject="DPR Submitted",
+            template_name="dpr_submitted",
+            context={},
+            recipient_list=["a@example.com", "a@example.com", "b@example.com"],
+        )
+        self.assertTrue(ok)
+        mock_urlopen.assert_called_once()
+        request = mock_urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "https://api.brevo.com/v3/smtp/email")
+        self.assertEqual(request.get_header("Api-key"), "xkeysib-test-key")
+        body = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(body["subject"], "DPR Submitted")
+        self.assertEqual(
+            [row["email"] for row in body["to"]],
+            ["a@example.com", "b@example.com"],
+        )
+        self.assertEqual(body["sender"]["email"], "from@example.com")
+
+    @override_settings(EMAIL_TRANSPORT="brevo_api", BREVO_API_KEY="xkeysib-test-key")
+    @patch("services.email_utils.render_to_string", return_value="<html/>")
+    @patch("services.email_utils.urllib.request.urlopen")
+    def test_brevo_api_auth_failure_is_not_retryable(self, mock_urlopen, mock_render):
+        from services.email_utils import BrevoAPIError, is_retryable_smtp_error, send_html_email
+
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            url="https://api.brevo.com/v3/smtp/email",
+            code=401,
+            msg="Unauthorized",
+            hdrs=None,
+            fp=io.BytesIO(b'{"message":"Key not found"}'),
+        )
+        with self.assertRaises(BrevoAPIError) as ctx:
+            send_html_email(
+                subject="t",
+                template_name="dpr_submitted",
+                context={},
+                recipient_list=["a@example.com"],
+            )
+        self.assertFalse(is_retryable_smtp_error(ctx.exception))
+        self.assertEqual(ctx.exception.status_code, 401)
 
     def test_test_email_backend_is_locmem(self):
         from django.conf import settings as django_settings

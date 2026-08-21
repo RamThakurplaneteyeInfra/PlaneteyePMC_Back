@@ -1,38 +1,41 @@
 {% extends "emails/base_email.html" %}
 {% block title %}DPR Submitted for Approval{% endblock %}
 {% block preheader %}A Daily Progress Report is awaiting your approval.{% endblock %}
-{% block accent %}#1177b8{% endblock %}
+{% block accent %}#0f4c81{% endblock %}
 {% block eyebrow %}Daily Progress Report{% endblock %}
 {% block heading %}DPR submitted for approval{% endblock %}
-{% block introduction %}
-Dear {% firstof approver.get_full_name approver.username "Approver" %}, a Daily Progress Report has been submitted and
-requires your review.
-{% endblock %}
+{% block introduction %}Dear {% firstof approver.get_full_name approver.username "Approver" %}, a Daily Progress Report
+has been submitted and requires your review.{% endblock %}
 {% block content %}
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-    style="margin-top:8px;background:#f6f9fb;border:1px solid #e2e9ee;border-radius:8px;">
+<div
+    style="margin:4px 0 18px;padding:10px 14px;border-radius:8px;background:#eef5fb;border:1px solid #d5e6f5;color:#0f4c81;font-size:13px;font-weight:700;">
+    Action required</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+    style="background:#f7fafc;border:1px solid #e2e9ef;border-radius:10px;overflow:hidden;">
     <tr>
-        <td style="padding:13px 18px;color:#647786;font-size:13px;width:38%;">Project</td>
-        <td style="padding:13px 18px;font-weight:700;">{{ dpr.project_name }}</td>
+        <td style="padding:12px 16px;color:#6b7c8c;font-size:13px;width:36%;">Project</td>
+        <td style="padding:12px 16px;font-weight:700;color:#123047;">{{ dpr.project_name }}</td>
     </tr>
     <tr>
-        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;color:#647786;font-size:13px;">Report date</td>
-        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;">{{ dpr.report_date }}</td>
+        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Report date</td>
+        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ dpr.report_date }}</td>
     </tr>
     <tr>
-        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;color:#647786;font-size:13px;">Submitted by</td>
-        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;">{% firstof dpr.submitted_by.get_full_name
-            dpr.submitted_by.username "Not specified" %}</td>
+        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Submitted by</td>
+        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{% firstof
+            dpr.submitted_by.get_full_name dpr.submitted_by.username "Not specified" %}</td>
     </tr>
     <tr>
-        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;color:#647786;font-size:13px;">Job number</td>
-        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;">{{ dpr.job_no|default:"Not specified" }}</td>
+        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Job number</td>
+        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ dpr.job_no|default:"Not specified"
+            }}</td>
     </tr>
     <tr>
-        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;color:#647786;font-size:13px;">Issued by</td>
-        <td style="padding:13px 18px;border-top:1px solid #e2e9ee;">{{ dpr.issued_by|default:"Not specified" }}</td>
+        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Issued by</td>
+        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ dpr.issued_by|default:"Not
+            specified" }}</td>
     </tr>
 </table>
-<p style="margin:22px 0 0;font-size:15px;line-height:1.7;color:#334b5e;">Please sign in to the PMC portal to review and
+<p style="margin:20px 0 0;font-size:14px;line-height:1.7;color:#4f6272;">Please sign in to the PMC portal to review and
     take the appropriate action.</p>
 {% endblock %}

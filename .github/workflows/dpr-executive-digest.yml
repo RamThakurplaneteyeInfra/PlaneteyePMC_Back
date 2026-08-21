@@ -1,0 +1,39 @@
+name: DPR Executive Digest
+
+# Quoted "on" avoids YAML 1.1 parsing `on` as boolean true.
+"on":
+  schedule:
+    # 10:00 UTC = 15:30 IST (Asia/Kolkata)
+    - cron: "0 10 * * *"
+  workflow_dispatch:
+
+jobs:
+  send-dpr-executive-digest:
+    runs-on: ubuntu-latest
+    env:
+      DIGEST_URL: "https://pms-backend-production-4438.up.railway.app/api/internal/dpr/executive-digest/"
+      CRON_SECRET: ${{ secrets.DPR_DIGEST_CRON_SECRET }}
+
+    steps:
+      - name: Trigger DPR executive digest
+        run: |
+          set -euo pipefail
+
+          if [ -z "${CRON_SECRET}" ]; then
+            echo "DPR_DIGEST_CRON_SECRET is not configured in GitHub Actions secrets."
+            exit 1
+          fi
+
+          response="$(curl \
+            --fail-with-body \
+            --silent \
+            --show-error \
+            --request POST \
+            --connect-timeout 15 \
+            --max-time 60 \
+            --header "X-CRON-SECRET: ${CRON_SECRET}" \
+            --header "Content-Type: application/json" \
+            --data '{}' \
+            "${DIGEST_URL}")"
+
+          echo "${response}"

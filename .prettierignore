@@ -1,0 +1,2 @@
+# Keep Django email tags on one line — formatters that wrap {{ }} break Brevo delivery.
+templates/emails/**

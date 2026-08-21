@@ -1,0 +1,102 @@
+{% extends "emails/base_email.html" %}
+{% block title %}DPR Executive Digest{% endblock %}
+{% block preheader %}Daily DPR summary for PMC Head and Head Office.{% endblock %}
+{% block accent %}#0f4c81{% endblock %}
+{% block eyebrow %}Executive Digest{% endblock %}
+{% block heading %}DPR summary — {{ report_date_display }}{% endblock %}
+{% block introduction %}Dear {% firstof recipient_name "PMC Leadership" %}, here is your consolidated Daily Progress
+Report summary so you do not need to review every individual notification.{% endblock %}
+{% block content %}
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 18px;">
+    <tr>
+        <td
+            style="width:33%;padding:10px 8px;background:#f0f6fb;border:1px solid #d7e6f3;border-radius:8px;text-align:center;">
+            <div style="font-size:20px;font-weight:700;color:#0f4c81;">{{ c_filled }}</div>
+            <div style="font-size:11px;color:#6b7c8c;text-transform:uppercase;letter-spacing:0.6px;">DPRs filled</div>
+        </td>
+        <td style="width:8px;"></td>
+        <td
+            style="width:33%;padding:10px 8px;background:#fff7e8;border:1px solid #f0e0b8;border-radius:8px;text-align:center;">
+            <div style="font-size:20px;font-weight:700;color:#9a6b12;">{{ c_pending }}</div>
+            <div style="font-size:11px;color:#6b7c8c;text-transform:uppercase;letter-spacing:0.6px;">Pending approval
+            </div>
+        </td>
+        <td style="width:8px;"></td>
+        <td
+            style="width:33%;padding:10px 8px;background:#fdeeee;border:1px solid #f3d0d0;border-radius:8px;text-align:center;">
+            <div style="font-size:20px;font-weight:700;color:#9a3434;">{{ c_missing }}</div>
+            <div style="font-size:11px;color:#6b7c8c;text-transform:uppercase;letter-spacing:0.6px;">No DPR filled</div>
+        </td>
+    </tr>
+</table>
+
+<div style="margin:0 0 10px;font-size:13px;font-weight:700;color:#123047;">Status breakdown</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+    style="background:#f7fafc;border:1px solid #e2e9ef;border-radius:10px;overflow:hidden;margin-bottom:20px;">
+    <tr>
+        <td style="padding:10px 14px;color:#6b7c8c;font-size:13px;">Active projects</td>
+        <td style="padding:10px 14px;text-align:right;font-weight:700;color:#123047;">{{ c_active }}</td>
+    </tr>
+    <tr>
+        <td style="padding:10px 14px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Pending Team Leader
+        </td>
+        <td style="padding:10px 14px;border-top:1px solid #e8eef3;text-align:right;color:#123047;">{{ c_tl }}</td>
+    </tr>
+    <tr>
+        <td style="padding:10px 14px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Pending PMC Manager
+        </td>
+        <td style="padding:10px 14px;border-top:1px solid #e8eef3;text-align:right;color:#123047;">{{ c_mgr }}</td>
+    </tr>
+    <tr>
+        <td style="padding:10px 14px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Pending PMC Head</td>
+        <td style="padding:10px 14px;border-top:1px solid #e8eef3;text-align:right;color:#123047;">{{ c_head }}</td>
+    </tr>
+    <tr>
+        <td style="padding:10px 14px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Approved</td>
+        <td style="padding:10px 14px;border-top:1px solid #e8eef3;text-align:right;color:#1f6b45;font-weight:700;">{{
+            c_approved }}</td>
+    </tr>
+    <tr>
+        <td style="padding:10px 14px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Rejected</td>
+        <td style="padding:10px 14px;border-top:1px solid #e8eef3;text-align:right;color:#9a3434;font-weight:700;">{{
+            c_rejected }}</td>
+    </tr>
+</table>
+
+{% if has_missing %}
+<div style="margin:0 0 10px;font-size:13px;font-weight:700;color:#9a3434;">Projects with no DPR filled</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+    style="background:#fff7f7;border:1px solid #f3d0d0;border-radius:10px;overflow:hidden;margin-bottom:20px;">
+    <tr>
+        <td style="padding:8px 12px;font-size:11px;font-weight:700;color:#9a3434;text-transform:uppercase;">Project</td>
+        <td style="padding:8px 12px;font-size:11px;font-weight:700;color:#9a3434;text-transform:uppercase;">Team Leader
+        </td>
+        <td style="padding:8px 12px;font-size:11px;font-weight:700;color:#9a3434;text-transform:uppercase;">Site
+            Engineers</td>
+    </tr>
+    {{ missing_rows_html|safe }}
+</table>
+{% else %}
+<div
+    style="margin:0 0 18px;padding:10px 14px;border-radius:8px;background:#eaf7f0;border:1px solid #cfe9da;color:#1f6b45;font-size:13px;font-weight:700;">
+    All active projects have a DPR for this date.</div>
+{% endif %}
+
+{% if has_pending %}
+<div style="margin:0 0 10px;font-size:13px;font-weight:700;color:#9a6b12;">Pending approvals</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+    style="background:#fffaf0;border:1px solid #f0e0b8;border-radius:10px;overflow:hidden;margin-bottom:12px;">
+    <tr>
+        <td style="padding:8px 12px;font-size:11px;font-weight:700;color:#9a6b12;text-transform:uppercase;">Project</td>
+        <td style="padding:8px 12px;font-size:11px;font-weight:700;color:#9a6b12;text-transform:uppercase;">Waiting on
+        </td>
+        <td style="padding:8px 12px;font-size:11px;font-weight:700;color:#9a6b12;text-transform:uppercase;">Submitted by
+        </td>
+    </tr>
+    {{ pending_rows_html|safe }}
+</table>
+{% endif %}
+
+<p style="margin:16px 0 0;font-size:12px;line-height:1.6;color:#7a8b99;">Generated {{ generated_at }}. Sent daily at
+    15:30 IST to PMC Head and Head Office. These roles receive this digest only (no per-event DPR emails).</p>
+{% endblock %}

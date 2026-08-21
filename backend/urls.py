@@ -117,6 +117,9 @@ urlpatterns = [
     # Notifications API
     path('api/notifications/', include('notifications.urls')),
 
+    # Internal scheduler hooks (shared-secret auth — no JWT)
+    path('api/internal/dpr/', include('dpr.internal_urls')),
+
     # Notifications Test Page
     path('notifications/', include('notifications.urls')),
 

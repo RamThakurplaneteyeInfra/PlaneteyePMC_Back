@@ -1,6 +1,10 @@
+import base64
+import json
 import logging
 import mimetypes
 import smtplib
+import urllib.error
+import urllib.request
 from email.mime.image import MIMEImage
 from pathlib import Path
 
@@ -12,6 +16,7 @@ from django.utils.html import strip_tags
 logger = logging.getLogger(__name__)
 
 LOGO_CONTENT_ID = "pmc-brand-logo"
+_BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
 
 _PERMANENT_SMTP_ERRORS = (
     smtplib.SMTPAuthenticationError,
@@ -20,8 +25,19 @@ _PERMANENT_SMTP_ERRORS = (
 )
 
 
+class BrevoAPIError(Exception):
+    """Raised when Brevo transactional API rejects or fails a send."""
+
+    def __init__(self, message: str, *, status_code: int | None = None, retryable: bool = True):
+        super().__init__(message)
+        self.status_code = status_code
+        self.retryable = retryable
+
+
 def is_retryable_smtp_error(exc: BaseException) -> bool:
-    """Transient network/4xx SMTP errors may retry; auth and 5xx must not."""
+    """Transient network/4xx SMTP/API errors may retry; auth and permanent must not."""
+    if isinstance(exc, BrevoAPIError):
+        return bool(exc.retryable)
     if isinstance(exc, _PERMANENT_SMTP_ERRORS):
         return False
     if isinstance(exc, smtplib.SMTPResponseException):
@@ -36,6 +52,7 @@ def is_retryable_smtp_error(exc: BaseException) -> bool:
             OSError,
             smtplib.SMTPServerDisconnected,
             smtplib.SMTPConnectError,
+            urllib.error.URLError,
         ),
     ):
         return True
@@ -44,8 +61,8 @@ def is_retryable_smtp_error(exc: BaseException) -> bool:
     return True
 
 
-def _smtp_timeout_seconds() -> float | None:
-    """Blocking SMTP timeout (connect + read). None = Django default (no timeout)."""
+def _smtp_timeout_seconds() -> float:
+    """Blocking SMTP/API timeout (connect + read)."""
     raw = getattr(settings, "EMAIL_TIMEOUT", None)
     if raw is None or raw == "":
         return 30.0
@@ -71,15 +88,55 @@ def _normalize_recipient_list(recipient_list) -> list[str]:
     return out
 
 
+def _email_enabled() -> bool:
+    return bool(getattr(settings, "DPR_EMAIL_ENABLED", True))
+
+
+def _email_transport() -> str:
+    """
+    Resolve transport:
+    - disabled: no-op success for callers that only care about non-blocking notify
+    - brevo_api: HTTP transactional API (preferred when xkeysib key is set)
+    - smtp: Django SMTP backend (Brevo SMTP relay / locmem in tests)
+    """
+    forced = (getattr(settings, "EMAIL_TRANSPORT", "") or "").strip().lower()
+    if forced in {"brevo_api", "smtp", "disabled"}:
+        return forced
+    if not _email_enabled():
+        return "disabled"
+    api_key = (getattr(settings, "BREVO_API_KEY", "") or "").strip()
+    if api_key.startswith("xkeysib-"):
+        return "brevo_api"
+    return "smtp"
+
+
+def _logo_path() -> Path:
+    configured = Path(getattr(settings, "EMAIL_LOGO_PATH", "") or "")
+    if configured.is_file():
+        return configured
+    fallback = Path(settings.BASE_DIR) / "mpr" / "assets" / "email_scl_logo.png"
+    if fallback.is_file():
+        return fallback
+    legacy = Path(settings.BASE_DIR) / "mpr" / "assets" / "scl_logo.jpeg"
+    return legacy
+
+
+def _logo_public_url() -> str:
+    return (getattr(settings, "EMAIL_LOGO_URL", "") or "").strip()
+
+
 def _attach_inline_logo(message: EmailMultiAlternatives) -> bool:
-    """Attach the configured brand logo as a CID image for email clients."""
-    logo_path = Path(getattr(settings, "EMAIL_LOGO_PATH", "") or "")
+    """Attach the configured brand logo as a CID image for SMTP clients."""
+    if _logo_public_url():
+        # Prefer hosted HTTPS logo in HTML; skip CID when URL is available.
+        return False
+    logo_path = _logo_path()
     if not logo_path.is_file():
         logger.warning("Email logo not found path=%s", logo_path)
         return False
 
     content_type, _ = mimetypes.guess_type(logo_path.name)
-    subtype = (content_type or "image/jpeg").split("/", 1)[-1]
+    subtype = (content_type or "image/png").split("/", 1)[-1]
     image = MIMEImage(logo_path.read_bytes(), _subtype=subtype)
     image.add_header("Content-ID", f"<{LOGO_CONTENT_ID}>")
     image.add_header(
@@ -91,35 +148,121 @@ def _attach_inline_logo(message: EmailMultiAlternatives) -> bool:
     return True
 
 
-def send_html_email(subject, template_name, context, recipient_list, from_email=None):
-    """
-    Send an HTML email using a Django template.
+def _logo_attachment_payload() -> dict | None:
+    """CID attachment for Brevo only when no public logo URL is configured."""
+    if _logo_public_url():
+        return None
+    logo_path = _logo_path()
+    if not logo_path.is_file():
+        logger.warning("Email logo not found path=%s", logo_path)
+        return None
+    return {
+        "name": logo_path.name,
+        "content": base64.b64encode(logo_path.read_bytes()).decode("ascii"),
+        "contentId": LOGO_CONTENT_ID,
+    }
 
-    Uses EMAIL_TIMEOUT so worker threads cannot block indefinitely on SMTP.
-    Raises SMTP/network exceptions so callers can classify retry vs permanent.
-    """
-    recipients = _normalize_recipient_list(recipient_list)
-    recipient_count = len(recipients)
-    if not recipients:
-        logger.warning("send_html_email skipped template=%s recipient_count=0", template_name)
-        return False
 
+def _resolve_logo_src() -> tuple[str, str]:
+    """
+    Returns (context_key_value_for_url, context_key_value_for_cid_compat).
+    Prefer public HTTPS URL for Outlook/webmail reliability.
+    """
+    public_url = _logo_public_url()
+    if public_url:
+        return public_url, public_url
+    return "", f"cid:{LOGO_CONTENT_ID}"
+
+
+def _send_via_brevo_api(
+    *,
+    subject: str,
+    html_content: str,
+    text_content: str,
+    recipients: list[str],
+    from_email: str,
+) -> bool:
+    api_key = (getattr(settings, "BREVO_API_KEY", "") or "").strip()
+    if not api_key:
+        raise BrevoAPIError("BREVO_API_KEY is not configured", status_code=None, retryable=False)
+
+    sender_name = (getattr(settings, "BREVO_FROM_NAME", "") or "").strip() or "PMC"
+    payload: dict = {
+        "sender": {"name": sender_name, "email": from_email},
+        "to": [{"email": email} for email in recipients],
+        "subject": subject,
+        "htmlContent": html_content,
+        "textContent": text_content,
+    }
+    logo = _logo_attachment_payload()
+    if logo:
+        payload["attachment"] = [logo]
+
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        _BREVO_API_URL,
+        data=body,
+        method="POST",
+        headers={
+            "accept": "application/json",
+            "content-type": "application/json",
+            "api-key": api_key,
+        },
+    )
+    timeout = _smtp_timeout_seconds()
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status = getattr(response, "status", 200) or 200
+            raw = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+        status = int(exc.code or 0)
+        retryable = status in {408, 425, 429} or status >= 500
+        raise BrevoAPIError(
+            f"Brevo API HTTP {status}",
+            status_code=status,
+            retryable=retryable,
+        ) from None
+    except urllib.error.URLError as exc:
+        raise BrevoAPIError(
+            f"Brevo API network error: {type(exc.reason).__name__ if exc.reason else 'URLError'}",
+            status_code=None,
+            retryable=True,
+        ) from exc
+
+    if status >= 400:
+        raise BrevoAPIError(
+            f"Brevo API HTTP {status}",
+            status_code=status,
+            retryable=status >= 500,
+        )
+
+    message_id = None
+    try:
+        message_id = (json.loads(raw) or {}).get("messageId")
+    except Exception:
+        message_id = None
+    logger.info(
+        "Email sent via Brevo API recipient_count=%s message_id=%s",
+        len(recipients),
+        message_id or "unknown",
+    )
+    return True
+
+
+def _send_via_smtp(
+    *,
+    subject: str,
+    html_content: str,
+    text_content: str,
+    recipients: list[str],
+    from_email: str,
+    template_name: str,
+) -> bool:
     connection = None
     try:
-        if from_email is None:
-            from_email = settings.DEFAULT_FROM_EMAIL
-
-        template_path = f"emails/{template_name}.html"
-        logger.debug("Rendering email template: %s", template_path)
-
-        render_context = dict(context or {})
-        render_context.setdefault("email_logo_cid", f"cid:{LOGO_CONTENT_ID}")
-        html_content = render_to_string(template_path, render_context)
-        text_content = strip_tags(html_content)
-
         timeout = _smtp_timeout_seconds()
         connection = get_connection(timeout=timeout)
-
         message = EmailMultiAlternatives(
             subject=subject,
             body=text_content,
@@ -130,33 +273,94 @@ def send_html_email(subject, template_name, context, recipient_list, from_email=
         message.attach_alternative(html_content, "text/html")
         _attach_inline_logo(message)
         result = message.send(fail_silently=False)
-
         if result >= 1:
             logger.info(
-                "Email sent successfully template=%s recipient_count=%s",
+                "Email sent via SMTP template=%s recipient_count=%s",
                 template_name,
-                recipient_count,
+                len(recipients),
             )
             return True
         logger.error(
-            "Failed to send email template=%s recipient_count=%s result=%s",
+            "Failed to send SMTP email template=%s recipient_count=%s result=%s",
             template_name,
-            recipient_count,
+            len(recipients),
             result,
         )
         return False
-
-    except Exception as exc:
-        logger.error(
-            "Error sending email template=%s recipient_count=%s err_type=%s",
-            template_name,
-            recipient_count,
-            type(exc).__name__,
-        )
-        raise
     finally:
         if connection is not None:
             try:
                 connection.close()
             except Exception:
                 logger.debug("SMTP connection close failed template=%s", template_name)
+
+
+def send_html_email(subject, template_name, context, recipient_list, from_email=None):
+    """
+    Send an HTML email using a Django template.
+
+    Prefer Brevo transactional API when BREVO_API_KEY is an xkeysib key.
+    Otherwise use Django SMTP (Brevo relay). EMAIL_TIMEOUT applies to both.
+    """
+    recipients = _normalize_recipient_list(recipient_list)
+    recipient_count = len(recipients)
+    if not recipients:
+        logger.warning("send_html_email skipped template=%s recipient_count=0", template_name)
+        return False
+
+    transport = _email_transport()
+    if transport == "disabled":
+        logger.info(
+            "send_html_email disabled template=%s recipient_count=%s",
+            template_name,
+            recipient_count,
+        )
+        return True
+
+    try:
+        if from_email is None:
+            from_email = settings.DEFAULT_FROM_EMAIL
+
+        template_path = f"emails/{template_name}.html"
+        logger.debug("Rendering email template: %s", template_path)
+
+        render_context = dict(context or {})
+        logo_url, logo_cid = _resolve_logo_src()
+        render_context.setdefault("email_logo_url", logo_url)
+        render_context.setdefault("email_logo_cid", logo_cid or logo_url)
+        html_content = render_to_string(template_path, render_context)
+        text_content = strip_tags(html_content)
+
+        # Brevo re-parses htmlContent; leftover Django markers cause silent delivery errors.
+        if "{{" in html_content or "{%" in html_content:
+            raise RuntimeError(
+                f"Rendered email still contains template markers template={template_name}"
+            )
+
+        if transport == "brevo_api":
+            return _send_via_brevo_api(
+                subject=subject,
+                html_content=html_content,
+                text_content=text_content,
+                recipients=recipients,
+                from_email=from_email,
+            )
+
+        return _send_via_smtp(
+            subject=subject,
+            html_content=html_content,
+            text_content=text_content,
+            recipients=recipients,
+            from_email=from_email,
+            template_name=template_name,
+        )
+
+    except Exception as exc:
+        logger.error(
+            "Error sending email template=%s recipient_count=%s transport=%s err_type=%s",
+            template_name,
+            recipient_count,
+            transport,
+            type(exc).__name__,
+        )
+        raise

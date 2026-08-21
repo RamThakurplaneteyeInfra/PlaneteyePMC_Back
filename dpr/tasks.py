@@ -16,6 +16,8 @@ from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.db import close_old_connections, transaction
 
+from celery import shared_task
+
 from dpr.email_executor import (
     EMAIL_EXECUTOR,  # noqa: F401 — re-export for tests / callers
     get_email_pool_snapshot,  # noqa: F401
@@ -607,3 +609,85 @@ def approval_task_for_role(approved_by_role: str):
     if approved_by_role == "PMC Head":
         return send_dpr_pmc_head_approval_email
     return send_dpr_coordinator_approval_email
+
+
+def send_dpr_executive_digest_email(
+    *,
+    report_date: str,
+    recipient_ids: list[int] | None = None,
+    **_kwargs,
+) -> dict[str, Any]:
+    """
+    Send the PMC Head / Head Office DPR summary for one report date.
+
+    ``report_date`` is ISO YYYY-MM-DD. Safe to call from cron (no on_commit).
+    """
+    from datetime import date as date_cls
+
+    from dpr.services.digest import build_executive_digest
+    from services.email_utils import send_html_email
+
+    recipient_ids = list(recipient_ids or [])
+    thread_db = not getattr(settings, "DPR_EMAIL_INLINE", False)
+    if thread_db:
+        close_old_connections()
+
+    try:
+        parsed = date_cls.fromisoformat(report_date)
+        digest = build_executive_digest(report_date=parsed)
+        recipients = _users_with_email(recipient_ids)
+        if not recipients:
+            logger.warning("%s Digest skipped — no recipients date=%s", _LOG, report_date)
+            return {"status": "skipped_no_recipients", "report_date": report_date}
+
+        context = digest.to_context()
+        subject = (
+            f"DPR Executive Digest — {digest.report_date.strftime('%d %b %Y')} "
+            f"({digest.counts.projects_missing} missing, "
+            f"{digest.counts.pending_total} pending)"
+        )
+        emails = [u.email for u in recipients]
+        # One mail to the leadership group (same summary for all).
+        context["recipient_name"] = "PMC Leadership"
+        send_html_email(
+            subject=subject,
+            template_name="dpr_executive_digest",
+            context=context,
+            recipient_list=emails,
+        )
+        logger.info(
+            "%s Digest sent date=%s recipients=%s missing=%s pending=%s",
+            _LOG,
+            report_date,
+            len(emails),
+            digest.counts.projects_missing,
+            digest.counts.pending_total,
+        )
+        return {
+            "status": "sent",
+            "report_date": report_date,
+            "recipient_count": len(emails),
+            "missing": digest.counts.projects_missing,
+            "pending": digest.counts.pending_total,
+            "filled": digest.counts.total_filled,
+        }
+    finally:
+        if thread_db:
+            close_old_connections()
+
+
+@shared_task(name="dpr.send_executive_digest")
+def send_executive_digest_task(report_date: str | None = None) -> dict:
+    """
+    Celery entrypoint — delegates to the shared executive digest service.
+    Preferred production trigger: POST /api/internal/dpr/executive-digest/
+    """
+    from datetime import date as date_cls
+
+    from dpr.services.executive_digest import send_dpr_executive_digest
+
+    parsed = date_cls.fromisoformat(report_date) if report_date else None
+    return send_dpr_executive_digest(
+        report_date=parsed,
+        source="celery_task",
+    )

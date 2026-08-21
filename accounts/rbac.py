@@ -292,11 +292,24 @@ def resolve_project(name: str | None, user=None) -> Project | None:
     When *user* is provided, prefer a project that user is assigned to
     (case-insensitive). This avoids false denials when duplicate project
     rows exist that differ only by casing (e.g. "Khb …" vs "KHB …").
+
+    Results are memoized on *user* for the lifetime of the request so
+    permission + object checks do not repeat the same Project SELECT.
     """
     name = normalize_project_name(name)
     if not name:
         return None
 
+    cache_map = None
+    if user is not None and getattr(user, "is_authenticated", False):
+        cache_map = getattr(user, "_rbac_resolve_project_cache", None)
+        if cache_map is None:
+            cache_map = {}
+            user._rbac_resolve_project_cache = cache_map
+        if name in cache_map:
+            return cache_map[name]
+
+    project = None
     if user is not None and getattr(user, "is_authenticated", False) and not is_admin_user(user):
         assigned = (
             get_user_assigned_projects_qs(user)
@@ -305,27 +318,35 @@ def resolve_project(name: str | None, user=None) -> Project | None:
             .first()
         )
         if assigned is not None:
-            return assigned
+            project = assigned
 
-    project = Project.objects.filter(name=name).first()
-    if project:
-        return project
-    matches = list(Project.objects.filter(name__iexact=name).order_by("id"))
-    if not matches:
-        return None
-    if len(matches) == 1:
-        return matches[0]
-    for project in matches:
-        if (
-            project.team_lead_id
-            or project.billing_site_engineer_id
-            or project.pmc_head_id
-            or project.site_engineer_id
-            or project.qaqc_site_engineer_id
-            or getattr(project, "hse_site_engineer_id", None)
-        ):
-            return project
-    return matches[0]
+    if project is None:
+        project = Project.objects.filter(name=name).first()
+    if project is None:
+        matches = list(Project.objects.filter(name__iexact=name).order_by("id"))
+        if not matches:
+            project = None
+        elif len(matches) == 1:
+            project = matches[0]
+        else:
+            project = None
+            for candidate in matches:
+                if (
+                    candidate.team_lead_id
+                    or candidate.billing_site_engineer_id
+                    or candidate.pmc_head_id
+                    or candidate.site_engineer_id
+                    or candidate.qaqc_site_engineer_id
+                    or getattr(candidate, "hse_site_engineer_id", None)
+                ):
+                    project = candidate
+                    break
+            if project is None:
+                project = matches[0]
+
+    if cache_map is not None:
+        cache_map[name] = project
+    return project
 
 
 def user_has_project_access(user, project: Project | None) -> bool:
@@ -452,14 +473,14 @@ def resolve_project_for_instance(obj, user=None) -> Project | None:
     return name_project or fk_project
 
 
-def project_from_instance(obj) -> Project | None:
+def project_from_instance(obj, user=None) -> Project | None:
     """Resolve Project from a model instance."""
     raw_name = _instance_project_name(obj)
     if raw_name:
-        resolved = resolve_project(raw_name)
+        resolved = resolve_project(raw_name, user=user)
         if resolved:
             return resolved
-    return resolve_project_for_instance(obj)
+    return resolve_project_for_instance(obj, user=user)
 
 
 def extract_project_name_from_data(data) -> str | None:

@@ -5,13 +5,13 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta http-equiv="x-ua-compatible" content="ie=edge">
-    <title>{% block title %}PMC Notification{% endblock %}</title>
+    <title>DPR Approved</title>
 </head>
 
 <body
     style="margin:0;padding:0;background:#e8eef3;color:#1b2b3a;font-family:Segoe UI,Roboto,Helvetica Neue,Arial,sans-serif;-webkit-text-size-adjust:100%;">
     <div style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;">
-        {% block preheader %}A notification from the PMC project management system.{% endblock %}
+        Your Daily Progress Report has been approved.
     </div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#e8eef3;">
         <tr>
@@ -23,19 +23,11 @@
                             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                                 <tr>
                                     <td align="left" valign="middle" style="padding:0;">
-                                        {% if email_logo_url %}
-                                        <img src="{{ email_logo_url }}" width="200" height="56"
+                                        
+                                        <img src="https://pmcproject.s3.ap-south-1.amazonaws.com/email/scl_logo.png" width="200" height="56"
                                             alt="Shrikhande Consultants Limited"
                                             style="display:block;width:200px;max-width:200px;height:auto;border:0;outline:none;text-decoration:none;">
-                                        {% else %}
-                                        <div
-                                            style="font-size:18px;line-height:1.25;font-weight:700;color:#0f4c81;letter-spacing:0.2px;">
-                                            Shrikhande Consultants Limited
-                                        </div>
-                                        <div style="margin-top:4px;font-size:12px;color:#6b7c8c;letter-spacing:0.4px;">
-                                            Project Management Consultants
-                                        </div>
-                                        {% endif %}
+                                        
                                     </td>
                                     <td align="right" valign="middle" style="padding:0 0 0 12px;">
                                         <div
@@ -49,26 +41,49 @@
                     </tr>
                     <tr>
                         <td
-                            style="height:4px;background:{% block accent %}#0f4c81{% endblock %};font-size:0;line-height:0;">
+                            style="height:4px;background:#1f8a55;font-size:0;line-height:0;">
                             &nbsp;</td>
                     </tr>
                     <tr>
                         <td style="padding:30px 28px 8px;">
                             <div
                                 style="margin:0 0 10px;font-size:11px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;color:#6b7c8c;">
-                                {% block eyebrow %}PMC Notification{% endblock %}
+                                Approval Update
                             </div>
                             <h1 style="margin:0 0 12px;font-size:24px;line-height:1.3;font-weight:700;color:#123047;">
-                                {% block heading %}Project notification{% endblock %}
+                                DPR approved
                             </h1>
                             <p style="margin:0;color:#4f6272;font-size:15px;line-height:1.7;">
-                                {% block introduction %}{% endblock %}
+                                Dear Ram Thakur, your Daily Progress Report has been approved by PMC Head.
                             </p>
                         </td>
                     </tr>
                     <tr>
                         <td style="padding:18px 28px 28px;">
-                            {% block content %}{% endblock %}
+                            
+<div style="margin:4px 0 18px;padding:10px 14px;border-radius:8px;background:#eaf7f0;border:1px solid #cfe9da;color:#1f6b45;font-size:13px;font-weight:700;">Approved</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f7fafc;border:1px solid #e2e9ef;border-radius:10px;overflow:hidden;">
+    <tr>
+        <td style="padding:12px 16px;color:#6b7c8c;font-size:13px;width:36%;">Project</td>
+        <td style="padding:12px 16px;font-weight:700;color:#123047;">demo testing Project</td>
+    </tr>
+    <tr>
+        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Report date</td>
+        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">2026-08-20</td>
+    </tr>
+    <tr>
+        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Job number</td>
+        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">212</td>
+    </tr>
+    <tr>
+        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Approved by</td>
+        <td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">Vaishnavi Nirgude</td>
+    </tr>
+</table>
+<p style="margin:20px 0 0;font-size:14px;line-height:1.7;color:#4f6272;">
+The approval workflow is complete.
+</p>
+
                             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
                                 style="margin-top:26px;">
                                 <tr>
@@ -88,7 +103,7 @@
                             style="padding:16px 28px;background:#123047;color:#c9d6e2;text-align:center;font-size:11px;line-height:1.7;">
                             This is an automated notification from the PMC portal. Please do not reply to this
                             email.<br>
-                            &copy; {% now "Y" %} Shrikhande Consultants Limited. All rights reserved.
+                            &copy; 2026 Shrikhande Consultants Limited. All rights reserved.
                         </td>
                     </tr>
                 </table>

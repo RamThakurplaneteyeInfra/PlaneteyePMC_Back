@@ -192,7 +192,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = os.environ.get('DJANGO_TIME_ZONE', 'Asia/Kolkata')
 
 USE_I18N = True
 
@@ -484,6 +484,22 @@ CHANNEL_LAYERS = {
 # EMAIL CONFIGURATION
 # ==============================
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+# Prefer Brevo transactional API when BREVO_API_KEY is an xkeysib-* key.
+# SMTP remains as fallback / local relay. Never hardcode secrets here.
+BREVO_API_KEY = os.environ.get('BREVO_API_KEY', '')
+BREVO_FROM_NAME = os.environ.get(
+    'BREVO_FROM_NAME',
+    'PMS - Project Management System',
+)
+DPR_EMAIL_ENABLED = os.environ.get('DPR_EMAIL_ENABLED', 'true').lower() == 'true'
+# Daily executive digest for PMC Head + Head Office.
+# External scheduler (future GitHub Actions) calls POST /api/internal/dpr/executive-digest/
+# with header X-CRON-SECRET matching DPR_DIGEST_CRON_SECRET.
+DPR_DIGEST_ENABLED = os.environ.get('DPR_DIGEST_ENABLED', 'true').lower() == 'true'
+DPR_DIGEST_CRON_SECRET = os.environ.get('DPR_DIGEST_CRON_SECRET', '').strip()
+DPR_TEST_EMAIL = os.environ.get('DPR_TEST_EMAIL', '')
+# Explicit override: brevo_api | smtp | disabled. Empty = auto (API if xkeysib key).
+EMAIL_TRANSPORT = os.environ.get('EMAIL_TRANSPORT', '').strip().lower()
 # Brevo SMTP variables take precedence while the legacy EMAIL_* variables
 # remain supported for backward-compatible local and existing deployments.
 EMAIL_HOST = os.environ.get(
@@ -517,10 +533,19 @@ EMAIL_USE_SSL = os.environ.get(
 EMAIL_TIMEOUT = float(os.environ.get('EMAIL_TIMEOUT', '30'))
 EMAIL_LOGO_PATH = os.environ.get(
     'EMAIL_LOGO_PATH',
-    str(BASE_DIR / 'mpr' / 'assets' / 'scl_logo.jpeg'),
+    str(BASE_DIR / 'mpr' / 'assets' / 'email_scl_logo.png'),
+)
+# Public HTTPS logo URL — preferred for Outlook/Brevo (CID images often fail).
+EMAIL_LOGO_URL = os.environ.get(
+    'EMAIL_LOGO_URL',
+    'https://pmcproject.s3.ap-south-1.amazonaws.com/email/scl_logo.png',
 )
 if "test" in sys.argv:
     EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
+    # Never call live Brevo during unit tests even if .env has an API key.
+    EMAIL_TRANSPORT = "smtp"
+    BREVO_API_KEY = ""
+    EMAIL_LOGO_URL = ""
 
 # ==============================
 # CLOUDINARY (Site Progress Images — fallback; disabled when SITE_IMAGE_S3_ONLY=True)
@@ -672,7 +697,8 @@ CELERY_BROKER_CONNECTION_RETRY = True
 CELERY_BROKER_CONNECTION_MAX_RETRIES = 10
 
 # Optional Celery Beat schedule (requires a beat process).
-# Fallback without Beat: Railway cron → `python manage.py dispatch_due_reminders`
+# DPR executive digest is NOT scheduled here — use external scheduler →
+# POST /api/internal/dpr/executive-digest/ (X-CRON-SECRET).
 CELERY_BEAT_SCHEDULE = {
     "dispatch-due-reminders-every-minute": {
         "task": "reminders.dispatch_due_reminders",

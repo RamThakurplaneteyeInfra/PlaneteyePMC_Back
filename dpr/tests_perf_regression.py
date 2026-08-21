@@ -143,12 +143,48 @@ class DprPerformanceRegressionTests(TestCase):
         )
         dpr_id = created.data["id"]
         cache.clear()
+        connection.queries_log.clear()
         with CaptureQueriesContext(connection) as queries:
             response = self.client.get(f"/api/dpr/{dpr_id}/")
         self.assertEqual(response.status_code, 200)
         print(f"[DPR PERF] GET /api/dpr/{{id}}/ queries={len(queries)}")
-        self.assertLessEqual(len(queries), 20)
+        # Admin read: no RBAC Project SELECT; prefetch covers activities/scopes.
+        self.assertGreaterEqual(len(queries), 1)
+        self.assertLessEqual(len(queries), 8)
         self.assertEqual(len(response.data["activities"]), 5)
+        dpr_selects = sum(
+            1
+            for q in queries
+            if "dpr_dailyprogressreport" in q["sql"].lower()
+            and q["sql"].lstrip().lower().startswith("select")
+        )
+        self.assertEqual(dpr_selects, 1)
+
+    def test_detail_query_count_stable_with_more_activities(self):
+        created = self.client.post(
+            "/api/dpr/", self._payload("2026-08-09", self.scopes), format="json"
+        )
+        dpr_id = created.data["id"]
+        cache.clear()
+        with CaptureQueriesContext(connection) as q5:
+            r5 = self.client.get(f"/api/dpr/{dpr_id}/")
+        self.assertEqual(r5.status_code, 200)
+        self.assertEqual(len(r5.data["activities"]), 10)
+        with CaptureQueriesContext(connection) as q10:
+            r10 = self.client.get(f"/api/dpr/{dpr_id}/")
+        self.assertEqual(len(q5), len(q10))
+        self.assertLessEqual(len(q10), 8)
+
+    def test_list_warm_cache_avoids_sql(self):
+        self.client.post("/api/dpr/", self._payload("2026-08-10", self.scopes[:3]), format="json")
+        cache.clear()
+        cold = self.client.get("/api/dpr/?page=1")
+        self.assertEqual(cold.status_code, 200)
+        with CaptureQueriesContext(connection) as warm_q:
+            warm = self.client.get("/api/dpr/?page=1")
+        self.assertEqual(warm.status_code, 200)
+        self.assertLessEqual(len(warm_q), 2)
+        self.assertEqual(len(cold.data["results"]), len(warm.data["results"]))
 
     def test_submit_query_count_and_status(self):
         created = self.client.post(

@@ -30,7 +30,7 @@ class IsAuthenticatedProjectRBAC(BasePermission):
     def _get_domain(self, view) -> str:
         return getattr(view, "rbac_domain", RBACDomain.GENERAL)
 
-    def _resolve_project_from_view(self, request, view):
+    def _resolve_project_from_view(self, request, view, *, allow_pk_lookup: bool = True):
         if hasattr(view, "get_rbac_project"):
             return view.get_rbac_project()
 
@@ -44,6 +44,11 @@ class IsAuthenticatedProjectRBAC(BasePermission):
         )
         if project_name:
             return resolve_project(normalize_project_name(project_name), user=request.user)
+
+        # Detail GET/HEAD: defer to has_object_permission so we do not load the
+        # row twice (once here without prefetch, once in get_object).
+        if not allow_pk_lookup:
+            return None
 
         pk = view.kwargs.get("pk") or view.kwargs.get("project_pk")
         if pk and hasattr(view, "queryset") and view.queryset is not None:
@@ -64,12 +69,14 @@ class IsAuthenticatedProjectRBAC(BasePermission):
             return False
 
         if request.method in SAFE_METHODS:
-            project = self._resolve_project_from_view(request, view)
+            project = self._resolve_project_from_view(
+                request, view, allow_pk_lookup=False
+            )
             if project is None:
                 return True
             return user_can_read_domain(request.user, project, self._get_domain(view))
 
-        project = self._resolve_project_from_view(request, view)
+        project = self._resolve_project_from_view(request, view, allow_pk_lookup=True)
         if project is None:
             return True
         if getattr(project, "status", None) == "completed":
@@ -85,12 +92,18 @@ class IsAuthenticatedProjectRBAC(BasePermission):
         if not request.user or not request.user.is_authenticated:
             return False
 
-        project = project_from_instance(obj)
         domain = self._get_domain(view)
 
         if request.method in SAFE_METHODS:
+            # Admins can read any project; skip Project SELECT on the hot path.
+            from accounts.rbac import is_admin_user
+
+            if request.user.is_superuser or is_admin_user(request.user):
+                return True
+            project = project_from_instance(obj, user=request.user)
             return user_can_read_domain(request.user, project, domain)
 
+        project = project_from_instance(obj, user=request.user)
         if getattr(project, "status", None) == "completed":
             action = getattr(view, "action", None)
             if action not in {"complete_project", "complete_billing"}:

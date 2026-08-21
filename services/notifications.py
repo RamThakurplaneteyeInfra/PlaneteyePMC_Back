@@ -313,6 +313,46 @@ def send_site_engineer_assigned_email(
         send_fn=_send,
     )
 
+def _user_in_groups(user, group_names: set[str]) -> bool:
+    if not user:
+        return False
+    names = {g.name for g in user.groups.all()}
+    return bool(names & group_names)
+
+
+def _is_digest_only_email_user(user, *, project=None) -> bool:
+    """
+    PMC Head and Head Office receive the daily executive digest only —
+    no per-event DPR emails.
+    """
+    from accounts.rbac import ROLE_HEAD_OFFICE, ROLE_HO_ALIAS, ROLE_PMC_HEAD
+
+    if not user:
+        return False
+    if _user_in_groups(user, {ROLE_PMC_HEAD, ROLE_HEAD_OFFICE, ROLE_HO_ALIAS}):
+        return True
+    if project is not None and getattr(project, "pmc_head_id", None) == user.id:
+        return True
+    return False
+
+
+def _filter_event_email_recipients(users, *, project=None) -> list:
+    """Drop digest-only roles from SMTP recipients (WebSocket still allowed)."""
+    kept = []
+    skipped = []
+    for user in users or []:
+        if _is_digest_only_email_user(user, project=project):
+            skipped.append(user.email or user.username)
+            continue
+        kept.append(user)
+    if skipped:
+        logger.info(
+            "Skipped per-event DPR email for digest-only users: %s",
+            skipped,
+        )
+    return kept
+
+
 def _get_project_approvers(project, approver_role):
     """
     Get users who should approve based on the role and project.
@@ -348,12 +388,12 @@ def _get_project_approvers(project, approver_role):
 
 def _get_dpr_notification_recipients(project, approver_role):
     """
-    Get email recipients for DPR submission notifications.
+    Get notification recipients for DPR submission (WebSocket + candidate email list).
 
     Prefers the specific approver role (Team Leader / Coordinator / PMC Head).
     Falls back to ANY assigned project leadership (team_lead + pmc_head + coordinators)
-    so that emails are always sent to at least one role when a DPR is submitted,
-    even if the exact workflow slot is not yet assigned on the project.
+    so that in-app alerts still reach leadership when a slot is empty.
+    Per-event SMTP for PMC Head is stripped later via ``_filter_event_email_recipients``.
     """
     # Try exact role first
     specific = _get_project_approvers(project, approver_role)
@@ -423,7 +463,6 @@ def notify_dpr_submitted(dpr, *, is_resubmit: bool = False):
         return
 
     recipient_emails = [user.email for user in approvers]
-    recipient_ids = [user.id for user in approvers]
     dpr_id = dpr.id
     submitted_by_id = dpr.submitted_by_id
 
@@ -453,6 +492,17 @@ def notify_dpr_submitted(dpr, *, is_resubmit: bool = False):
             {'dpr_id': dpr.id, 'project_name': dpr.project_name, 'status': 'submitted'}
         )
         send_websocket_notification(dpr.submitted_by.id, submitter_ws_message)
+
+    email_recipients = _filter_event_email_recipients(approvers, project=project)
+    recipient_ids = [user.id for user in email_recipients if user.email]
+    if not recipient_ids:
+        logger.info(
+            "No per-event email recipients for DPR submission dpr_id=%s role=%s "
+            "(PMC Head / Head Office use daily digest only)",
+            dpr_id,
+            dpr.current_approver_role,
+        )
+        return
 
     task = send_dpr_resubmission_email if is_resubmit else send_dpr_submission_email
     logger.info(
@@ -494,17 +544,28 @@ def notify_dpr_approved_by_role(dpr, approved_by_role):
             recipients.append(dpr.submitted_by)
 
     recipients = list(set(recipients))
-    recipient_emails = [user.email for user in recipients if user.email]
-    recipient_ids = [user.id for user in recipients if user.email]
+    email_recipients = _filter_event_email_recipients(recipients, project=project)
+    recipient_emails = [user.email for user in email_recipients if user.email]
+    recipient_ids = [user.id for user in email_recipients if user.email]
 
     if not recipient_emails:
-        logger.warning(
-            f"No recipients found for DPR approval notification (approved by {approved_by_role})"
+        logger.info(
+            "No per-event email recipients for DPR approval (approved by %s); "
+            "WebSocket still sent. PMC Head / Head Office use daily digest only.",
+            approved_by_role,
         )
+        for recipient in recipients:
+            ws_message = create_notification_message(
+                'dpr_approved',
+                f'DPR Approved: {dpr.project_name}',
+                f'DPR has been approved by {approved_by_role}.',
+                {'dpr_id': dpr.id, 'project_name': dpr.project_name, 'approved_by': approved_by_role}
+            )
+            send_websocket_notification(recipient.id, ws_message)
         return
 
     for recipient in recipients:
-        if recipient.email in recipient_emails:
+        if recipient.email:
             ws_message = create_notification_message(
                 'dpr_approved',
                 f'DPR Approved: {dpr.project_name}',
@@ -548,17 +609,18 @@ def notify_dpr_rejected_by_role(dpr, rejected_by_role):
             recipients.append(dpr.submitted_by)
 
     recipients = list(set(recipients))
-    recipient_emails = [user.email for user in recipients if user.email]
-    recipient_ids = [user.id for user in recipients if user.email]
+    email_recipients = _filter_event_email_recipients(recipients, project=project)
+    recipient_emails = [user.email for user in email_recipients if user.email]
+    recipient_ids = [user.id for user in email_recipients if user.email]
 
-    if not recipient_emails:
+    if not recipients:
         logger.warning(
             f"No recipients found for DPR rejection notification (rejected by {rejected_by_role})"
         )
         return
 
     for recipient in recipients:
-        if recipient.email in recipient_emails:
+        if recipient.email:
             ws_message = create_notification_message(
                 'dpr_rejected',
                 f'DPR Rejected: {dpr.project_name}',
@@ -571,6 +633,14 @@ def notify_dpr_rejected_by_role(dpr, rejected_by_role):
                 },
             )
             send_websocket_notification(recipient.id, ws_message)
+
+    if not recipient_ids:
+        logger.info(
+            "No per-event email recipients for DPR rejection (rejected by %s); "
+            "PMC Head / Head Office use daily digest only",
+            rejected_by_role,
+        )
+        return
 
     logger.info(
         "Queued Rejection Email dpr_id=%s role=%s recipients=%s",
@@ -658,4 +728,20 @@ def notify_dpr_rejected(dpr):
         send_dpr_rejected_email,
         dpr_id=dpr.id,
         recipient_ids=[dpr.submitted_by_id],
+    )
+
+
+def notify_dpr_executive_digest(*, report_date=None, dry_run: bool = False) -> dict:
+    """
+    Compat wrapper — delegates to the shared executive digest service.
+
+    Prefer ``dpr.services.executive_digest.send_dpr_executive_digest``.
+    """
+    from dpr.services.executive_digest import send_dpr_executive_digest
+
+    return send_dpr_executive_digest(
+        report_date=report_date,
+        dry_run=dry_run,
+        source="notifications.notify_dpr_executive_digest",
+        use_idempotency=not dry_run,
     )

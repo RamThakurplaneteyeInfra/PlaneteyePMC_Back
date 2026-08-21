@@ -206,7 +206,18 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
         responses={200: DailyProgressReportSerializer}
     )
     def retrieve(self, request, *args, **kwargs):
-        return super().retrieve(request, *args, **kwargs)
+        with dpr_perf_request(request, "GET /api/dpr/{id}/") as perf:
+            with perf.span("get_object_ms"):
+                instance = self.get_object()
+            with perf.span("serialize_ms"):
+                serializer = self.get_serializer(instance)
+                data = serializer.data
+            perf.add(
+                dpr_id=instance.pk,
+                activity_count=len(data.get("activities") or []),
+                payload_bytes=len(str(data)),
+            )
+            return Response(data)
 
     @swagger_auto_schema(
         operation_description="Create a new Daily Progress Report with nested activities",
