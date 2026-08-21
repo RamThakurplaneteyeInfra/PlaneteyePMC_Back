@@ -402,8 +402,12 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
                     return dpr
 
                 else:
-                    # Create new DPR
-                    validated_data['created_by'] = current_user
+                    # Create new DPR already in initial submission state so the
+                    # FE does not need a follow-up /submit/ (which is draft/rejected only).
+                    validated_data["created_by"] = current_user
+                    validated_data["submitted_by"] = current_user
+                    validated_data["status"] = DailyProgressReport.Status.PENDING_TEAM_LEAD
+                    validated_data["current_approver_role"] = "Team Leader"
                     dpr = DailyProgressReport.objects.create(**validated_data)
 
                     if activities_data:
@@ -430,6 +434,8 @@ class DailyProgressReportSerializer(serializers.ModelSerializer):
                         dpr, rows, self.context.get("_scope_by_id")
                     )
 
+                    # View uses this to queue the initial submission email once.
+                    dpr._initial_submission = True
                     return dpr
 
         except IntegrityError:

@@ -107,7 +107,7 @@ class DprPerformanceRegressionTests(TestCase):
         self.assertLessEqual(len(queries), 55)
         data = response.data
         self.assertEqual(len(data["activities"]), 10)
-        self.assertEqual(data["status"], "draft")
+        self.assertEqual(data["status"], "pending_team_lead")
         self.assertNotIn("approval_status", data)
 
     def test_create_without_activities_still_works(self):
@@ -191,6 +191,10 @@ class DprPerformanceRegressionTests(TestCase):
             "/api/dpr/", self._payload("2026-08-07", self.scopes[:5]), format="json"
         )
         dpr_id = created.data["id"]
+        # CREATE already lands in pending_team_lead; /submit/ only allows draft/rejected.
+        dpr = DailyProgressReport.objects.get(pk=dpr_id)
+        dpr.status = DailyProgressReport.Status.DRAFT
+        dpr.save(update_fields=["status"])
         started = perf_counter()
         with CaptureQueriesContext(connection) as queries:
             with patch("services.notifications.send_websocket_notification"):
@@ -206,6 +210,9 @@ class DprPerformanceRegressionTests(TestCase):
             "/api/dpr/", self._payload("2026-08-08", self.scopes[:3], "4.00"), format="json"
         )
         dpr_id = created.data["id"]
+        dpr = DailyProgressReport.objects.get(pk=dpr_id)
+        dpr.status = DailyProgressReport.Status.DRAFT
+        dpr.save(update_fields=["status"])
         body = {
             "activities": [
                 {

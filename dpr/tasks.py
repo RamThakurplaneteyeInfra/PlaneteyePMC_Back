@@ -247,23 +247,46 @@ def _run_email_job(
             close_old_connections()
 
 
-def queue_after_commit(fn: Callable, **kwargs) -> None:
+def queue_after_commit(
+    fn: Callable,
+    *,
+    log_label: str | None = None,
+    log_dpr_id: int | None = None,
+    log_is_resubmit: bool | None = None,
+    log_status: str | None = None,
+    **kwargs,
+) -> str:
     """
     After DB commit, run ``fn(**kwargs)`` on EMAIL_EXECUTOR (or inline in tests).
 
     Pass only lightweight IDs in kwargs — never Django model instances.
+    Returns a lightweight job_id string for structured logs (not a Future).
     """
+    job_id = f"{getattr(fn, '__name__', 'email')}-{int(time.time() * 1000)}"
 
     def _enqueue():
-        logger.info(
-            "%s Queued fn=%s kwargs_keys=%s",
-            _LOG,
-            getattr(fn, "__name__", str(fn)),
-            sorted(kwargs.keys()),
-        )
+        if log_label:
+            logger.info(
+                "%s %s dpr_id=%s is_resubmit=%s status=%s job_id=%s",
+                _LOG,
+                log_label,
+                log_dpr_id,
+                log_is_resubmit,
+                log_status,
+                job_id,
+            )
+        else:
+            logger.info(
+                "%s Queued fn=%s job_id=%s kwargs_keys=%s",
+                _LOG,
+                getattr(fn, "__name__", str(fn)),
+                job_id,
+                sorted(kwargs.keys()),
+            )
         submit_email_job(fn, kwargs)
 
     transaction.on_commit(_enqueue)
+    return job_id
 
 
 def run_background_smtp_job(*, kind: str, dedup_key: str, send_fn: Callable) -> dict[str, Any]:

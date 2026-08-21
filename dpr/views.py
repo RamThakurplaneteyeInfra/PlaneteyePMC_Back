@@ -279,7 +279,9 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                         request.user, project_name, RBACDomain.ENGINEERING
                     )
                 with perf.span("save_ms"):
-                    with batch_cache_invalidation():
+                    # Outer atomic so notify_dpr_submitted's on_commit only fires
+                    # after create + audit succeed (no SMTP on rollback).
+                    with batch_cache_invalidation(), transaction.atomic():
                         instance = serializer.save()
                         from core.business_audit import write_business_audit
                         from core.models import BusinessAuditLog
@@ -298,6 +300,16 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                         safe_cache_delete_pattern("dpr_list:*")
                         safe_cache_delete_pattern("dpr_pending_approval:*")
                         safe_cache_delete_pattern("dpr_rejected:*")
+
+                        # Initial submission email belongs to CREATE when the new
+                        # DPR is already pending_team_lead (not activity-append).
+                        if (
+                            getattr(instance, "_initial_submission", False)
+                            and instance.status
+                            == DailyProgressReport.Status.PENDING_TEAM_LEAD
+                        ):
+                            with perf.span("notification_ms"):
+                                notify_dpr_submitted(instance, is_resubmit=False)
             except (APIException, DRFValidationError):
                 # Let DRF / FriendlyAPIErrorMiddleware format these correctly
                 raise
@@ -322,26 +334,6 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                 dpr_id=instance.pk,
                 activity_count=len(request.data.get("activities") or []),
             )
-
-            pending_statuses = [
-                DailyProgressReport.Status.PENDING_TEAM_LEAD,
-                DailyProgressReport.Status.PENDING_COORDINATOR,
-                DailyProgressReport.Status.PENDING_PMC_HEAD,
-            ]
-
-            if instance.status in pending_statuses:
-                logger.info(
-                    "DPR created directly in pending state (%s). Triggering notification.",
-                    instance.status,
-                )
-                try:
-                    with perf.span("notification_ms"):
-                        notify_dpr_submitted(instance)
-                except Exception as notify_err:
-                    logger.error(
-                        "Failed to send notification after direct DPR create: %s",
-                        notify_err,
-                    )
 
             activities_added = getattr(instance, "_activities_added", None)
             with perf.span("serialize_ms"):
@@ -574,12 +566,6 @@ class DailyProgressReportViewSet(viewsets.ModelViewSet):
                 safe_cache_delete_pattern("dpr_rejected:*")
 
                 # Notifications: WebSocket sync + email via ThreadPoolExecutor on_commit
-                logger.info(
-                    "DPR submitted successfully dpr_id=%s project=%s resubmit=%s",
-                    dpr.id,
-                    dpr.project_name,
-                    is_resubmit,
-                )
                 notify_dpr_submitted(dpr, is_resubmit=is_resubmit)
 
                 from core.business_audit import write_business_audit

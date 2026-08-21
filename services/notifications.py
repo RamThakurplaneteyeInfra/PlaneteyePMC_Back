@@ -462,17 +462,18 @@ def notify_dpr_submitted(dpr, *, is_resubmit: bool = False):
         )
         return
 
-    recipient_emails = [user.email for user in approvers]
     dpr_id = dpr.id
     submitted_by_id = dpr.submitted_by_id
 
     logger.info(
-        "DPR submitted successfully dpr_id=%s project=%s role=%s resubmit=%s recipients=%s",
+        "DPR submitted successfully dpr_id=%s project=%s role=%s is_resubmit=%s "
+        "status=%s recipient_count=%s",
         dpr_id,
         dpr.project_name,
         dpr.current_approver_role,
         is_resubmit,
-        recipient_emails,
+        dpr.status,
+        len(approvers),
     )
 
     for approver in approvers:
@@ -505,14 +506,15 @@ def notify_dpr_submitted(dpr, *, is_resubmit: bool = False):
         return
 
     task = send_dpr_resubmission_email if is_resubmit else send_dpr_submission_email
-    logger.info(
-        "Queued %s Email dpr_id=%s recipients=%s",
-        "Resubmission" if is_resubmit else "Submission",
-        dpr_id,
-        recipient_ids,
+    queue_label = (
+        "Resubmission queued" if is_resubmit else "Initial submission queued"
     )
     queue_after_commit(
         task,
+        log_label=queue_label,
+        log_dpr_id=dpr_id,
+        log_is_resubmit=is_resubmit,
+        log_status=dpr.status,
         dpr_id=dpr_id,
         submitted_by_id=submitted_by_id,
         recipient_ids=recipient_ids,
