@@ -110,6 +110,24 @@ class HeadOfficeUserManagementAPITest(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_password_similar_to_username_allowed(self):
+        username = "similar_user"
+        response = self.client.post(
+            "/api/users/",
+            {
+                "username": username,
+                "full_name": "Similar User",
+                "role": "Team Leader",
+                "project_ids": [self.project.id],
+                "password": username,
+                "confirm_password": username,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        user = User.objects.get(username=username)
+        self.assertTrue(user.check_password(username))
+
     def test_cannot_create_ho_role(self):
         response = self.client.post(
             "/api/users/",
