@@ -64,3 +64,40 @@ class ResolveProjectCaseDuplicateTests(APITestCase):
             response.data,
         )
         self.assertTrue(response.data.get("success"))
+
+
+class ProjectNameAliasTests(APITestCase):
+    def setUp(self):
+        self.project = Project.objects.create(name="Miyapur Flyover", status="active")
+        tl_group, _ = Group.objects.get_or_create(name="Team Leader")
+        self.tl = User.objects.create_user(username="alias_tl", password="testpass123")
+        self.tl.groups.add(tl_group)
+        self.project.team_lead = self.tl
+        self.project.save(update_fields=["team_lead"])
+
+    def test_normalize_and_resolve_mayapur_alias(self):
+        from accounts.rbac import normalize_project_name
+
+        self.assertEqual(normalize_project_name("Mayapur Flyover"), "Miyapur Flyover")
+        self.assertEqual(normalize_project_name("mayapur   flyover"), "Miyapur Flyover")
+        resolved = resolve_project("Mayapur Flyover", user=self.tl)
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved.pk, self.project.pk)
+
+    def test_contractor_create_accepts_mayapur_spelling(self):
+        login = self.client.post(
+            "/api/token/",
+            {"username": "alias_tl", "password": "testpass123"},
+            format="json",
+        )
+        self.assertEqual(login.status_code, status.HTTP_200_OK)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+
+        response = self.client.post(
+            "/api/projects/Mayapur%20Flyover/contractors/",
+            {"contractor_name": "Alias Dummy Contractor"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data["data"]["project_name"], "Miyapur Flyover")
+        self.assertEqual(response.data["data"]["contractor_name"], "Alias Dummy Contractor")

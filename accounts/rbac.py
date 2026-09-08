@@ -68,12 +68,19 @@ USER_MANAGEMENT_ROLES = {
 
 ALL_PROJECT_ROLES = ADMIN_ROLES | SITE_ENGINEER_ROLES | {ROLE_TEAM_LEADER, ROLE_TEAM_LEAD_ALIAS}
 
+# Frontend / legacy spellings → canonical Project.name in DB.
+# Keys must be lowercase; values are the exact DB names.
+PROJECT_NAME_ALIASES: dict[str, str] = {
+    "mayapur flyover": "Miyapur Flyover",
+}
+
 
 def normalize_project_name(name: str | None) -> str:
-    """Decode URL-encoded names and collapse extra whitespace."""
+    """Decode URL-encoded names, collapse whitespace, and apply known aliases."""
     if not name:
         return ""
-    return " ".join(unquote(str(name)).strip().split())
+    cleaned = " ".join(unquote(str(name)).strip().split())
+    return PROJECT_NAME_ALIASES.get(cleaned.lower(), cleaned)
 
 
 # ---------------------------------------------------------------------------
