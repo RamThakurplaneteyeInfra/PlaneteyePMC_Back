@@ -234,10 +234,16 @@ _FRONTEND_DEV_ORIGINS = [
     'http://localhost:5174',
     'http://localhost:5175',
     'http://localhost:5176',
+    'http://localhost:5177',
+    'http://localhost:5178',
+    'http://localhost:5179',
     'http://127.0.0.1:5173',
     'http://127.0.0.1:5174',
     'http://127.0.0.1:5175',
     'http://127.0.0.1:5176',
+    'http://127.0.0.1:5177',
+    'http://127.0.0.1:5178',
+    'http://127.0.0.1:5179',
 ]
 
 CORS_ALLOW_ALL_ORIGINS = False
@@ -248,8 +254,8 @@ for _origin in _cors_env.split(','):
     if _origin and _origin not in CORS_ALLOWED_ORIGINS:
         CORS_ALLOWED_ORIGINS.append(_origin)
 CORS_ALLOWED_ORIGIN_REGEXES = [
-    r"^http://localhost:517[3-6]$",
-    r"^http://127\.0\.0\.1:517[3-6]$",
+    r"^http://localhost:517\d$",
+    r"^http://127\.0\.0\.1:517\d$",
     r"^https://.*\.ngrok(-free)?\.app$",
     r"^https://.*\.ngrok\.io$",
     r"^https://.*\.devtunnels\.ms$",
@@ -303,10 +309,16 @@ CSRF_TRUSTED_ORIGINS = [
     'http://localhost:5174',
     'http://localhost:5175',
     'http://localhost:5176',
+    'http://localhost:5177',
+    'http://localhost:5178',
+    'http://localhost:5179',
     'http://127.0.0.1:5173',
     'http://127.0.0.1:5174',
     'http://127.0.0.1:5175',
     'http://127.0.0.1:5176',
+    'http://127.0.0.1:5177',
+    'http://127.0.0.1:5178',
+    'http://127.0.0.1:5179',
     # VS Code / Cursor Dev Tunnels (backend + prior tunnels)
     'https://ds0df43l-8000.inc1.devtunnels.ms',
     'http://ds0df43l-8000.inc1.devtunnels.ms',
