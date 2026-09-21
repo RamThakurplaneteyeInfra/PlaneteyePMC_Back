@@ -79,6 +79,12 @@ class OrganizationRegistrationValidationTests(SimpleTestCase):
         self.assertFalse(serializer.is_valid())
         self.assertIn("logo", serializer.errors)
 
+    def test_logo_is_optional(self):
+        payload = _payload()
+        del payload["logo"]
+        serializer = OrganizationRegistrationSerializer(data=payload)
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
 
 class OrganizationRegistrationAPITest(APITestCase):
     def setUp(self):
@@ -203,6 +209,20 @@ class OrganizationRegistrationAPITest(APITestCase):
         self.assertFalse(bool(row.logo))
         mock_notify.assert_called_once()
 
+    @patch("organization_registrations.views.notify_organization_registration")
+    def test_registration_without_logo_returns_201(self, mock_notify):
+        payload = _payload()
+        del payload["logo"]
+        response = self.client.post(URL, payload, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertTrue(response.data["success"])
+        row = OrganizationRegistration.objects.get()
+        self.assertFalse(bool(row.logo))
+        self.assertEqual(row.logo_s3_key, "")
+        self.assertEqual(row.logo_s3_url, "")
+        self.assertEqual(response.data["data"]["logo_url"], "")
+        mock_notify.assert_called_once()
+
     @patch("organization_registrations.storage.media_filesystem_writable", return_value=False)
     @patch("organization_registrations.storage.is_s3_configured", return_value=False)
     @patch("organization_registrations.storage.is_boto3_available", return_value=True)
@@ -220,3 +240,17 @@ class OrganizationRegistrationAPITest(APITestCase):
             " ".join(str(m) for m in response.data["errors"]["logo"]),
         )
         self.assertFalse(OrganizationRegistration.objects.exists())
+
+    @patch("organization_registrations.views.notify_organization_registration")
+    @patch("organization_registrations.storage.media_filesystem_writable", return_value=False)
+    @patch("organization_registrations.storage.is_s3_configured", return_value=False)
+    @patch("organization_registrations.storage.is_boto3_available", return_value=True)
+    def test_serverless_without_logo_succeeds_without_s3(
+        self, _boto, _cfg, _writable, mock_notify
+    ):
+        payload = _payload()
+        del payload["logo"]
+        response = self.client.post(URL, payload, format="multipart")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertTrue(OrganizationRegistration.objects.exists())
+        mock_notify.assert_called_once()

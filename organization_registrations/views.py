@@ -65,7 +65,7 @@ class OrganizationRegistrationCreateView(APIView):
         operation_summary="Submit organization registration request",
         operation_description=(
             "Public onboarding request. Multipart form with organization details "
-            "and a logo. Does not create a user account or login. "
+            "and an optional logo. Does not create a user account or login. "
             "No Authorization header. Use POST and OPTIONS."
         ),
         tags=["Organization Registrations"],

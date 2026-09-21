@@ -17,7 +17,12 @@ def _required_trimmed(value, message):
 
 
 class OrganizationRegistrationSerializer(serializers.ModelSerializer):
-    logo = serializers.FileField(write_only=True, required=True, allow_empty_file=False)
+    logo = serializers.FileField(
+        write_only=True,
+        required=False,
+        allow_null=True,
+        allow_empty_file=False,
+    )
     logo_url = serializers.SerializerMethodField(read_only=True)
 
     official_email = serializers.EmailField(
@@ -64,7 +69,7 @@ class OrganizationRegistrationSerializer(serializers.ModelSerializer):
             "pin": {"error_messages": {"required": "PIN / postal code is required.", "blank": "PIN / postal code is required."}},
             "phone": {"error_messages": {"required": "Phone is required.", "blank": "Phone is required."}},
             "admin_name": {"error_messages": {"required": "Admin name is required.", "blank": "Admin name is required."}},
-            "logo": {"error_messages": {"required": "Organization logo is required.", "empty": "Please upload a non-empty logo file."}},
+            "logo": {"error_messages": {"empty": "Please upload a non-empty logo file."}},
         }
 
     def get_logo_url(self, obj):
@@ -98,13 +103,26 @@ class OrganizationRegistrationSerializer(serializers.ModelSerializer):
         return _required_trimmed(value, "Admin email is required.").lower()
 
     def validate_logo(self, value):
+        if value is None:
+            return None
         filename, content_type = validate_logo(value)
         self.context["logo_original_name"] = filename
         self.context["logo_content_type"] = content_type
         return value
 
     def create(self, validated_data):
-        uploaded = validated_data.pop("logo")
+        uploaded = validated_data.pop("logo", None)
+
+        # No logo: skip S3/local media entirely (avoids Vercel read-only / missing AWS 503).
+        if not uploaded:
+            return OrganizationRegistration.objects.create(
+                logo_original_name="",
+                logo_s3_key="",
+                logo_s3_url="",
+                status=OrganizationRegistration.STATUS_PENDING,
+                **validated_data,
+            )
+
         original_name = self.context.get("logo_original_name") or getattr(
             uploaded, "name", "logo"
         )
