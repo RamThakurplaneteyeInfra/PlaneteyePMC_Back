@@ -170,6 +170,9 @@ urlpatterns = [
 
     # Monthly Progress Report (server-side aggregation preview)
     path('api/', include('mpr.urls')),
+
+    # Public organization onboarding request (no JWT, no user/workspace created)
+    path('api/', include('organization_registrations.urls')),
 ]
 
 if settings.DEBUG:

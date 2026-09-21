@@ -22,8 +22,10 @@ import dj_database_url
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Load .env from project root (not cwd — reliable when runserver cwd varies)
+# Load .env from PlaneteyePMC_Back, then workspace root as fallback.
+# Existing keys are not overwritten, so PlaneteyePMC_Back/.env wins if both exist.
 load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR.parent / ".env")
 
 
 # Quick-start development settings - unsuitable for production
@@ -90,6 +92,7 @@ INSTALLED_APPS = [
     'tutorial_videos.apps.TutorialVideosConfig',
     'mpr.apps.MprConfig',
     'core.apps.CoreConfig',
+    'organization_registrations.apps.OrganizationRegistrationsConfig',
 ]
 
 MIDDLEWARE = [
@@ -218,13 +221,34 @@ MEDIA_ROOT = BASE_DIR / 'media'
 BASE_URL = os.environ.get('RENDER_EXTERNAL_URL', os.environ.get('BASE_URL', 'http://localhost:8000'))
 
 # -----------------------------------------------------------------------------
-# CORS — allow all origins (*)
-# CORS_ALLOW_ALL_ORIGINS=True; regex below supports credentialed requests
-# (browser forbids Access-Control-Allow-Origin: * with credentials).
+# CORS — credentialed browser requests (localhost Vite + ngrok)
+# Browsers reject Access-Control-Allow-Origin: * with credentials, so echo
+# explicit origins / regex instead of a bare wildcard.
 # -----------------------------------------------------------------------------
-CORS_ALLOW_ALL_ORIGINS = True
+_FRONTEND_DEV_ORIGINS = [
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://localhost:5175',
+    'http://localhost:5176',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:5174',
+    'http://127.0.0.1:5175',
+    'http://127.0.0.1:5176',
+]
+
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOWED_ORIGINS = list(_FRONTEND_DEV_ORIGINS)
+_cors_env = os.environ.get('CORS_ALLOWED_ORIGINS', '')
+for _origin in _cors_env.split(','):
+    _origin = _origin.strip().strip('"').strip("'")
+    if _origin and _origin not in CORS_ALLOWED_ORIGINS:
+        CORS_ALLOWED_ORIGINS.append(_origin)
 CORS_ALLOWED_ORIGIN_REGEXES = [
-    r"^.+$",  # any Origin
+    r"^http://localhost:517[3-6]$",
+    r"^http://127\.0\.0\.1:517[3-6]$",
+    r"^https://.*\.ngrok(-free)?\.app$",
+    r"^https://.*\.ngrok\.io$",
+    r"^https://.*\.devtunnels\.ms$",
 ]
 CORS_ALLOW_CREDENTIALS = True
 
@@ -235,6 +259,7 @@ CORS_ALLOW_METHODS = [
     'PATCH',
     'POST',
     'PUT',
+    'HEAD',
 ]
 
 CORS_ALLOW_HEADERS = [
@@ -250,6 +275,8 @@ CORS_ALLOW_HEADERS = [
     'x-role',
     'baggage',
     'sentry-trace',
+    # Required so the browser preflight succeeds when the FE hits ngrok
+    'ngrok-skip-browser-warning',
 ]
 
 CORS_EXPOSE_HEADERS = [
@@ -266,11 +293,16 @@ CORS_URLS_REGEX = r'^.*$'
 CSRF_TRUSTED_ORIGINS = [
     'http://localhost:8000',
     'http://127.0.0.1:8000',
-    'http://localhost:5173',
     'http://localhost:3000',
-    'http://127.0.0.1:5173',
     'http://127.0.0.1:3000',
+    'http://localhost:5173',
     'http://localhost:5174',
+    'http://localhost:5175',
+    'http://localhost:5176',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:5174',
+    'http://127.0.0.1:5175',
+    'http://127.0.0.1:5176',
     # VS Code / Cursor Dev Tunnels (backend + prior tunnels)
     'https://ds0df43l-8000.inc1.devtunnels.ms',
     'http://ds0df43l-8000.inc1.devtunnels.ms',
@@ -578,6 +610,14 @@ MEETING_DOCUMENTS_S3_PREFIX = os.environ.get('MEETING_DOCUMENTS_S3_PREFIX', 'pmc
 EOT_DOCUMENTS_S3_PREFIX = os.environ.get('EOT_DOCUMENTS_S3_PREFIX', 'eot')
 # Project Feedback attachments — configurable S3 folder (bucket URL configured later).
 FEEDBACK_ATTACHMENTS_S3_PREFIX = os.environ.get('FEEDBACK_ATTACHMENTS_S3_PREFIX', 'feedback')
+# Public organization registration logos — media FileField + optional S3 copy.
+ORGANIZATION_LOGOS_S3_PREFIX = os.environ.get(
+    'ORGANIZATION_LOGOS_S3_PREFIX', 'organization-registrations'
+)
+ORGANIZATION_REGISTRATION_NOTIFY_EMAIL = os.environ.get(
+    'ORGANIZATION_REGISTRATION_NOTIFY_EMAIL',
+    'planetedevm@gmail.com',
+)
 # Tutorial videos → s3://{bucket}/tutorial/temporary|optimized/…
 TUTORIAL_VIDEOS_S3_PREFIX = os.environ.get('TUTORIAL_VIDEOS_S3_PREFIX', 'tutorial')
 TUTORIAL_VIDEO_MAX_UPLOAD_MB = int(os.environ.get('TUTORIAL_VIDEO_MAX_UPLOAD_MB', '500'))

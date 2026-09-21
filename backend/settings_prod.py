@@ -166,8 +166,25 @@ CORS_ALLOWED_ORIGINS = _split_env_list(os.environ.get('CORS_ALLOWED_ORIGINS', ''
 # Reuse CSRF trusted origins if CORS list was not set (avoids boot crash / 502).
 if not CORS_ALLOWED_ORIGINS:
     CORS_ALLOWED_ORIGINS = _split_env_list(os.environ.get('CSRF_TRUSTED_ORIGINS', ''))
+for _origin in [
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://localhost:5175',
+    'http://localhost:5176',
+    'http://127.0.0.1:5173',
+    'http://127.0.0.1:5174',
+    'http://127.0.0.1:5175',
+    'http://127.0.0.1:5176',
+]:
+    if _origin not in CORS_ALLOWED_ORIGINS:
+        CORS_ALLOWED_ORIGINS.append(_origin)
 CORS_ALLOW_ALL_ORIGINS = False
-CORS_ALLOWED_ORIGIN_REGEXES = []
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^http://localhost:517[3-6]$",
+    r"^http://127\.0\.0\.1:517[3-6]$",
+    r"^https://.*\.ngrok(-free)?\.app$",
+    r"^https://.*\.ngrok\.io$",
+]
 CORS_ALLOW_CREDENTIALS = True
 if not CORS_ALLOWED_ORIGINS:
     # Boot without crashing; browser clients will get CORS errors until configured.

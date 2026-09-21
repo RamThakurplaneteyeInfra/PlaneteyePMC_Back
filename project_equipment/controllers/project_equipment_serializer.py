@@ -63,6 +63,7 @@ class ProjectEquipmentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ProjectEquipment
+        ref_name = "ProjectEquipmentRecord"
         fields = [
             "id",
             "projectName",

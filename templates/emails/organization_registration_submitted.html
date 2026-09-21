@@ -1,0 +1,24 @@
+{% extends "emails/base_email.html" %}
+{% block title %}New organization registration{% endblock %}
+{% block preheader %}A new organization registration request was submitted on the PlanetEye PMC portal.{% endblock %}
+{% block accent %}#0f4c81{% endblock %}
+{% block eyebrow %}Organization Onboarding{% endblock %}
+{% block heading %}New organization registration request{% endblock %}
+{% block introduction %}A public registration request was submitted. No user account or login was created.{% endblock %}
+{% block content %}
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f7fafc;border:1px solid #e2e9ef;border-radius:10px;overflow:hidden;">
+<tr><td style="padding:12px 16px;color:#6b7c8c;width:36%;font-size:13px;">Request ID</td><td style="padding:12px 16px;font-weight:700;color:#123047;">{{ registration.id }}</td></tr>
+<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Legal name</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ registration.legal_name }}</td></tr>
+<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Display name</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ registration.display_name }}</td></tr>
+<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Office address</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ registration.office_address }}</td></tr>
+<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">City</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ registration.city }}</td></tr>
+<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">PIN</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ registration.pin }}</td></tr>
+<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Phone</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ registration.phone }}</td></tr>
+<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Official email</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ registration.official_email }}</td></tr>
+<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Admin name</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ registration.admin_name }}</td></tr>
+<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Admin email</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ registration.admin_email }}</td></tr>
+<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Logo filename</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ logo_filename }}</td></tr>
+<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Status</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ registration.status }}</td></tr>
+</table>
+<p style="margin:20px 0 0;font-size:14px;line-height:1.7;color:#4f6272;">Contact the admin to complete onboarding. Do not treat this request as an active account.</p>
+{% endblock %}

@@ -171,6 +171,22 @@ FIELD_FRIENDLY_MESSAGES: dict[str, dict[str, str]] = {
         "required": "Please describe the issue.",
         "blank": "Please describe the issue.",
     },
+    "official_email": {
+        "required": "Official email is required.",
+        "blank": "Official email is required.",
+        "invalid": "Enter a valid official email.",
+    },
+    "admin_email": {
+        "required": "Admin email is required.",
+        "blank": "Admin email is required.",
+        "invalid": "Enter a valid admin email.",
+    },
+    "logo": {
+        "required": "Organization logo is required.",
+        "null": "Organization logo is required.",
+        "empty": "Please upload a non-empty logo file.",
+        "invalid": "Logo must be a PNG, JPG, JPEG, WEBP, or SVG file.",
+    },
 }
 
 # Regex patterns for messages that include dynamic values

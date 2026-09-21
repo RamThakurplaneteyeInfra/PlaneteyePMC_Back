@@ -90,6 +90,11 @@ class FriendlyAPIErrorMiddleware(MiddlewareMixin):
         path = getattr(request, "path", "") or ""
         if not path.startswith("/api/"):
             return response
+        # Public onboarding POST keeps field-keyed error dicts for the /register UI.
+        if path.rstrip("/") == "/api/organization-registrations":
+            return response
+        if getattr(response, "_pmc_preserve_error_envelope", False):
+            return response
 
         status_code = getattr(response, "status_code", 200) or 200
         if status_code < 400:
