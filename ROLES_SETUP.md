@@ -21,7 +21,7 @@ cd backend
 python manage.py migrate accounts
 ```
 
-### Step 2: Create Roles (Groups)
+### Step 2: Create Roles (Group)
 
 ```bash
 python manage.py create_roles
