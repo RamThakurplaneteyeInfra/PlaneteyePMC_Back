@@ -1,7 +1,12 @@
 from rest_framework import serializers
 
 from .models import OrganizationRegistration
-from .storage import maybe_upload_logo_to_s3, validate_logo
+from .storage import (
+    LOGO_STORAGE_UNAVAILABLE,
+    LogoStorageError,
+    persist_registration_logo,
+    validate_logo,
+)
 
 
 def _required_trimmed(value, message):
@@ -93,18 +98,46 @@ class OrganizationRegistrationSerializer(serializers.ModelSerializer):
         return _required_trimmed(value, "Admin email is required.").lower()
 
     def validate_logo(self, value):
-        filename, _content_type = validate_logo(value)
+        filename, content_type = validate_logo(value)
         self.context["logo_original_name"] = filename
+        self.context["logo_content_type"] = content_type
         return value
 
     def create(self, validated_data):
+        uploaded = validated_data.pop("logo")
         original_name = self.context.get("logo_original_name") or getattr(
-            validated_data.get("logo"), "name", ""
+            uploaded, "name", "logo"
         )
-        instance = OrganizationRegistration.objects.create(
+        content_type = self.context.get("logo_content_type") or "application/octet-stream"
+
+        try:
+            stored = persist_registration_logo(
+                uploaded,
+                original_name=original_name,
+                content_type=content_type,
+            )
+        except LogoStorageError:
+            # Propagate so the view returns 503 (not an unhandled 500).
+            raise
+
+        instance = OrganizationRegistration(
             logo_original_name=original_name,
+            logo_s3_key=stored["logo_s3_key"],
+            logo_s3_url=stored["logo_s3_url"],
             status=OrganizationRegistration.STATUS_PENDING,
             **validated_data,
         )
-        maybe_upload_logo_to_s3(instance)
+        if stored["logo_content"] is not None:
+            try:
+                instance.logo.save(
+                    stored["logo_name"] or original_name,
+                    stored["logo_content"],
+                    save=False,
+                )
+            except OSError as exc:
+                raise LogoStorageError(LOGO_STORAGE_UNAVAILABLE) from exc
+        try:
+            instance.save()
+        except OSError as exc:
+            raise LogoStorageError(LOGO_STORAGE_UNAVAILABLE) from exc
         return instance

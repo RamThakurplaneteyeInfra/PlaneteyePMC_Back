@@ -2,7 +2,7 @@
 
 import shutil
 import tempfile
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -12,7 +12,7 @@ from rest_framework.test import APITestCase
 
 from organization_registrations.models import OrganizationRegistration
 from organization_registrations.serializers import OrganizationRegistrationSerializer
-from organization_registrations.storage import MAX_LOGO_BYTES
+from organization_registrations.storage import LOGO_STORAGE_UNAVAILABLE, MAX_LOGO_BYTES
 
 User = get_user_model()
 
@@ -83,7 +83,13 @@ class OrganizationRegistrationValidationTests(SimpleTestCase):
 class OrganizationRegistrationAPITest(APITestCase):
     def setUp(self):
         self.media_dir = tempfile.mkdtemp()
-        self._media_override = override_settings(MEDIA_ROOT=self.media_dir)
+        # Force local FileField path: empty AWS so tests do not hit real S3.
+        self._media_override = override_settings(
+            MEDIA_ROOT=self.media_dir,
+            AWS_ACCESS_KEY_ID="",
+            AWS_SECRET_ACCESS_KEY="",
+            AWS_STORAGE_BUCKET_NAME="",
+        )
         self._media_override.enable()
         self.user_count_before = User.objects.count()
 
@@ -154,9 +160,63 @@ class OrganizationRegistrationAPITest(APITestCase):
         )
         self.assertFalse(OrganizationRegistration.objects.exists())
 
+    def test_invalid_logo_type_returns_400(self):
+        bad = SimpleUploadedFile("logo.gif", b"GIF89a" + b"\x00" * 16, content_type="image/gif")
+        response = self._post(logo=bad)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(response.data["success"])
+        self.assertIn("logo", response.data["errors"])
+        self.assertFalse(OrganizationRegistration.objects.exists())
+
     @patch("services.email_utils.send_html_email", side_effect=RuntimeError("smtp down"))
     def test_email_failure_still_returns_201(self, _mock_send):
         response = self._post()
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
         self.assertEqual(OrganizationRegistration.objects.count(), 1)
         self.assertEqual(User.objects.count(), self.user_count_before)
+
+    @patch("organization_registrations.views.notify_organization_registration")
+    @patch("organization_registrations.storage.is_s3_configured", return_value=True)
+    @patch("organization_registrations.storage.is_boto3_available", return_value=True)
+    @patch("organization_registrations.storage.get_s3_client")
+    def test_s3_path_skips_local_media_and_returns_201(
+        self, mock_get_client, _boto, _cfg, mock_notify
+    ):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        with override_settings(
+            AWS_ACCESS_KEY_ID="x",
+            AWS_SECRET_ACCESS_KEY="y",
+            AWS_STORAGE_BUCKET_NAME="pmcproject",
+            AWS_S3_REGION_NAME="ap-south-1",
+        ):
+            response = self._post()
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        mock_client.upload_fileobj.assert_called_once()
+        row = OrganizationRegistration.objects.get()
+        self.assertTrue(row.logo_s3_key)
+        self.assertTrue(row.logo_s3_url)
+        self.assertIn(row.logo_s3_url, response.data["data"]["logo_url"])
+        # S3-primary path does not require a local FileField file.
+        self.assertFalse(bool(row.logo))
+        mock_notify.assert_called_once()
+
+    @patch("organization_registrations.storage.media_filesystem_writable", return_value=False)
+    @patch("organization_registrations.storage.is_s3_configured", return_value=False)
+    @patch("organization_registrations.storage.is_boto3_available", return_value=True)
+    def test_serverless_without_s3_returns_503_not_500(self, _boto, _cfg, _writable):
+        response = self._post()
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            response.data,
+        )
+        self.assertFalse(response.data["success"])
+        self.assertIn("logo", response.data["errors"])
+        self.assertIn(
+            LOGO_STORAGE_UNAVAILABLE,
+            " ".join(str(m) for m in response.data["errors"]["logo"]),
+        )
+        self.assertFalse(OrganizationRegistration.objects.exists())

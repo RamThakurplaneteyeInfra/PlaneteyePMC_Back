@@ -215,7 +215,11 @@ STATICFILES_DIRS = [
 ]
 
 MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+# Vercel / Lambda: only /tmp is writable. Production logos still go to S3.
+if os.environ.get('VERCEL') or os.environ.get('AWS_LAMBDA_FUNCTION_NAME'):
+    MEDIA_ROOT = Path('/tmp') / 'pmc_media'
+else:
+    MEDIA_ROOT = BASE_DIR / 'media'
 
 # Base URL for generating absolute URLs (e.g., in emails)
 BASE_URL = os.environ.get('RENDER_EXTERNAL_URL', os.environ.get('BASE_URL', 'http://localhost:8000'))

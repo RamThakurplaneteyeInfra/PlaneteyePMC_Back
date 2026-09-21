@@ -40,7 +40,12 @@ class OrganizationRegistration(models.Model):
     admin_name = models.CharField(max_length=255)
     admin_email = models.EmailField()
 
-    logo = models.FileField(upload_to=organization_logo_upload_to)
+    # Optional on disk: production (Vercel) stores logos in S3 only.
+    logo = models.FileField(
+        upload_to=organization_logo_upload_to,
+        blank=True,
+        null=True,
+    )
     logo_original_name = models.CharField(max_length=255, blank=True, default="")
     logo_s3_key = models.CharField(max_length=700, blank=True, default="")
     logo_s3_url = models.URLField(max_length=1000, blank=True, default="")

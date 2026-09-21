@@ -109,7 +109,12 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedStaticFilesStorage'
 
 # ================= MEDIA FILES =================
 MEDIA_URL = '/media/'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+# Vercel / Lambda: project disk is read-only — only /tmp is writable.
+# Organization logos still prefer S3; this avoids hard crashes for any local FileField spill.
+if os.environ.get('VERCEL') or os.environ.get('AWS_LAMBDA_FUNCTION_NAME'):
+    MEDIA_ROOT = os.path.join('/tmp', 'pmc_media')
+else:
+    MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 # Site image uploads: up to 20 × 10 MB (+ multipart overhead).
 # Keep total request body limit high so existing large uploads still succeed.
