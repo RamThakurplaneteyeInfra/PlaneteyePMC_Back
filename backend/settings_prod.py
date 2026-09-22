@@ -58,6 +58,14 @@ if not ALLOWED_HOSTS:
         'Set ALLOWED_HOSTS explicitly in Railway Variables.'
     )
 
+# Known Vercel backend host (PlanetEye PMC API).
+for _host in ('planeteye-pmc-back-4fa2.vercel.app',):
+    if _host not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(_host)
+# When running on Vercel, also accept the platform wildcard host pattern.
+if os.environ.get('VERCEL') and '.vercel.app' not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append('.vercel.app')
+
 # Optional PaaS hostnames when explicitly enabled
 if os.environ.get('ALLOW_RENDER_HOSTS', '').lower() in ('1', 'true', 'yes'):
     for _host in ('.onrender.com', '.vercel.app', '.up.railway.app'):
@@ -162,16 +170,9 @@ for _origin in _split_env_list(os.environ.get('CSRF_TRUSTED_ORIGINS', '')):
     if _origin not in CSRF_TRUSTED_ORIGINS:
         CSRF_TRUSTED_ORIGINS.append(_origin)
 
-SECURE_BROWSER_XSS_FILTER = True
-SECURE_CONTENT_TYPE_NOSNIFF = True
-X_FRAME_OPTIONS = 'DENY'
-
-# ================= CORS — explicit origins (required for browser FE) =================
-CORS_ALLOWED_ORIGINS = _split_env_list(os.environ.get('CORS_ALLOWED_ORIGINS', ''))
-# Reuse CSRF trusted origins if CORS list was not set (avoids boot crash / 502).
-if not CORS_ALLOWED_ORIGINS:
-    CORS_ALLOWED_ORIGINS = _split_env_list(os.environ.get('CSRF_TRUSTED_ORIGINS', ''))
-for _origin in [
+# Hosted FE + local Vite (CSRF requires scheme + host; no wildcards).
+_DEFAULT_FRONTEND_ORIGINS = [
+    'https://planeteye-pmc-front.vercel.app',
     'http://localhost:5173',
     'http://localhost:5174',
     'http://localhost:5175',
@@ -186,13 +187,31 @@ for _origin in [
     'http://127.0.0.1:5177',
     'http://127.0.0.1:5178',
     'http://127.0.0.1:5179',
-]:
+]
+for _origin in _DEFAULT_FRONTEND_ORIGINS:
+    if _origin not in CSRF_TRUSTED_ORIGINS:
+        CSRF_TRUSTED_ORIGINS.append(_origin)
+
+SECURE_BROWSER_XSS_FILTER = True
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = 'DENY'
+
+# ================= CORS — explicit origins (required for browser FE) =================
+# Prefer CORS_ALLOWED_ORIGINS env on Vercel; code defaults cover hosted FE + Vite.
+# Never use CORS_ALLOW_ALL_ORIGINS with credentials (browsers reject *).
+CORS_ALLOWED_ORIGINS = _split_env_list(os.environ.get('CORS_ALLOWED_ORIGINS', ''))
+# Reuse CSRF trusted origins if CORS list was not set (avoids boot crash / 502).
+if not CORS_ALLOWED_ORIGINS:
+    CORS_ALLOWED_ORIGINS = _split_env_list(os.environ.get('CSRF_TRUSTED_ORIGINS', ''))
+for _origin in _DEFAULT_FRONTEND_ORIGINS:
     if _origin not in CORS_ALLOWED_ORIGINS:
         CORS_ALLOWED_ORIGINS.append(_origin)
 CORS_ALLOW_ALL_ORIGINS = False
+# 5170–5179 covers busy Vite ports without listing every one.
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^http://localhost:517\d$",
     r"^http://127\.0\.0\.1:517\d$",
+    r"^https://planeteye-pmc-front\.vercel\.app$",
     r"^https://.*\.ngrok(-free)?\.app$",
     r"^https://.*\.ngrok\.io$",
 ]
@@ -203,7 +222,7 @@ if not CORS_ALLOWED_ORIGINS:
 
     logging.getLogger('django').warning(
         'CORS_ALLOWED_ORIGINS is empty — set it to your frontend origin(s), '
-        'e.g. https://your-app.vercel.app'
+        'e.g. https://planeteye-pmc-front.vercel.app'
     )
 
 # ================= CHANNELS =================

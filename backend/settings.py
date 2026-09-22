@@ -230,6 +230,7 @@ BASE_URL = os.environ.get('RENDER_EXTERNAL_URL', os.environ.get('BASE_URL', 'htt
 # explicit origins / regex instead of a bare wildcard.
 # -----------------------------------------------------------------------------
 _FRONTEND_DEV_ORIGINS = [
+    'https://planeteye-pmc-front.vercel.app',
     'http://localhost:5173',
     'http://localhost:5174',
     'http://localhost:5175',
@@ -246,6 +247,7 @@ _FRONTEND_DEV_ORIGINS = [
     'http://127.0.0.1:5179',
 ]
 
+# Never use Access-Control-Allow-Origin: * with credentials.
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = list(_FRONTEND_DEV_ORIGINS)
 _cors_env = os.environ.get('CORS_ALLOWED_ORIGINS', '')
@@ -256,6 +258,7 @@ for _origin in _cors_env.split(','):
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^http://localhost:517\d$",
     r"^http://127\.0\.0\.1:517\d$",
+    r"^https://planeteye-pmc-front\.vercel\.app$",
     r"^https://.*\.ngrok(-free)?\.app$",
     r"^https://.*\.ngrok\.io$",
     r"^https://.*\.devtunnels\.ms$",
@@ -301,6 +304,7 @@ CORS_URLS_REGEX = r'^.*$'
 
 # Trusted origins for CSRF (must include scheme + host; add your dev servers)
 CSRF_TRUSTED_ORIGINS = [
+    'https://planeteye-pmc-front.vercel.app',
     'http://localhost:8000',
     'http://127.0.0.1:8000',
     'http://localhost:3000',
