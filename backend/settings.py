@@ -619,9 +619,9 @@ else:
 # ==============================
 AWS_ACCESS_KEY_ID = os.environ.get('AWS_ACCESS_KEY_ID', '')
 AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY', '')
-AWS_STORAGE_BUCKET_NAME = os.environ.get('AWS_STORAGE_BUCKET_NAME', 'pmcproject')
+AWS_STORAGE_BUCKET_NAME = os.environ.get('AWS_STORAGE_BUCKET_NAME', 'planeteye-pmc')
 AWS_S3_REGION_NAME = os.environ.get('AWS_S3_REGION_NAME', 'ap-south-1')
-AWS_S3_UPLOAD_PREFIX = os.environ.get('AWS_S3_UPLOAD_PREFIX', 'upload')
+AWS_S3_UPLOAD_PREFIX = os.environ.get('AWS_S3_UPLOAD_PREFIX', 'images')
 AWS_S3_CUSTOM_DOMAIN = os.environ.get('AWS_S3_CUSTOM_DOMAIN', '')
 # Primary: s3 | cloudinary (falls back to the other unless SITE_IMAGE_S3_ONLY=True)
 SITE_IMAGE_STORAGE_PRIMARY = os.environ.get('SITE_IMAGE_STORAGE_PRIMARY', 's3')
