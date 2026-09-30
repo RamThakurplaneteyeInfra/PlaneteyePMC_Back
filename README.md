@@ -17,7 +17,7 @@ The API uses HTTP Basic Authentication. Include the `Authorization` header with 
 **Example using curl:**
 ```bash
 curl -u username:password https://api.example.com/endpoint/
-```
+
 
 **Example using Python requests:**
 ```python
