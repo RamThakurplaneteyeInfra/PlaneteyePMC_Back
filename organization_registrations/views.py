@@ -8,15 +8,19 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .notifications import notify_organization_registration
+from .notifications import attempt_organization_registration_notification
 from .serializers import OrganizationRegistrationSerializer
 from .storage import LOGO_STORAGE_UNAVAILABLE, LogoStorageError
 
 logger = logging.getLogger(__name__)
 
-SUCCESS_MESSAGE = (
-    "Organization registration submitted. PlanetEye will contact the admin "
-    "to complete onboarding. No login was created."
+EMAIL_SENT_MESSAGE = (
+    "Registration saved and the PlanetEye notification email was accepted for delivery. "
+    "No user account or login was created."
+)
+EMAIL_FAILED_MESSAGE = (
+    "Registration saved, but the notification email could not be sent. "
+    "It is recorded and can be retried by an administrator. No user account or login was created."
 )
 
 
@@ -125,13 +129,10 @@ class OrganizationRegistrationCreateView(APIView):
                 "Registration service is temporarily unavailable. Please try again later."
             )
 
-        try:
-            notify_organization_registration(registration)
-        except Exception:
-            logger.exception(
-                "Organization registration email notify failed id=%s",
-                registration.pk,
-            )
+        notification_sent = attempt_organization_registration_notification(registration)
+        notification_message = (
+            EMAIL_SENT_MESSAGE if notification_sent else EMAIL_FAILED_MESSAGE
+        )
 
         output = OrganizationRegistrationSerializer(
             registration,
@@ -140,7 +141,10 @@ class OrganizationRegistrationCreateView(APIView):
         return Response(
             {
                 "success": True,
-                "message": SUCCESS_MESSAGE,
+                "registration_saved": True,
+                "notification_status": registration.notification_status,
+                "notification_message": notification_message,
+                "message": notification_message,
                 "data": output.data,
             },
             status=status.HTTP_201_CREATED,

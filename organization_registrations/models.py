@@ -30,6 +30,15 @@ class OrganizationRegistration(models.Model):
         (STATUS_REJECTED, "Rejected"),
     ]
 
+    NOTIFICATION_PENDING = "pending"
+    NOTIFICATION_SENT = "sent"
+    NOTIFICATION_FAILED = "failed"
+    NOTIFICATION_STATUS_CHOICES = [
+        (NOTIFICATION_PENDING, "Pending"),
+        (NOTIFICATION_SENT, "Sent"),
+        (NOTIFICATION_FAILED, "Failed"),
+    ]
+
     legal_name = models.CharField(max_length=255)
     display_name = models.CharField(max_length=255)
     office_address = models.TextField()
@@ -54,6 +63,12 @@ class OrganizationRegistration(models.Model):
         max_length=20,
         choices=STATUS_CHOICES,
         default=STATUS_PENDING,
+        db_index=True,
+    )
+    notification_status = models.CharField(
+        max_length=20,
+        choices=NOTIFICATION_STATUS_CHOICES,
+        default=NOTIFICATION_PENDING,
         db_index=True,
     )
     submitted_at = models.DateTimeField(auto_now_add=True, db_index=True)

@@ -5,12 +5,15 @@ import tempfile
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
+from django.core import mail
+from django.core.mail.backends.base import BaseEmailBackend
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from organization_registrations.models import OrganizationRegistration
+from organization_registrations.notifications import attempt_organization_registration_notification
 from organization_registrations.serializers import OrganizationRegistrationSerializer
 from organization_registrations.storage import LOGO_STORAGE_UNAVAILABLE, MAX_LOGO_BYTES
 
@@ -19,6 +22,11 @@ User = get_user_model()
 URL = "/api/organization-registrations/"
 
 TINY_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+
+class FailingEmailBackend(BaseEmailBackend):
+    def send_messages(self, email_messages):
+        raise RuntimeError("SMTP provider rejected the message")
 
 
 def _png(name="logo.png", content=TINY_PNG):
@@ -106,12 +114,19 @@ class OrganizationRegistrationAPITest(APITestCase):
     def _post(self, **overrides):
         return self.client.post(URL, _payload(**overrides), format="multipart")
 
-    @patch("organization_registrations.views.notify_organization_registration")
-    def test_happy_path_creates_pending_request_without_user_or_login(self, mock_notify):
-        response = self._post()
+    @override_settings(
+        EMAIL_TRANSPORT="smtp",
+        EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+        BREVO_API_KEY="",
+        ORG_REGISTRATION_NOTIFY_EMAIL="planetedevm@gmail.com",
+    )
+    def test_happy_path_creates_request_and_sends_email_without_user_or_login(self):
+        response = self._post(notify_email="attacker@example.com")
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
         self.assertTrue(response.data["success"])
-        self.assertIn("No login was created", response.data["message"])
+        self.assertTrue(response.data["registration_saved"])
+        self.assertEqual(response.data["notification_status"], "sent")
+        self.assertIn("No user account or login was created", response.data["message"])
 
         data = response.data["data"]
         self.assertEqual(data["legal_name"], "Acme Infrastructure Private Limited")
@@ -120,6 +135,7 @@ class OrganizationRegistrationAPITest(APITestCase):
         self.assertEqual(data["official_email"], "ops@acme.example")
         self.assertEqual(data["admin_email"], "priya@acme.example")
         self.assertEqual(data["status"], "pending")
+        self.assertEqual(data["notification_status"], "sent")
         self.assertTrue(data["logo_url"])
         self.assertIsNotNone(data["id"])
         self.assertIsNotNone(data["submitted_at"])
@@ -129,8 +145,18 @@ class OrganizationRegistrationAPITest(APITestCase):
 
         row = OrganizationRegistration.objects.get(pk=data["id"])
         self.assertEqual(row.status, OrganizationRegistration.STATUS_PENDING)
+        self.assertEqual(row.notification_status, OrganizationRegistration.NOTIFICATION_SENT)
         self.assertTrue(row.logo)
-        mock_notify.assert_called_once()
+        self.assertEqual(len(mail.outbox), 1)
+        sent_email = mail.outbox[0]
+        self.assertEqual(sent_email.to, ["planetedevm@gmail.com"])
+        self.assertIn("Acme Infra", sent_email.subject)
+        body = sent_email.alternatives[0][0]
+        self.assertIn("Acme Infrastructure Private Limited", body)
+        self.assertIn("Priya Shah", body)
+        self.assertIn("priya@acme.example", body)
+        self.assertIn("+91 9876543210", body)
+        self.assertIn(f"ORG-{row.pk}", body)
         self.assertEqual(User.objects.count(), self.user_count_before)
 
     def test_missing_field_returns_400_field_errors(self):
@@ -174,14 +200,35 @@ class OrganizationRegistrationAPITest(APITestCase):
         self.assertIn("logo", response.data["errors"])
         self.assertFalse(OrganizationRegistration.objects.exists())
 
-    @patch("services.email_utils.send_html_email", side_effect=RuntimeError("smtp down"))
-    def test_email_failure_still_returns_201(self, _mock_send):
-        response = self._post()
+    @override_settings(
+        EMAIL_TRANSPORT="smtp",
+        EMAIL_BACKEND="organization_registrations.tests.FailingEmailBackend",
+        ORG_REGISTRATION_NOTIFY_EMAIL="planetedevm@gmail.com",
+    )
+    def test_email_failure_keeps_registration_and_reports_retryable_status(self):
+        response = self._post(notify_email="attacker@example.com")
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertTrue(response.data["registration_saved"])
+        self.assertEqual(response.data["notification_status"], "failed")
+        self.assertIn("could not be sent", response.data["notification_message"])
+        self.assertNotIn("attacker@example.com", response.data["notification_message"])
         self.assertEqual(OrganizationRegistration.objects.count(), 1)
+        row = OrganizationRegistration.objects.get()
+        self.assertEqual(row.notification_status, OrganizationRegistration.NOTIFICATION_FAILED)
         self.assertEqual(User.objects.count(), self.user_count_before)
 
-    @patch("organization_registrations.views.notify_organization_registration")
+        with override_settings(
+            EMAIL_TRANSPORT="smtp",
+            EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+            BREVO_API_KEY="",
+        ):
+            self.assertTrue(attempt_organization_registration_notification(row))
+
+        row.refresh_from_db()
+        self.assertEqual(row.notification_status, OrganizationRegistration.NOTIFICATION_SENT)
+        self.assertEqual(OrganizationRegistration.objects.count(), 1)
+
+    @patch("organization_registrations.views.attempt_organization_registration_notification")
     @patch("organization_registrations.storage.is_s3_configured", return_value=True)
     @patch("organization_registrations.storage.is_boto3_available", return_value=True)
     @patch("organization_registrations.storage.get_s3_client")
@@ -209,7 +256,7 @@ class OrganizationRegistrationAPITest(APITestCase):
         self.assertFalse(bool(row.logo))
         mock_notify.assert_called_once()
 
-    @patch("organization_registrations.views.notify_organization_registration")
+    @patch("organization_registrations.views.attempt_organization_registration_notification")
     def test_registration_without_logo_returns_201(self, mock_notify):
         payload = _payload()
         del payload["logo"]
@@ -241,7 +288,7 @@ class OrganizationRegistrationAPITest(APITestCase):
         )
         self.assertFalse(OrganizationRegistration.objects.exists())
 
-    @patch("organization_registrations.views.notify_organization_registration")
+    @patch("organization_registrations.views.attempt_organization_registration_notification")
     @patch("organization_registrations.storage.media_filesystem_writable", return_value=False)
     @patch("organization_registrations.storage.is_s3_configured", return_value=False)
     @patch("organization_registrations.storage.is_boto3_available", return_value=True)

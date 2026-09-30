@@ -125,6 +125,64 @@ Static files are automatically collected during the Docker build process.
 | `CORS_ALLOW_CREDENTIALS` | Allow CORS credentials | `True` |
 | `CSRF_COOKIE_SECURE` | Secure CSRF cookie | `True` |
 
+## Organization Registration Email
+
+Set these variables on the **backend service** for each deployed environment. The
+registration endpoint ignores the submitted `notify_email` for routing; the backend
+always uses `ORG_REGISTRATION_NOTIFY_EMAIL`.
+
+For the Vercel-hosted API, add these in the backend project's **Settings > Environment
+Variables**, not in the frontend project. Set the production recipient/provider values
+for **Production** and redeploy. For **Preview** and **Development**, use a test
+recipient and appropriate provider credentials, or set `EMAIL_TRANSPORT=disabled`.
+
+Required recipient setting:
+
+```text
+ORG_REGISTRATION_NOTIFY_EMAIL=planetedevm@gmail.com
+```
+
+Email delivery uses the existing Brevo integration. For the recommended transactional
+API transport, configure these in the backend host's environment settings:
+
+```text
+EMAIL_TRANSPORT=brevo_api
+BREVO_API_KEY=<Brevo transactional API key>
+BREVO_FROM_EMAIL=<verified sender address>
+BREVO_FROM_NAME=PlanetEye PMC
+```
+
+Alternatively, use the existing Brevo SMTP transport:
+
+```text
+EMAIL_TRANSPORT=smtp
+BREVO_SMTP_HOST=smtp-relay.brevo.com
+BREVO_SMTP_PORT=587
+BREVO_SMTP_USE_TLS=true
+BREVO_SMTP_USERNAME=<Brevo SMTP username>
+BREVO_SMTP_PASSWORD=<Brevo SMTP key>
+BREVO_FROM_EMAIL=<verified sender address>
+BREVO_FROM_NAME=PlanetEye PMC
+```
+
+Keep API/SMTP credentials only in the backend deployment's secret environment
+configuration; never add them to frontend variables or source control. Configure the
+production backend to notify `planetedevm@gmail.com`. For preview/staging, use a test
+mailbox unless real notifications are intended. Apply the database migration with
+`python manage.py migrate` before serving requests.
+
+The POST response keeps HTTP 201 when the registration is saved and includes
+`registration_saved`, `notification_status` (`sent` or `failed`), and
+`notification_message`. A `sent` status means the configured provider accepted the
+message, not that it reached the inbox. On failure, the saved row remains visible in
+Django admin with a retry action under the notification status filter.
+
+To verify delivery, submit a test multipart registration and confirm the response has
+`notification_status: "sent"`; then check Brevo transactional email logs and the
+`planetedevm@gmail.com` inbox, including Spam. Verify the sender is authenticated in
+Brevo. If the response is `failed`, check backend logs and the provider's delivery
+logs, correct the backend environment settings, and retry the row from Django admin.
+
 ## Troubleshooting
 
 ### Build Fails

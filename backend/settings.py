@@ -533,6 +533,11 @@ CHANNEL_LAYERS = {
 # EMAIL CONFIGURATION
 # ==============================
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+# Registration notifications always go to this server-configured address.
+ORG_REGISTRATION_NOTIFY_EMAIL = os.environ.get(
+    'ORG_REGISTRATION_NOTIFY_EMAIL',
+    'planetedevm@gmail.com',
+).strip()
 # Prefer Brevo transactional API when BREVO_API_KEY is an xkeysib-* key.
 # SMTP remains as fallback / local relay. Never hardcode secrets here.
 BREVO_API_KEY = os.environ.get('BREVO_API_KEY', '')

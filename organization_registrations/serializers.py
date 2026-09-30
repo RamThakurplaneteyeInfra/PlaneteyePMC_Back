@@ -58,9 +58,16 @@ class OrganizationRegistrationSerializer(serializers.ModelSerializer):
             "logo",
             "logo_url",
             "status",
+            "notification_status",
             "submitted_at",
         ]
-        read_only_fields = ["id", "status", "submitted_at", "logo_url"]
+        read_only_fields = [
+            "id",
+            "status",
+            "notification_status",
+            "submitted_at",
+            "logo_url",
+        ]
         extra_kwargs = {
             "legal_name": {"error_messages": {"required": "Organization legal name is required.", "blank": "Organization legal name is required."}},
             "display_name": {"error_messages": {"required": "Display name is required.", "blank": "Display name is required."}},
