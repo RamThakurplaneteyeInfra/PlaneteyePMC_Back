@@ -1,24 +1,213 @@
-{% extends "emails/base_email.html" %}
-{% block title %}New organization registration{% endblock %}
-{% block preheader %}A new organization registration request was submitted on the PlanetEye PMC portal.{% endblock %}
-{% block accent %}#0f4c81{% endblock %}
-{% block eyebrow %}Organization Onboarding{% endblock %}
-{% block heading %}New organization registration request{% endblock %}
-{% block introduction %}A public registration request was submitted. No user account or login was created.{% endblock %}
-{% block content %}
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f7fafc;border:1px solid #e2e9ef;border-radius:10px;overflow:hidden;">
-<tr><td style="padding:12px 16px;color:#6b7c8c;width:36%;font-size:13px;">Registration reference</td><td style="padding:12px 16px;font-weight:700;color:#123047;">ORG-{{ registration.id }}</td></tr>
-<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Legal name</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ registration.legal_name }}</td></tr>
-<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Display name</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ registration.display_name }}</td></tr>
-<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Office address</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ registration.office_address }}</td></tr>
-<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">City</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ registration.city }}</td></tr>
-<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">PIN</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ registration.pin }}</td></tr>
-<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Phone</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ registration.phone }}</td></tr>
-<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Official email</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ registration.official_email }}</td></tr>
-<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Admin name</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ registration.admin_name }}</td></tr>
-<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Admin email</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ registration.admin_email }}</td></tr>
-<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Logo filename</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ logo_filename }}</td></tr>
-<tr><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#6b7c8c;font-size:13px;">Status</td><td style="padding:12px 16px;border-top:1px solid #e8eef3;color:#123047;">{{ registration.status }}</td></tr>
-</table>
-<p style="margin:20px 0 0;font-size:14px;line-height:1.7;color:#4f6272;">Contact the admin to complete onboarding. Do not treat this request as an active account.</p>
-{% endblock %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PlanetEye INFRA-AI - Organization Registration</title>
+</head>
+<body style="margin:0;padding:0;background-color:#e7f0f7;font-family:Segoe UI,Roboto,Helvetica Neue,Arial,sans-serif;-webkit-text-size-adjust:100%;">
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;">
+    A new organization has requested onboarding on the PlanetEye INFRA-AI portal.
+  </div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;background-color:#e7f0f7;margin:0;padding:0;">
+    <tr>
+      <td align="center" style="padding:28px 12px 36px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:620px;background-color:#ffffff;border:1px solid #d5e3ef;border-radius:18px;overflow:hidden;box-shadow:0 8px 24px rgba(23,52,77,0.08);">
+          <!-- Top Accent Color Bar -->
+          <tr>
+            <td style="padding:0;font-size:0;line-height:0;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td width="16%" height="8" style="height:8px;background-color:#1d4ed8;font-size:0;line-height:0;">&nbsp;</td>
+                  <td width="17%" height="8" style="height:8px;background-color:#0ea5e9;font-size:0;line-height:0;">&nbsp;</td>
+                  <td width="17%" height="8" style="height:8px;background-color:#14b8a6;font-size:0;line-height:0;">&nbsp;</td>
+                  <td width="17%" height="8" style="height:8px;background-color:#22c55e;font-size:0;line-height:0;">&nbsp;</td>
+                  <td width="16%" height="8" style="height:8px;background-color:#f59e0b;font-size:0;line-height:0;">&nbsp;</td>
+                  <td width="17%" height="8" style="height:8px;background-color:#f97316;font-size:0;line-height:0;">&nbsp;</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <!-- Logo & Header -->
+          <tr>
+            <td align="center" style="padding:28px 32px 0;background-color:#ffffff;">
+              <img src="https://planeteye-pmc-front.vercel.app/images/planeteye-logo.png" width="104" height="104" alt="PlanetEye INFRA-AI" style="display:block;width:104px;height:104px;border:0;outline:none;text-decoration:none;background-color:#ffffff;" />
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:14px 32px 0;background-color:#ffffff;font-size:24px;line-height:30px;font-weight:700;color:#102844;">
+              PlanetEye INFRA-AI
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:6px 32px 0;background-color:#ffffff;font-size:12px;line-height:18px;letter-spacing:1.4px;text-transform:uppercase;color:#5f7c96;">
+              Organization Registration
+            </td>
+          </tr>
+          <tr>
+            <td align="center" style="padding:16px 32px 8px;background-color:#ffffff;">
+              <span style="display:inline-block;padding:6px 14px;border-radius:999px;background-color:#e8f1fb;font-size:12px;line-height:16px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;color:#1d4ed8;">
+                {{ registration.status|default:"Pending Review" }}
+              </span>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:8px 32px 20px;background-color:#ffffff;font-size:15px;line-height:24px;color:#3d5670;text-align:center;">
+              A new organization has requested onboarding. This is a request only. Do not create a login or workspace automatically.
+            </td>
+          </tr>
+
+          <!-- Data Table -->
+          <tr>
+            <td style="padding:0 24px 8px;background-color:#ffffff;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;border:1px solid #e1ebf3;border-radius:12px;overflow:hidden;">
+                <!-- Section: Organization -->
+                <tr>
+                  <td colspan="2" style="padding:14px 16px 6px;background-color:#ffffff;font-size:12px;line-height:16px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#0e7490;">
+                    Organization
+                  </td>
+                </tr>
+                <tr>
+                  <td width="168" valign="top" style="width:168px;padding:10px 16px;background-color:#ffffff;font-size:12px;line-height:18px;letter-spacing:0.4px;text-transform:uppercase;color:#6a8298;">
+                    Legal Name
+                  </td>
+                  <td valign="top" style="padding:10px 16px;background-color:#ffffff;font-size:15px;line-height:22px;font-weight:600;color:#102844;">
+                    {{ registration.legal_name }}
+                  </td>
+                </tr>
+                <tr>
+                  <td width="168" valign="top" style="width:168px;padding:10px 16px;background-color:#f5f9fc;font-size:12px;line-height:18px;letter-spacing:0.4px;text-transform:uppercase;color:#6a8298;">
+                    Display Name
+                  </td>
+                  <td valign="top" style="padding:10px 16px;background-color:#f5f9fc;font-size:15px;line-height:22px;font-weight:600;color:#102844;">
+                    {{ registration.display_name }}
+                  </td>
+                </tr>
+
+                <!-- Section: Registered Office -->
+                <tr>
+                  <td colspan="2" style="padding:14px 16px 6px;background-color:#ffffff;border-top:1px solid #e1ebf3;font-size:12px;line-height:16px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#0e7490;">
+                    Registered Office
+                  </td>
+                </tr>
+                <tr>
+                  <td width="168" valign="top" style="width:168px;padding:10px 16px;background-color:#ffffff;font-size:12px;line-height:18px;letter-spacing:0.4px;text-transform:uppercase;color:#6a8298;">
+                    Address
+                  </td>
+                  <td valign="top" style="padding:10px 16px;background-color:#ffffff;font-size:14px;line-height:22px;color:#102844;">
+                    {{ registration.office_address }}
+                  </td>
+                </tr>
+                <tr>
+                  <td width="168" valign="top" style="width:168px;padding:10px 16px;background-color:#f5f9fc;font-size:12px;line-height:18px;letter-spacing:0.4px;text-transform:uppercase;color:#6a8298;">
+                    City
+                  </td>
+                  <td valign="top" style="padding:10px 16px;background-color:#f5f9fc;font-size:14px;line-height:22px;color:#102844;">
+                    {{ registration.city }}
+                  </td>
+                </tr>
+                <tr>
+                  <td width="168" valign="top" style="width:168px;padding:10px 16px;background-color:#ffffff;font-size:12px;line-height:18px;letter-spacing:0.4px;text-transform:uppercase;color:#6a8298;">
+                    PIN / Postal
+                  </td>
+                  <td valign="top" style="padding:10px 16px;background-color:#ffffff;font-size:14px;line-height:22px;color:#102844;">
+                    {{ registration.pin }}
+                  </td>
+                </tr>
+                <tr>
+                  <td width="168" valign="top" style="width:168px;padding:10px 16px;background-color:#f5f9fc;font-size:12px;line-height:18px;letter-spacing:0.4px;text-transform:uppercase;color:#6a8298;">
+                    Phone
+                  </td>
+                  <td valign="top" style="padding:10px 16px;background-color:#f5f9fc;font-size:14px;line-height:22px;color:#102844;">
+                    {{ registration.phone }}
+                  </td>
+                </tr>
+                <tr>
+                  <td width="168" valign="top" style="width:168px;padding:10px 16px;background-color:#ffffff;font-size:12px;line-height:18px;letter-spacing:0.4px;text-transform:uppercase;color:#6a8298;">
+                    Official Email
+                  </td>
+                  <td valign="top" style="padding:10px 16px;background-color:#ffffff;font-size:14px;line-height:22px;color:#102844;">
+                    <a href="mailto:{{ registration.official_email }}" style="color:#0ea5e9;text-decoration:none;">{{ registration.official_email }}</a>
+                  </td>
+                </tr>
+
+                <!-- Section: Admin Contact -->
+                <tr>
+                  <td colspan="2" style="padding:14px 16px 6px;background-color:#ffffff;border-top:1px solid #e1ebf3;font-size:12px;line-height:16px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#0e7490;">
+                    Admin Contact
+                  </td>
+                </tr>
+                <tr>
+                  <td width="168" valign="top" style="width:168px;padding:10px 16px;background-color:#f5f9fc;font-size:12px;line-height:18px;letter-spacing:0.4px;text-transform:uppercase;color:#6a8298;">
+                    Name
+                  </td>
+                  <td valign="top" style="padding:10px 16px;background-color:#f5f9fc;font-size:15px;line-height:22px;font-weight:600;color:#102844;">
+                    {{ registration.admin_name }}
+                  </td>
+                </tr>
+                <tr>
+                  <td width="168" valign="top" style="width:168px;padding:10px 16px;background-color:#ffffff;font-size:12px;line-height:18px;letter-spacing:0.4px;text-transform:uppercase;color:#6a8298;">
+                    Email
+                  </td>
+                  <td valign="top" style="padding:10px 16px;background-color:#ffffff;font-size:14px;line-height:22px;color:#102844;">
+                    <a href="mailto:{{ registration.admin_email }}" style="color:#0ea5e9;text-decoration:none;">{{ registration.admin_email }}</a>
+                  </td>
+                </tr>
+
+                <!-- Section: Request Reference -->
+                <tr>
+                  <td colspan="2" style="padding:14px 16px 6px;background-color:#ffffff;border-top:1px solid #e1ebf3;font-size:12px;line-height:16px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#0e7490;">
+                    Reference
+                  </td>
+                </tr>
+                <tr>
+                  <td width="168" valign="top" style="width:168px;padding:10px 16px;background-color:#f5f9fc;font-size:12px;line-height:18px;letter-spacing:0.4px;text-transform:uppercase;color:#6a8298;">
+                    Registration ID
+                  </td>
+                  <td valign="top" style="padding:10px 16px;background-color:#f5f9fc;font-size:14px;line-height:22px;font-weight:600;color:#102844;">
+                    ORG-{{ registration.id }}
+                  </td>
+                </tr>
+                {% if logo_filename %}
+                <tr>
+                  <td width="168" valign="top" style="width:168px;padding:10px 16px;background-color:#ffffff;font-size:12px;line-height:18px;letter-spacing:0.4px;text-transform:uppercase;color:#6a8298;">
+                    Uploaded Logo
+                  </td>
+                  <td valign="top" style="padding:10px 16px;background-color:#ffffff;font-size:14px;line-height:22px;color:#102844;">
+                    {{ logo_filename }}
+                  </td>
+                </tr>
+                {% endif %}
+              </table>
+            </td>
+          </tr>
+
+          <!-- Next Step Callout -->
+          <tr>
+            <td style="padding:12px 24px 24px;background-color:#ffffff;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;background-color:#f3fafb;border-radius:12px;">
+                <tr>
+                  <td style="padding:16px 18px;border-left:4px solid #0e7490;font-size:14px;line-height:22px;color:#134e5a;">
+                    <strong style="display:block;padding-bottom:4px;font-size:12px;letter-spacing:0.8px;text-transform:uppercase;color:#0e7490;">Next Step</strong>
+                    Please review this request and contact the admin at <a href="mailto:{{ registration.admin_email }}" style="color:#0891b2;font-weight:600;text-decoration:none;">{{ registration.admin_email }}</a> to complete onboarding.
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td align="center" style="padding:20px 24px 22px;background-color:#102844;color:#c5d5e4;font-size:12px;line-height:20px;">
+              <strong style="color:#ffffff;font-size:13px;">PlanetEye INFRA-AI</strong><br>
+              Enterprise Workflow &middot; Construction &middot; Infrastructure Management<br>
+              Notification inbox: <a href="mailto:planetedevm@gmail.com" style="color:#38bdf8;text-decoration:none;">planetedevm@gmail.com</a><br>
+              <span style="font-size:11px;color:#8ba3b8;margin-top:6px;display:inline-block;">&copy; {% now "Y" %} PlanetEye INFRA-AI. All rights reserved.</span>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

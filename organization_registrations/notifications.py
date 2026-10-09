@@ -14,7 +14,11 @@ def notify_organization_registration(registration) -> bool:
     The recipient is configured by the backend, never by submitted form data.
     """
     try:
-        recipient = getattr(settings, "ORG_REGISTRATION_NOTIFY_EMAIL", "").strip()
+        recipient = (
+            getattr(settings, "ORGANIZATION_REGISTRATION_NOTIFY_EMAIL", "")
+            or getattr(settings, "ORG_REGISTRATION_NOTIFY_EMAIL", "")
+            or ""
+        ).strip()
         if not recipient:
             logger.error(
                 "Organization registration email not sent id=%s reason=missing_recipient",

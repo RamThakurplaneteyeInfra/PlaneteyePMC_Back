@@ -533,11 +533,6 @@ CHANNEL_LAYERS = {
 # EMAIL CONFIGURATION
 # ==============================
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-# Registration notifications always go to this server-configured address.
-ORG_REGISTRATION_NOTIFY_EMAIL = os.environ.get(
-    'ORG_REGISTRATION_NOTIFY_EMAIL',
-    'planetedevm@gmail.com',
-).strip()
 # Prefer Brevo transactional API when BREVO_API_KEY is an xkeysib-* key.
 # SMTP remains as fallback / local relay. Never hardcode secrets here.
 BREVO_API_KEY = os.environ.get('BREVO_API_KEY', '')
@@ -643,6 +638,8 @@ ORGANIZATION_REGISTRATION_NOTIFY_EMAIL = os.environ.get(
     'ORGANIZATION_REGISTRATION_NOTIFY_EMAIL',
     'planetedevm@gmail.com',
 )
+# Older notification code and tests still read this shorter name.
+ORG_REGISTRATION_NOTIFY_EMAIL = ORGANIZATION_REGISTRATION_NOTIFY_EMAIL
 # Tutorial videos → s3://{bucket}/tutorial/temporary|optimized/…
 TUTORIAL_VIDEOS_S3_PREFIX = os.environ.get('TUTORIAL_VIDEOS_S3_PREFIX', 'tutorial')
 TUTORIAL_VIDEO_MAX_UPLOAD_MB = int(os.environ.get('TUTORIAL_VIDEO_MAX_UPLOAD_MB', '500'))
