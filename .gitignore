@@ -69,3 +69,6 @@ staticfiles/
 # One-off local scratch scripts
 /_tmp_*.py
 
+# DB migration dumps / secrets (local only)
+db_migration/
+
